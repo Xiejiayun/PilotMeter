@@ -2,7 +2,7 @@
 
 > 更新：2026-09-28  
 > 项目：`C:\workspace\PilotMeter`  
-> 交付状态：设计方案，尚未在本项目实现功能或发布 npm 包。  
+> 交付状态：本文件保留设计依据；核心实现已交付为 `0.1.0-preview.1` 本地预览版，分阶段证据见 [实施记录](progress.md)。真实账户对账尚未通过，npm 尚未公开发布。
 > 已确认的使用方式：GitHub Copilot CLI / 终端，常驻显示用量提示，点击链接打开会话消耗详情页。
 
 ## 1. 方案结论
@@ -175,7 +175,7 @@ PilotMeter/
 
 ## 5. 命令设计与使用流程
 
-**以下命令均为拟实现接口，不代表当前仓库已有这些命令或 npm 已发布该包。**
+**以下命令为方案接口；当前实现、参数和能力边界以 [README](../README.md) 为准，npm 尚未公开发布。**
 
 ### 5.1 最小命令表
 
@@ -561,16 +561,16 @@ SSH、容器和 WSL 中的 `127.0.0.1`、浏览器位置与端口转发是独立
 ### 13.1 首批实现任务清单
 
 - [ ] 将 P0 真实验证结论写入 `docs/compatibility.md`，附脱敏字段样本。
-- [ ] 创建 package、TypeScript 构建、CLI 入口与 `doctor`。
-- [ ] 实现单实例 daemon、loopback HTTP、数据目录和 schema migration。
-- [ ] 实现 OTLP 解析、顶层分类、事务入库和重放幂等。
-- [ ] 实现 JSONL 导入及可恢复 cursor。
-- [ ] 实现月度会话聚合、未知计量和生命周期明细。
-- [ ] 实现账户 provider、能力判断及三种显示模式。
-- [ ] 实现 `run`、`watch`、`status`、`open`、`stop`。
-- [ ] 实现可恢复的 `statusLine` 接入，不覆盖用户现有自定义配置。
-- [ ] 完成本地页面和真实数据状态。
-- [ ] 构建、测试、`npm pack`，在干净前缀安装 `.tgz` 验证。
+- [x] 创建 package、TypeScript 构建、CLI 入口与 `doctor`。
+- [x] 实现单实例 daemon、loopback HTTP、数据目录和 schema migration。
+- [x] 实现 OTLP 解析、顶层分类、事务入库和重放幂等。
+- [x] 实现 JSONL 导入及可恢复 cursor（已验证 OTLP envelope；原生文件格式待真实样本）。
+- [x] 实现月度会话聚合、未知计量和生命周期明细。
+- [x] 实现账户 provider、能力判断及三种显示模式（quota 为证据导入边界，官方百分比仍待实际验证）。
+- [x] 实现 `run`、`watch`、`status`、`open`、`stop`。
+- [x] 实现可恢复的 `statusLine` 接入，不覆盖用户现有自定义配置（桥接已测试，原生 TUI 渲染待验收）。
+- [x] 完成本地页面和真实数据状态。
+- [x] 构建、测试、`npm pack`，在干净前缀安装 `.tgz` 验证。
 - [ ] 核实包名、发布权限、许可证和包内容，再执行用户授权的公开发布。
 
 ## 14. 验收矩阵
@@ -637,4 +637,4 @@ SSH、容器和 WSL 中的 `127.0.0.1`、浏览器位置与端口转发是独立
 - **[S9] 旧 Premium Requests 计费**：仍使用旧计费的年付订阅边界。  
   <https://docs.github.com/en/copilot/reference/copilot-billing/request-based-billing-legacy/monitor-premium-requests>
 
-以上资料访问于 2026-09-28，可能持续更新。接口存在和字段定义已经过公开资料核查；真实账号消费、账户权限和全部平台兼容性尚未实测。本文件中的命令、目录、类型和工作量属于拟议实现设计。
+以上资料访问于 2026-09-28，可能持续更新。接口存在和字段定义已经过公开资料核查；真实账号消费、账户权限和终端兼容性仍需实测。本文件中的目录、类型和工作量保留为设计依据；实际工程验证结果见 [兼容性记录](compatibility.md)。

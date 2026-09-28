@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: ${{ matrix.os }} / Node 24.14.0
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+        timeout-minutes: 10
+
+      - name: Build and run unit and integration tests
+        run: npm test
+        timeout-minutes: 10
+
+      - name: Verify packed artifact with a clean global installation
+        run: npm run test:pack
+        timeout-minutes: 10
+
+      - name: Install Chromium and Linux browser dependencies
+        if: runner.os == 'Linux'
+        run: npx --no-install playwright install --with-deps chromium
+        timeout-minutes: 10
+
+      - name: Install Chromium on Windows
+        if: runner.os == 'Windows'
+        run: npx --no-install playwright install chromium
+        timeout-minutes: 10
+
+      - name: Run browser interaction tests
+        if: runner.os == 'Linux' || runner.os == 'Windows'
+        run: npm run test:e2e
+        timeout-minutes: 10
+
+      - name: Upload browser failure evidence
+        if: failure() && (runner.os == 'Linux' || runner.os == 'Windows')
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-results-${{ matrix.os }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+    # Hosted tests validate package/runtime behavior. Actual terminal link clicks,
+    # Copilot TUI behavior and billing reconciliation require separate evidence.
