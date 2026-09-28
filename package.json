@@ -1,18 +1,20 @@
 {
   "name": "pilotmeter",
-  "version": "0.1.0-preview.4",
+  "version": "0.1.0-preview.5",
   "description": "Local, privacy-conscious GitHub Copilot CLI usage meter",
   "type": "module",
   "license": "MIT",
   "engines": { "node": ">=24.14.0" },
   "bin": { "pilotmeter": "bin/pilotmeter.js" },
-  "files": ["bin", "dist", "public", "README.md", "LICENSE", "docs/compatibility.md", "docs/validation-guide.md", "docs/npm-package-contents.md"],
+  "files": ["bin", "dist", "public", "README.md", "LICENSE", "docs/compatibility.md", "docs/validation-guide.md", "docs/npm-package-contents.md", "docs/windows-exe.md"],
   "scripts": {
     "build": "tsc && tsc --project web/tsconfig.json && vite build",
     "typecheck": "tsc --noEmit && tsc --project web/tsconfig.json",
     "test": "npm run build && node --test test/unit/*.test.mjs test/integration/*.test.mjs",
     "prepack": "npm run build",
     "test:pack": "node scripts/pack-smoke.mjs",
+    "build:windows": "node scripts/build-windows.mjs",
+    "test:windows": "node scripts/windows-exe-smoke.mjs",
     "test:e2e": "playwright test"
   },
   "dependencies": { "commander": "^14.0.0", "cross-spawn": "^7.0.6", "jsonc-parser": "^3.3.1" },

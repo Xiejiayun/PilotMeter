@@ -2,17 +2,38 @@
 
 GitHub Copilot CLI 本地用量监控工具：独立终端状态提示、可选原生状态栏，以及按会话查看消耗的浏览器页面。Node.js + SQLite，无独立云服务，无 Electron。
 
-**当前为 `0.1.0-preview.4` 本地预览版，尚未公开发布 npm。** 默认保存原始 nano AIU，官方月度额度保持“未确认”；真实订阅、`/usage` 和官方页面对账是独立发布门槛，合成测试不能替代。
+**当前为 `0.1.0-preview.5` 预览版，尚未公开发布 npm。** 默认保存原始 nano AIU，官方月度额度保持“未确认”；真实订阅、`/usage` 和官方页面对账是独立发布门槛，合成测试不能替代。
 
 ## 安装与开始使用
 
-需要 Node.js **24.14+**。已在 Windows / Node 24.14.0 / npm 11.9.0 验证；Copilot CLI 由用户独立安装、登录。采集分类和状态栏配置当前仅验证 `1.0.88` 规则，其他版本保持待分类。
+Copilot CLI 由用户独立安装、登录。采集分类和状态栏配置当前仅验证 `1.0.88` 规则，其他版本保持待分类。
+
+### Windows 单 EXE
+
+Windows 10/11 x64 可使用 [Releases](https://github.com/Xiejiayun/PilotMeter/releases) 中的 `PilotMeter-0.1.0-preview.5-win-x64.exe`，无需安装 Node.js 或 npm。启动器使用 Windows 自带的 .NET Framework 4.x，无需安装额外 .NET，不要求管理员权限，也不修改 PATH。
+
+双击 EXE 会启动后台服务并打开本地页面，等同于 `start --background --open`。在 PowerShell 中也能使用完整命令：
+
+```powershell
+.\PilotMeter-0.1.0-preview.5-win-x64.exe doctor
+.\PilotMeter-0.1.0-preview.5-win-x64.exe run -- --no-auto-update
+
+# 另一个终端或分屏
+.\PilotMeter-0.1.0-preview.5-win-x64.exe watch
+.\PilotMeter-0.1.0-preview.5-win-x64.exe stop
+```
+
+首次运行会将内嵌 Node 和应用解压到 `%LOCALAPPDATA%\PilotMeter\runtime\<版本>-<载荷哈希前16位>`，账本仍保存在 `%LOCALAPPDATA%\PilotMeter`。升级前先 `stop`；已配置的 statusline 引用此稳定缓存，不能随意删除。下载校验、缓存与源码构建说明见 [Windows EXE 指南](https://github.com/Xiejiayun/PilotMeter/blob/main/docs/windows-exe.md)。
+
+### npm 安装
+
+npm 方式需要 Node.js **24.14+**。当前尚未公开发布 npm，可从源码构建并安装本地包：
 
 ```powershell
 npm ci
 npm test
 npm pack
-npm install -g ./pilotmeter-0.1.0-preview.4.tgz
+npm install -g ./pilotmeter-0.1.0-preview.5.tgz
 
 pilotmeter doctor
 pilotmeter run -- --no-auto-update
@@ -98,9 +119,13 @@ npm test
 npx playwright install chromium
 npm run test:e2e
 npm run test:pack
+
+# Windows x64：构建并验收独立 EXE
+npm run build:windows
+npm run test:windows
 ```
 
-首次安装不会启动服务、下载 Copilot 或修改用户配置。测试和 demo 使用独立目录；真实状态栏修改只在显式 `init --statusline` 时进行，已有自定义状态栏需查看变更方案后用 `--replace`。
+EXE 双击会启动服务并打开页面；npm 安装后通过命令启动。两种方式均不自动安装 Copilot 或修改其配置。测试和 demo 使用独立目录；真实状态栏修改只在显式 `init --statusline` 时进行，已有自定义状态栏需查看变更方案后用 `--replace`。
 
 [实施方案](https://github.com/Xiejiayun/PilotMeter/blob/main/docs/implementation-plan.md) · [分阶段进展](https://github.com/Xiejiayun/PilotMeter/blob/main/docs/progress.md) · [兼容性和剩余门槛](docs/compatibility.md) · [验证指南](docs/validation-guide.md) · [安装验收](docs/npm-package-contents.md)
 

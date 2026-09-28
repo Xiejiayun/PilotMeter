@@ -18,7 +18,15 @@
 
 `preview.4` 补齐最后一项工程缺项：待分类调用从首次采集起超过 24 小时后记录超时诊断；仍排除计费，后到证据可重新判定。维护、重放和重启不重复记录超时，详情页区分普通待分类与超时。
 
-当前 Windows 全量 122 项 Node 测试和 22 项 Chromium 测试通过。首版工程功能已按方案逐项复核；最终安装及三平台 CI 结果见本阶段 PR。下列真实验收门槛通过前，整体目标仍未完成。
+`preview.4` 的 [PR #8](https://github.com/Xiejiayun/PilotMeter/pull/8) 已合并，三平台 CI 全绿。首版工程功能已按方案逐项复核；下列真实验收门槛通过前，整体目标仍未完成。
+
+## Windows EXE 分发
+
+`preview.5` 按用户需求增加 Windows x64 单文件 EXE，内置校验过的 Node 24.14.0 和锁定的生产依赖，无需用户安装 Node/npm。无参数启动后台服务并打开页面；CLI、独立账本与可恢复 statusline 继续可用。
+
+本机 122 项 Node 测试、22 项 Chromium 测试、7 组真实 npm 安装验收及 13 组实际 EXE 验收通过。EXE 验收使用 PATH 无 Node/npm 的隔离环境，覆盖并发首次启动、后台输出结束、采集持久化、原生参数/stdio、移动 EXE 后的 statusline 和缓存篡改拒绝；本机 TTY 的 `watch` 退出与无参数打开页面另外实测。三平台 CI 继续运行，Windows job 新增实际 EXE 构建、验收和资产上传。详细范围及 `.cmd` 参数边界见 [Windows EXE 指南](windows-exe.md)。
+
+该分发仍为未签名预览版；EXE 可直接运行不代表真实订阅或官方额度已通过对账。
 
 ## 剩余发布门槛
 
