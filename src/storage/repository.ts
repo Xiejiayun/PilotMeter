@@ -390,9 +390,12 @@ export class Repository {
     this.#db.prepare('INSERT INTO budget_settings VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(setting, serialized);
   }
 
-  getSnapshot(period: string): UsageSnapshot | null {
+  getSnapshot(period: string, options: { entity?: string; source?: string } = {}): UsageSnapshot | null {
     periodBounds(period);
-    const row = this.#db.prepare('SELECT payload FROM account_snapshots WHERE period = ? ORDER BY fetched_at DESC LIMIT 1').get(period);
+    const where = ['period = ?']; const params = [period];
+    if (options.entity) { where.push('billing_entity = ?'); params.push(options.entity); }
+    if (options.source) { where.push('source = ?'); params.push(options.source); }
+    const row = this.#db.prepare(`SELECT payload FROM account_snapshots WHERE ${where.join(' AND ')} ORDER BY fetched_at DESC LIMIT 1`).get(...params);
     return row ? JSON.parse(String(row.payload)) as UsageSnapshot : null;
   }
 

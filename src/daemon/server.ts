@@ -11,6 +11,10 @@ import { APP, VERSION, prepareDirectory, atomicJson, month, readJson } from '../
 import { acquireLock } from './lock.js';
 import type { Instance } from './client.js';
 import type { Settings, Summary } from '../shared/types.js';
+import { buildDisplay, officialSnapshotEligible } from '../domain/display.js';
+import { BillingProvider, billingEntity } from '../providers/billing.js';
+import { RefreshScheduler } from '../providers/scheduler.js';
+import { adaptQuota, type QuotaData, type QuotaEvidence } from '../providers/quota.js';
 
 class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 const defaultSettings: Settings = { monthlyBudget: null, unitVerification: null, account: null, demo: false };
@@ -31,13 +35,38 @@ export async function serve(dir: string, demo = false): Promise<void> {
   const instance: Instance = { app: APP, version: VERSION, pid: process.pid, instanceId: randomUUID(), url: '', managementToken: randomBytes(32).toString('hex'), collectorToken: randomBytes(32).toString('hex') };
   const csrf = randomBytes(32).toString('hex');
   let settings: Settings = { ...defaultSettings, ...repo.getSetting<Settings>('settings'), demo };
+  const billing = new BillingProvider();
+  const scheduler = new RefreshScheduler();
+  let lastActivity = Date.now();
+  let refreshPending: Promise<unknown> | null = null;
+  if (settings.account) {
+    const saved = repo.getSnapshot(month(), { entity: billingEntity(settings.account), source: 'billing-rest' });
+    if (saved) billing.restoreSnapshot(saved);
+  }
   const source = () => createHash('sha256').update(JSON.stringify([hostname(), process.env.COPILOT_HOME || join(homedir(), '.copilot'), settings.account])).digest('hex').slice(0, 24);
   function summary(period = month()): Summary {
     const local = repo.summary(period, settings.unitVerification);
-    return { period, local, account: null, display: { mode: 'usage', label: '本机已记录', used: local.nanoAiu, limit: null, percentage: null, unit: 'nano AIU', scope: '启用采集后的本机记录', reason: '官方额度未确认' }, updatedAt: new Date().toISOString(), demo };
+    const entity = settings.account ? billingEntity(settings.account) : null;
+    const quota = entity ? repo.getSnapshot(period, { entity, source: 'sdk-quota' }) : null;
+    let account = entity ? (officialSnapshotEligible(quota, period, entity) ? quota : repo.getSnapshot(period, { entity, source: 'billing-rest' }) || quota) : null;
+    if (account) account = { ...account, stale: account.stale || Date.now() - Date.parse(account.fetchedAt) > 15 * 60_000 };
+    return { period, local, account, display: buildDisplay(local, account, settings), updatedAt: new Date().toISOString(), demo };
   }
   let cacheChain = Promise.resolve();
   function updateCache(): Promise<void> { const snapshot = summary(); cacheChain = cacheChain.then(() => atomicJson(join(dir, 'status.json'), snapshot)); return cacheChain; }
+  async function refresh(manual = false): Promise<unknown> {
+    const selected = settings.account;
+    if (!selected) return { state: 'not-connected' };
+    const period = month();
+    const result = await scheduler.refresh(() => billing.fetchSnapshot(selected, period, process.env.PILOTMETER_GITHUB_TOKEN || ''), { manual, idle: Date.now() - lastActivity > 15 * 60_000, retryAt: () => billing.nextRetryAt(selected, period) });
+    if (result) { repo.saveSnapshot(result); await updateCache(); }
+    return result || { state: 'throttled', nextRefreshAt: scheduler.nextRefreshAt };
+  }
+  function trackedRefresh(manual = false): Promise<unknown> {
+    if (refreshPending) return refreshPending;
+    const pending = refresh(manual).finally(() => { refreshPending = null; });
+    refreshPending = pending; return pending;
+  }
   let closing = false;
   const server = createServer(async (req, res) => {
     res.setHeader('x-content-type-options', 'nosniff');
@@ -60,6 +89,7 @@ export async function serve(dir: string, demo = false): Promise<void> {
           let spans;
           try { spans = parseOtlp(payload, source()); } catch { throw new HttpError(400, 'Invalid OTLP trace structure.'); }
           const result = repo.ingest(spans);
+          lastActivity = Date.now();
           await updateCache();
           json(res, 200, result.rejected || result.conflicts ? { partialSuccess: { rejectedSpans: String(result.rejected + result.conflicts), errorMessage: 'Some spans were invalid or conflicted; see local diagnostics.' } } : {});
           return;
@@ -76,6 +106,41 @@ export async function serve(dir: string, demo = false): Promise<void> {
       if (req.method === 'GET' && route === '/api/sessions') { json(res, 200, repo.sessions(month(url.searchParams.get('period') || undefined), { cursor: url.searchParams.get('cursor') || undefined, sort: url.searchParams.get('sort') || 'usage', limit: 50 })); return; }
       if (req.method === 'GET' && route.startsWith('/api/sessions/')) { const result = repo.session(decodeURIComponent(route.slice(14))); if (!result) throw new HttpError(404, 'Session not found.'); json(res, 200, result); return; }
       if (req.method === 'GET' && route === '/api/settings') { json(res, 200, settings); return; }
+      if (req.method === 'POST' && route === '/api/refresh') { json(res, 200, await trackedRefresh(true)); return; }
+      if (route === '/api/account' && req.method === 'POST') {
+        if (!management) throw new HttpError(403, 'Account binding requires CLI authentication.');
+        const input = await body(req) as { account?: Settings['account'] };
+        const account = input?.account;
+        if (account !== null) {
+          if (!account || typeof account !== 'object') throw new HttpError(400, 'Account identity required.');
+          try { billingEntity(account); } catch { throw new HttpError(400, 'Invalid billing identity.'); }
+          if (account.kind === 'user' && account.directBilling !== true) throw new HttpError(400, 'Confirm personal direct billing explicitly; company-paid users need organization or enterprise billing.');
+        }
+        if (refreshPending) await refreshPending;
+        settings.account = account === null ? null : { kind: account.kind, login: account.login.toLowerCase(), ...(account.kind === 'user' ? { directBilling: true } : {}) };
+        repo.setSetting('settings', settings); scheduler.resume();
+        if (settings.account) billing.resume(settings.account, month());
+        await updateCache();
+        json(res, 200, { account: settings.account, credentialPresent: !!process.env.PILOTMETER_GITHUB_TOKEN }); return;
+      }
+      if (req.method === 'POST' && route === '/api/unit-verification') {
+        if (!management) throw new HttpError(403, 'Unit verification requires CLI authentication.');
+        const input = await body(req) as { cliVersion?: unknown; evidence?: unknown; clear?: unknown };
+        if (input?.clear === true) settings.unitVerification = null;
+        else {
+          if (input?.cliVersion !== '1.0.88' || typeof input.evidence !== 'string' || input.evidence.trim().length < 10 || input.evidence.length > 2000 || /[\u0000-\u001f]/.test(input.evidence)) throw new HttpError(400, 'Provide supported CLI version and a description of the actual /usage comparison.');
+          settings.unitVerification = { cliVersion: input.cliVersion, evidence: input.evidence, verifiedAt: new Date().toISOString() };
+        }
+        repo.setSetting('settings', settings); await updateCache(); json(res, 200, settings.unitVerification); return;
+      }
+      if (req.method === 'POST' && route === '/api/quota-import') {
+        if (!management) throw new HttpError(403, 'Quota evidence import requires CLI authentication.');
+        if (!settings.account) throw new HttpError(400, 'Connect an explicit billing entity first.');
+        const input = await body(req) as { raw: QuotaData; evidence: QuotaEvidence; period?: string };
+        if (!input || typeof input !== 'object' || !input.raw) throw new HttpError(400, 'Expected quota data and evidence.');
+        const result = adaptQuota(input.raw, input.evidence, settings.account, month(input.period));
+        repo.saveSnapshot(result.snapshot); await updateCache(); json(res, 200, result); return;
+      }
       if (req.method === 'PATCH' && route === '/api/settings') {
         const patch = await body(req) as Record<string, unknown>;
         if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new HttpError(400, 'Expected settings object.');
@@ -117,18 +182,21 @@ export async function serve(dir: string, demo = false): Promise<void> {
   server.requestTimeout = 10_000; server.headersTimeout = 10_000;
   async function shutdown(): Promise<void> {
     if (closing) return; closing = true;
+    clearInterval(refreshTimer);
     await new Promise<void>(resolve => {
       const deadline = setTimeout(() => server.closeAllConnections(), 5000); deadline.unref();
       server.close(() => { clearTimeout(deadline); resolve(); }); server.closeIdleConnections();
     });
-    await cacheChain.catch(() => {}); repo.close();
+    await refreshPending?.catch(() => {}); await cacheChain.catch(() => {}); repo.close();
     if ((await readJson<Instance>(join(dir, 'instance.json')))?.instanceId === instance.instanceId) await rm(join(dir, 'instance.json'), { force: true });
     await release();
   }
+  const refreshTimer = setInterval(() => { if (!closing) void trackedRefresh().catch(() => {}); }, 60_000); refreshTimer.unref();
   try {
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => resolve()); });
     instance.url = `http://127.0.0.1:${(server.address() as {port: number}).port}`;
     await updateCache(); await atomicJson(join(dir, 'instance.json'), instance);
+    void trackedRefresh().catch(() => {});
     process.once('SIGINT', () => { void shutdown(); }); process.once('SIGTERM', () => { void shutdown(); });
-  } catch (error) { server.close(); repo.close(); await release(); throw error; }
+  } catch (error) { clearInterval(refreshTimer); server.close(); repo.close(); await release(); throw error; }
 }
