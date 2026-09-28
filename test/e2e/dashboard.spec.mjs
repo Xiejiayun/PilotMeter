@@ -277,6 +277,39 @@ test('open detail refreshes calls while preserving range and labels a failed ref
   await expect(page.locator('#detail-status')).not.toContainText('失败');
 });
 
+test('timed-out pending calls stay excluded until late evidence reclassifies them on refresh', async ({ page }) => {
+  const state = fixture();
+  const pending = state.detail.events.find(event => event.classification === 'pending');
+  pending.reason = 'pending-timeout:unresolved-ancestor';
+  await mockApi(page, state);
+  await page.clock.install();
+  await page.goto('/');
+  await page.getByRole('button', { name: /查看会话/ }).click();
+  const timedOut = page.locator('.call-list li').filter({ hasText: '待分类超时 · 未计入' });
+  await expect(timedOut).toHaveCount(1);
+  await expect(timedOut.locator('.call-amount')).toHaveText('未计入');
+  await expect(page.locator('.detail-total')).toContainText('105,250,000,000');
+  await expect(page.locator('#detail-body')).toContainText('后到的证据可使记录重新判定');
+
+  pending.classification = 'root';
+  pending.reason = null;
+  const updatedAmount = (BigInt(state.detail.monthly[period].nanoAiu) + BigInt(pending.nanoAiu)).toString();
+  state.detail.monthly[period].nanoAiu = updatedAmount;
+  state.detail.monthly[period].knownCalls++;
+  state.detail.monthly[period].pendingCalls--;
+  state.detail.lifetime.nanoAiu = (BigInt(state.detail.lifetime.nanoAiu) + BigInt(pending.nanoAiu)).toString();
+  state.detail.lifetime.knownCalls++;
+  state.detail.lifetime.pendingCalls--;
+  state.summary.local.nanoAiu = updatedAmount;
+  state.summary.display.used = updatedAmount;
+  await page.clock.runFor(5_100);
+  await expect(page.locator('#detail-body')).not.toContainText('待分类超时');
+  await expect(page.locator('.call-list')).toContainText('99,000,000,000 nano AIU');
+  await expect(page.locator('.detail-total')).toContainText('204,250,000,000');
+  await expect(page.locator('.detail-notes')).toContainText('4 次已知调用');
+  await expect(page.locator('.detail-notes')).toContainText('1 次待分类');
+});
+
 test('each model uses its own unit evidence and unknown count', async ({ page }) => {
   const state = fixture();
   state.summary.local.unitVerified = true;

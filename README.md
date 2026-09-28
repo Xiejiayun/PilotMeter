@@ -2,7 +2,7 @@
 
 GitHub Copilot CLI 本地用量监控工具：独立终端状态提示、可选原生状态栏，以及按会话查看消耗的浏览器页面。Node.js + SQLite，无独立云服务，无 Electron。
 
-**当前为 `0.1.0-preview.3` 本地预览版，尚未公开发布 npm。** 默认保存原始 nano AIU，官方月度额度保持“未确认”；真实订阅、`/usage` 和官方页面对账是独立发布门槛，合成测试不能替代。
+**当前为 `0.1.0-preview.4` 本地预览版，尚未公开发布 npm。** 默认保存原始 nano AIU，官方月度额度保持“未确认”；真实订阅、`/usage` 和官方页面对账是独立发布门槛，合成测试不能替代。
 
 ## 安装与开始使用
 
@@ -12,7 +12,7 @@ GitHub Copilot CLI 本地用量监控工具：独立终端状态提示、可选�
 npm ci
 npm test
 npm pack
-npm install -g ./pilotmeter-0.1.0-preview.3.tgz
+npm install -g ./pilotmeter-0.1.0-preview.4.tgz
 
 pilotmeter doctor
 pilotmeter run -- --no-auto-update
@@ -81,6 +81,8 @@ quota 目前提供实验性证据导入适配边界，普通安装不包含 SDK�
 仅监听 `127.0.0.1`。collector 与管理接口使用独立随机令牌，浏览器修改使用同源校验与 CSRF 令牌。只持久化 ID、模型、时间、token 计数和计量等白名单元数据；不保存 prompt、response、tool argument。OTLP 支持 HTTP JSON，protobuf 和压缩请求返回明确错误；metrics/logs 接收后不保存、不参与费用累计。
 
 同一 trace/span 全局去重；冲突隔离并回算，缺失祖先保持待分类。费用采用 BigInt，按调用结束时间归属 UTC 月份；会话生命周期与月度累计分开。JSONL 当前验证的是每行一个 OTLP `resourceSpans` envelope；原生 CLI 文件 exporter 格式仍需真实样本核验。
+
+待分类调用从首次采集起等待 24 小时后标记超时，并保留诊断；这不会把未知金额视为零，也不会自动计入顶层用量。服务在启动、采集和每分钟维护时检查；重放和重启不重置等待时间，也不会重复累加超时诊断。后到祖先仍可触发重新分类，历史诊断保留以便追溯。
 
 `node:sqlite` 在当前 Node 24.14 上仍有 experimental 警告，数据库访问限定后台进程。`stop` 和卸载不删除用户账本；升级或卸载前先停止服务。发生损坏时保留文件，不自动清空。备份时先停止服务，再复制整个数据目录。
 

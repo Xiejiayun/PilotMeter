@@ -5,7 +5,7 @@ import type { ReconciliationReport } from '../src/domain/reconciliation-evidence
 type SessionPage = { items: SessionSummary[]; nextCursor: string | null };
 type Totals = Pick<SessionSummary, 'nanoAiu' | 'knownCalls' | 'unknownCalls' | 'pendingCalls'>;
 type SessionDetail = SessionSummary & {
-  events: SpanRecord[];
+  events: (SpanRecord & { reason?: string | null })[];
   lifetime: Totals;
   monthly: Record<string, Totals>;
   modelBreakdown: { model: string; nanoAiu: string | null; calls: number; unknownCalls: number; unitVerified: boolean; source: string }[];
@@ -407,12 +407,16 @@ function renderDetail(): void {
   const calls = node('section', 'detail-section');
   calls.append(node('h3', '', '顶层调用与待确认记录'));
   const events = (detail.events ?? []).filter(event => event.classification !== 'child' && (detailRange === 'lifetime' || event.endTime?.slice(0, 7) === periodInput.value));
+  if (events.some(event => event.classification === 'pending' && event.reason?.startsWith('pending-timeout:'))) {
+    calls.append(node('p', 'small muted', '待分类超时仍未计入用量；后到的证据可使记录重新判定，超时不会自动转为顶层调用。'));
+  }
   const list = node('ol', 'call-list');
   const classification: Record<string, string> = { root: '顶层调用', pending: '待分类 · 未计入', invalid: '异常 · 未计入', conflict: '冲突 · 未计入' };
   for (const [index, event] of events.entries()) {
     const item = node('li');
     const description = node('div');
-    description.append(node('span', '', `${String(index + 1).padStart(2, '0')} · ${classification[event.classification ?? 'pending'] ?? '待确认'}`), node('time', '', dateTime(event.endTime)));
+    const label = event.classification === 'pending' && event.reason?.startsWith('pending-timeout:') ? '待分类超时 · 未计入' : classification[event.classification ?? 'pending'] ?? '待确认';
+    description.append(node('span', '', `${String(index + 1).padStart(2, '0')} · ${label}`), node('time', '', dateTime(event.endTime)));
     const amount = node('div', 'call-amount', event.classification === 'root' ? `${measured(event.nanoAiu, verified)} ${unit}` : '未计入');
     if (event.nanoAiu === null) amount.textContent = '用量未知';
     item.append(description, amount);
