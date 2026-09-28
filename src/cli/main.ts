@@ -42,8 +42,14 @@ program.command('init').option('--statusline', 'install the optional native stat
 program.command('stop').action(async () => { const instance = await instanceAt(dir()); if (!instance) { console.log('PilotMeter 已停止'); return; } await request(instance, '/api/shutdown', 'POST'); console.log('PilotMeter 正在正常停止'); });
 program.command('import <file>').option('--source-label <label>', 'collection context matching run').description('Import supported OTLP traces JSONL through the shared ledger').action(async (file, options) => { const instance = await collectorForRun(await ensureService(dir()), options.sourceLabel); console.log(JSON.stringify(await request(instance, '/api/import', 'POST', { path: resolve(file), collectorToken: instance.collectorToken }))); });
 program.command('config').command('set <key> <value>').action(async (key, value) => {
-  if (key !== 'budget.monthlyCredits') throw new Error('Supported key: budget.monthlyCredits');
-  const instance = await ensureService(dir()); await request(instance, '/api/settings', 'PATCH', { monthlyBudget: value === 'null' ? null : value }); console.log('已保存自定义月度预算（本机采集范围）。');
+  if (key === 'budget.monthlyCredits') {
+    const instance = await ensureService(dir()); await request(instance, '/api/settings', 'PATCH', { monthlyBudget: value === 'null' ? null : value }); console.log('已保存自定义月度预算（本机采集范围）。');
+  } else if (key === 'retention.days') {
+    if (value !== 'null' && (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1 || Number(value) > 36500)) throw new Error('retention.days must be 1–36500, or null to disable future cleanup.');
+    const instance = await ensureService(dir());
+    await request(instance, '/api/settings', 'PATCH', { retentionDays: value === 'null' ? null : Number(value) });
+    console.log(value === 'null' ? '已关闭后续明细清理；此前已清理的记录不会恢复。' : `已设置 ${Number(value)} 天明细保留策略，并执行清理。早于阈值且已完整结束的调用链会被清理；仅保留防重放标记，账单快照和备份不受影响。`);
+  } else throw new Error('Supported keys: budget.monthlyCredits, retention.days');
 });
 const account = program.command('account').description('Bind an explicit billing entity; credentials use PILOTMETER_GITHUB_TOKEN only');
 account.command('connect').option('--user <login>').option('--organization <login>').option('--enterprise <slug>').option('--direct-billing', 'confirm that this personal account pays directly').action(async options => {

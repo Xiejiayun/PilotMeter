@@ -96,6 +96,10 @@ test('official zero, unlimited and stale snapshots retain their distinct meaning
   assert.equal(unlimited.mode, 'official'); assert.equal(unlimited.percentage, null); assert.equal(unlimited.reason, '无固定上限');
   const stale = buildDisplay(local(), { ...valid, stale: true }, settings());
   assert.equal(stale.percentage, '105.0'); assert.match(stale.reason, /陈旧/);
+  const staleZero = buildDisplay(local(), { ...valid, limit: '0', stale: true }, settings());
+  assert.equal(staleZero.percentage, null); assert.match(staleZero.reason, /额度为 0/); assert.match(staleZero.reason, /陈旧/);
+  const staleUnlimited = buildDisplay(local(), { ...valid, limit: null, limitKind: 'unlimited', stale: true }, settings());
+  assert.equal(staleUnlimited.percentage, null); assert.match(staleUnlimited.reason, /无固定上限/); assert.match(staleUnlimited.reason, /陈旧/);
   const knownZero = buildDisplay(local(), { ...valid, used: '0' }, settings());
   assert.equal(knownZero.percentage, '0.0');
 });
@@ -211,6 +215,125 @@ test('403 stops automatically retrying until an explicit resume', async () => {
   assert.equal(calls, 1); assert.equal(denied.used, null); assert.equal(denied.lastError.code, 'PERMISSION_DENIED');
   assert.equal(provider.nextRetryAt(org, period), null); assert.equal(JSON.stringify(denied).includes(token), false);
   provider.resume(org, period); await provider.fetchSnapshot(org, period, token); assert.equal(calls, 2);
+});
+
+test('403 rate limits honor retry headers and recover without a permission resume', async () => {
+  for (const headers of [
+    { 'Retry-After': '120' },
+    { 'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset': String(now.getTime() / 1000 + 120) },
+  ]) {
+    let current = now.getTime(); let calls = 0;
+    const provider = new BillingProvider(async () => {
+      calls++;
+      return calls === 1 ? response({}, { status: 403, headers }) : response(report());
+    }, { now: () => new Date(current) });
+    const scheduler = new RefreshScheduler({ now: () => current });
+    const refresh = () => scheduler.refresh(() => provider.fetchSnapshot(org, period, token), { manual: true, retryAt: () => provider.nextRetryAt(org, period) });
+    const limited = await refresh();
+    assert.equal(limited.lastError.code, 'RATE_LIMITED');
+    assert.equal(limited.retryAt, new Date(current + 120000).toISOString());
+    assert.notEqual(scheduler.nextRefreshAt, null);
+    current += 60000; await refresh(); assert.equal(calls, 1);
+    current += 60000; const recovered = await refresh();
+    assert.equal(calls, 2); assert.equal(recovered.state, 'known'); assert.equal(recovered.lastError, null);
+  }
+});
+
+test('explicit reconnection cannot bypass rate limits or network backoff', async () => {
+  for (const failure of [429, 403, 'network']) {
+    let current = now.getTime(); let calls = 0;
+    const provider = new BillingProvider(async () => {
+      calls++;
+      if (calls !== 1) return response(report());
+      if (failure === 'network') throw new Error('offline');
+      return response({}, { status: failure, headers: { 'Retry-After': '120' } });
+    }, { now: () => new Date(current) });
+    const failed = await provider.fetchSnapshot(org, period, token);
+    const deadline = Date.parse(failed.retryAt);
+    current = deadline - 1;
+    provider.resume(org, period);
+    const retained = await provider.fetchSnapshot(org, period, token);
+    assert.equal(calls, 1); assert.equal(retained.lastError.code, failure === 'network' ? 'FETCH_FAILED' : 'RATE_LIMITED');
+    assert.equal(provider.nextRetryAt(org, period), failed.retryAt);
+    current++;
+    assert.equal((await provider.fetchSnapshot(org, period, token)).state, 'known'); assert.equal(calls, 2);
+  }
+});
+
+test('first and previously successful 429 snapshots preserve retry deadlines through restart', async () => {
+  for (const hadKnownValue of [false, true]) {
+    let current = now.getTime();
+    const original = new BillingProvider(async () => response({}, { status: 429, headers: { 'Retry-After': '3600' } }), { now: () => new Date(current) });
+    if (hadKnownValue) original.restoreSnapshot(mapBillingReport(report(), org, period, now));
+    const limited = await original.fetchSnapshot(org, period, token);
+    const persisted = JSON.parse(JSON.stringify(limited));
+    assert.equal(persisted.retryAt, new Date(current + 3600000).toISOString());
+    let calls = 0;
+    const restarted = new BillingProvider(async () => { calls++; return response(report()); }, { now: () => new Date(current) });
+    restarted.restoreSnapshot(persisted);
+    current++;
+    const retained = await restarted.fetchSnapshot(org, period, token);
+    assert.equal(calls, 0); assert.equal(retained.lastError.code, 'RATE_LIMITED');
+    assert.equal(retained.used, hadKnownValue ? '12.5' : null);
+    assert.equal(retained.state, hadKnownValue ? 'known' : 'unknown');
+    current += 3599998; await restarted.fetchSnapshot(org, period, token); assert.equal(calls, 0);
+    current++;
+    const recovered = await restarted.fetchSnapshot(org, period, token);
+    assert.equal(calls, 1); assert.equal(recovered.lastError, null); assert.equal(recovered.stale, false);
+    assert.equal(recovered.retryAt ?? null, null);
+  }
+});
+
+test('ordinary permission failures remain paused across restart until explicit resume', async () => {
+  for (const status of [401, 403]) {
+    for (const hadKnownValue of [false, true]) {
+      let current = now.getTime();
+      const original = new BillingProvider(async () => response({}, { status }), { now: () => new Date(current) });
+      if (hadKnownValue) original.restoreSnapshot(mapBillingReport(report(), org, period, now));
+      const failed = await original.fetchSnapshot(org, period, token);
+      assert.equal(failed.retryAt, null);
+      let calls = 0;
+      const restarted = new BillingProvider(async () => { calls++; return response(report()); }, { now: () => new Date(current) });
+      restarted.restoreSnapshot(JSON.parse(JSON.stringify(failed)));
+      current += 86400000;
+      const retained = await restarted.fetchSnapshot(org, period, token);
+      assert.equal(calls, 0); assert.equal(retained.lastError.code, status === 403 ? 'PERMISSION_DENIED' : 'AUTHENTICATION_FAILED');
+      assert.equal(retained.used, hadKnownValue ? '12.5' : null);
+      restarted.resume(org, period);
+      assert.equal((await restarted.fetchSnapshot(org, period, token)).state, 'known'); assert.equal(calls, 1);
+    }
+  }
+});
+
+test('network backoff survives restart and is isolated to its billing identity and month', async () => {
+  let current = now.getTime();
+  const original = new BillingProvider(async () => { throw new Error('offline'); }, { now: () => new Date(current) });
+  const failed = await original.fetchSnapshot(org, period, token);
+  assert.equal(failed.retryAt, new Date(current + 30000).toISOString());
+  let calls = 0;
+  const restarted = new BillingProvider(async () => { calls++; return response(report()); }, { now: () => new Date(current) });
+  restarted.restoreSnapshot(JSON.parse(JSON.stringify(failed)));
+  current += 29999; await restarted.fetchSnapshot(org, period, token); assert.equal(calls, 0);
+  await restarted.fetchSnapshot({ ...org, login: 'another-org' }, period, token); assert.equal(calls, 1);
+  await restarted.fetchSnapshot(org, '2026-10', token); assert.equal(calls, 2);
+  current++; await restarted.fetchSnapshot(org, period, token); assert.equal(calls, 3);
+});
+
+test('snapshot restoration rejects malformed identities, intervals and retry state safely', async () => {
+  const baseline = { ...mapBillingReport(report(), org, period, now), retryAt: new Date(now.getTime() + 3600000).toISOString() };
+  const invalid = [null, {}, { ...baseline, billingEntity: 'organization:../test-org' },
+    { ...baseline, usageSubject: 'organization:another-org' }, { ...baseline, periodStart: null },
+    { ...baseline, periodStart: '2026-00-01T00:00:00.000Z' }, { ...baseline, periodEnd: '2026-09-30T00:00:00.000Z' },
+    { ...baseline, fetchedAt: 'not a timestamp' }, { ...baseline, state: 'other' }, { ...baseline, used: '-1' },
+    { ...baseline, billingMode: 'unknown' }, { ...baseline, products: ['Spark'] }, { ...baseline, poolId: 'unverified' },
+    { ...baseline, stale: 'false' }, { ...baseline, lastError: { code: {}, message: 'unsafe' } },
+    { ...baseline, retryAt: '2026-02-30T00:00:00.000Z' }, { ...baseline, retryAt: 123 }];
+  for (const snapshot of invalid) {
+    let calls = 0;
+    const provider = new BillingProvider(async () => { calls++; return response(report()); }, { now: () => now });
+    assert.doesNotThrow(() => provider.restoreSnapshot(snapshot));
+    assert.equal((await provider.fetchSnapshot(org, period, token)).state, 'known'); assert.equal(calls, 1);
+  }
 });
 
 test('network errors are redacted, retain same-month snapshots, and never reuse last month as current', async () => {

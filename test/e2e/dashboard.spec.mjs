@@ -12,16 +12,17 @@ function fixture(overrides = {}) {
     firstSeen: time, lastSeen: time, nanoAiu: '105250000000', knownCalls: 3, unknownCalls: 1,
     pendingCalls: 2, models: ['claude-sonnet', 'gpt-5'], coverage: 'partial',
   };
-  const settings = { monthlyBudget: null, unitVerification: null, account: null, demo: false };
+  const settings = { monthlyBudget: null, unitVerification: null, account: null, retentionDays: null, demo: false };
   const summary = {
     period, local: { period, nanoAiu: session.nanoAiu, knownCalls: 3, unknownCalls: 1, pendingCalls: 2, sessionCount: 1, coverage: 'partial', unitVerified: false, credits: null },
     account: null,
     display: { mode: 'usage', label: '计量单位待确认', used: session.nanoAiu, limit: null, percentage: null, unit: 'nano-aiu', scope: '本机已记录会话', reason: 'nano AIU 与 AI Credits 的换算尚未验证；官方额度未确认' },
     updatedAt: time, demo: false,
+    retention: { days: null, lastRunAt: null, cutoff: null, prunedTraces: 0, prunedSpans: 0 },
   };
   return {
     summary, settings, sessions: { items: [session], nextCursor: null }, diagnostics: [],
-    detail: { ...session, lifetime: { nanoAiu: '205250000000', knownCalls: 5, unknownCalls: 1, pendingCalls: 2 }, monthly: { [period]: session }, modelBreakdown: [{ model: 'gpt-5', nanoAiu: '250000000', calls: 1, source: 'chat-spans-detail-not-added-to-root-total' }], events: [
+    detail: { ...session, lifetime: { nanoAiu: '205250000000', knownCalls: 5, unknownCalls: 1, pendingCalls: 2 }, monthly: { [period]: session }, modelBreakdown: [{ model: 'gpt-5', nanoAiu: '250000000', calls: 1, unknownCalls: 0, unitVerified: false, source: 'chat-spans-detail-not-added-to-root-total' }], events: [
       { traceId: 'a', spanId: 'b', sessionId: session.sessionId, classification: 'root', nanoAiu: '250000000', endTime: time, model: 'gpt-5' },
       { traceId: 'a', spanId: 'c', sessionId: session.sessionId, classification: 'root', nanoAiu: null, endTime: time, model: null },
       { traceId: 'a', spanId: 'd', sessionId: session.sessionId, classification: 'pending', nanoAiu: '99000000000', endTime: time, model: null },
@@ -47,7 +48,10 @@ async function mockApi(page, state) {
     if (url.pathname === '/api/session') body = { csrfToken: 'test-csrf-capability' };
     else if (url.pathname === '/api/summary') body = state.summary;
     else if (url.pathname === '/api/sessions') body = url.searchParams.has('cursor') ? state.nextPage : state.sessions;
-    else if (url.pathname.startsWith('/api/sessions/')) body = state.detail;
+    else if (url.pathname.startsWith('/api/sessions/')) {
+      if (state.detailOffline) return route.abort('connectionrefused');
+      body = state.detail;
+    }
     else if (url.pathname === '/api/settings') {
       if (request.method() === 'PATCH') state.settings.monthlyBudget = request.postDataJSON().monthlyBudget;
       body = state.settings;
@@ -216,6 +220,80 @@ test('official stale snapshot keeps scope and fetch time separate from provider 
   await expect(page.locator('#page-message')).toContainText('账户快照已陈旧');
   await expect(page.locator('#updated-at')).toContainText('账单已陈旧');
   await expect(page.locator('#updated-at')).toContainText('官方数据截止时间未知');
+});
+
+test('first billing permission failure is visible without a stale snapshot', async ({ page }) => {
+  const state = fixture();
+  state.summary.account = { source: 'billing-rest', billingEntity: 'organization:example', usageSubject: 'organization:example', products: [], unit: 'unknown', used: null, coverage: 'unknown', state: 'unknown', limit: null, limitKind: 'unknown', fetchedAt: time, providerUpdatedAt: null, stale: false, lastError: { code: 'FORBIDDEN', message: '读取权限不足' } };
+  await mockApi(page, state);
+  await page.goto('/');
+  await expect(page.locator('#page-message')).toContainText('账户同步失败，尚未取得有效账单快照');
+  await expect(page.locator('#page-message')).toContainText('FORBIDDEN：读取权限不足');
+  await expect(page.locator('#primary-value')).toHaveText('105,250,000,000');
+  await expect(page.locator('#connection')).toHaveText('本地服务已连接');
+});
+
+test('open detail refreshes calls while preserving range and labels a failed refresh', async ({ page }) => {
+  const state = fixture();
+  await mockApi(page, state);
+  await page.clock.install();
+  await page.goto('/');
+  await page.getByRole('button', { name: /查看会话/ }).click();
+  await page.getByRole('button', { name: '生命周期', exact: true }).click();
+  await expect(page.locator('.detail-total')).toContainText('205,250,000,000');
+  state.detail.lifetime.nanoAiu = '305250000000';
+  state.detail.lifetime.knownCalls++;
+  state.detail.events.push({ traceId: 'new', spanId: 'new', classification: 'root', nanoAiu: '100000000000', endTime: time });
+  await page.clock.runFor(5_100);
+  await expect(page.locator('.detail-total')).toContainText('305,250,000,000');
+  await expect(page.locator('#detail-lifetime')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#detail-body')).toContainText('6 次已知调用');
+  await expect(page.locator('#detail-status')).toContainText('详情读取');
+  state.detailOffline = true;
+  await page.clock.runFor(5_100);
+  await expect(page.locator('#detail-status')).toContainText('详情更新失败，保留');
+  await expect(page.locator('.detail-total')).toContainText('305,250,000,000');
+  await expect(page.locator('#connection')).toHaveText('本地服务已连接');
+  state.detailOffline = false;
+  state.detail.lifetime.nanoAiu = '405250000000';
+  await page.clock.runFor(5_100);
+  await expect(page.locator('.detail-total')).toContainText('405,250,000,000');
+  await expect(page.locator('#detail-status')).not.toContainText('失败');
+});
+
+test('each model uses its own unit evidence and unknown count', async ({ page }) => {
+  const state = fixture();
+  state.summary.local.unitVerified = true;
+  state.detail.modelBreakdown = [
+    { model: 'unverified-version', nanoAiu: '500000000', calls: 3, unknownCalls: 2, unitVerified: false, source: 'chat-spans-detail-not-added-to-root-total' },
+    { model: 'verified-version', nanoAiu: '250000000', calls: 1, unknownCalls: 0, unitVerified: true, source: 'chat-spans-detail-not-added-to-root-total' },
+  ];
+  await mockApi(page, state);
+  await page.goto('/');
+  await page.getByRole('button', { name: /查看会话/ }).click();
+  await page.getByRole('button', { name: '生命周期', exact: true }).click();
+  const unverified = page.locator('.call-list li').filter({ hasText: 'unverified-version' });
+  await expect(unverified).toContainText('500,000,000 nano AIU');
+  await expect(unverified).toContainText('2 次用量未知');
+  await expect(page.locator('.call-list li').filter({ hasText: 'verified-version' }).last()).toContainText('0.25 AI Credits');
+});
+
+test('retention stays explicit after cleanup is disabled and in session detail', async ({ page }) => {
+  const state = fixture();
+  state.summary.retention = { days: 30, lastRunAt: time, cutoff: time, prunedTraces: 2, prunedSpans: 7 };
+  await mockApi(page, state);
+  await page.clock.install();
+  await page.goto('/');
+  await expect(page.locator('#retention-policy')).toHaveText('明细清理阈值 30 天');
+  await expect(page.locator('#retention-notice')).toContainText('历史已清理');
+  await expect(page.locator('#retention-history')).toContainText('累计清理 7 条计量记录');
+  await page.getByRole('button', { name: /查看会话/ }).click();
+  await expect(page.locator('#detail-body')).toContainText('仅包含保留记录');
+  state.summary.retention.days = null;
+  await page.clock.runFor(5_100);
+  await expect(page.locator('#retention-policy')).toHaveText('自动清理已关闭');
+  await expect(page.locator('#retention-notice')).toContainText('关闭清理也无法恢复已删除记录');
+  await expect(page.locator('#detail-body')).toContainText('自动清理现已关闭');
 });
 
 test('320px layout and very large exact amounts stay within viewport', async ({ page }) => {

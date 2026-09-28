@@ -2,7 +2,7 @@
 
 GitHub Copilot CLI 本地用量监控工具：独立终端状态提示、可选原生状态栏，以及按会话查看消耗的浏览器页面。Node.js + SQLite，无独立云服务，无 Electron。
 
-**当前为 `0.1.0-preview.1` 本地预览版，尚未公开发布 npm。** 默认保存原始 nano AIU，官方月度额度保持“未确认”；真实订阅、`/usage` 和官方页面对账是独立发布门槛，合成测试不能替代。
+**当前为 `0.1.0-preview.2` 本地预览版，尚未公开发布 npm。** 默认保存原始 nano AIU，官方月度额度保持“未确认”；真实订阅、`/usage` 和官方页面对账是独立发布门槛，合成测试不能替代。
 
 ## 安装与开始使用
 
@@ -12,7 +12,7 @@ GitHub Copilot CLI 本地用量监控工具：独立终端状态提示、可选�
 npm ci
 npm test
 npm pack
-npm install -g ./pilotmeter-0.1.0-preview.1.tgz
+npm install -g ./pilotmeter-0.1.0-preview.2.tgz
 
 pilotmeter doctor
 pilotmeter run -- --no-auto-update
@@ -38,6 +38,7 @@ Windows npm 全局安装目录不要包含 `&`：npm 11.9.0 自身生成的 `.cm
 | `init --statusline [--replace]` | 备份并最小修改 Copilot 的 JSONC 设置 |
 | `init --restore-statusline` | 逐字段恢复仍属于 PilotMeter 的设置 |
 | `config set budget.monthlyCredits 1500` | 设置本机记录范围的自定义预算；`null` 清除 |
+| `config set retention.days 90` | 显式启用 90 天明细保留策略并立即清理；默认关闭，`null` 停止后续清理 |
 | `import <file> [--source-label name]` | 导入受支持的 OTLP traces JSONL，支持增量与重放 |
 | `demo [--open]` | 在独立 `demo` 子目录启动明显标注的虚构数据 |
 | `account connect --organization name` | 绑定组织付费主体 |
@@ -75,6 +76,10 @@ quota 目前提供实验性证据导入适配边界，普通安装不包含 SDK�
 同一 trace/span 全局去重；冲突隔离并回算，缺失祖先保持待分类。费用采用 BigInt，按调用结束时间归属 UTC 月份；会话生命周期与月度累计分开。JSONL 当前验证的是每行一个 OTLP `resourceSpans` envelope；原生 CLI 文件 exporter 格式仍需真实样本核验。
 
 `node:sqlite` 在当前 Node 24.14 上仍有 experimental 警告，数据库访问限定后台进程。`stop` 和卸载不删除用户账本；升级或卸载前先停止服务。发生损坏时保留文件，不自动清空。备份时先停止服务，再复制整个数据目录。
+
+明细保留默认关闭。显式设置 `retention.days`（1–36500）后，在保存设置、服务启动和每分钟维护时，清理所有已观测节点均已在阈值前结束的整条 trace。跨阈值、时间缺失或存在冲突的 trace 保守保留。清理会永久移除对应明细，仅保留 trace ID 等防重放标记；重复导入或晚到的父/子节点不会恢复这条 trace。关闭策略或延长天数也不会恢复此前明细。账户快照、原始遥测文件及升级备份不受此策略影响，SQLite 会复用释放的页而不保证文件立即缩小。
+
+发生过清理后，页面和终端明确显示“仍保留的记录”，空账本保持未知，不显示零消费。`preview.2` 升级到数据库 schema v2 前创建备份，旧版本会拒绝较新的 schema；升级前先停止旧服务。
 
 ## 开发与验证
 

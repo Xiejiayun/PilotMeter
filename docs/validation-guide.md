@@ -10,6 +10,8 @@
 4. 只有确认该实际组合中 nano AIU / 1e9 等于 Credits 后，执行 `unit verify`，证据说明应包含版本、日期和核对场景。未通过时保留原单位。
 5. 原生文件 exporter 与 OTLP JSONL 是两个兼容性门槛；先核查实际逐行结构，当前 importer 只承诺 OTLP `resourceSpans` envelope。旧历史 checkpoint 不参与本月求和，SDK 历史适配未包含在预览版。
 
+真实对账期间保留 `retention.days = null` 的默认配置。已清理的明细不能通过关闭策略或重放恢复；页面保留清理记录，不能把清理后的本机小计当作完整历史。
+
 ## 组织或企业账单
 
 1. 确认组织名或 enterprise slug、真正的付款主体、共享池与用户预算的区别。

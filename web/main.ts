@@ -7,7 +7,7 @@ type SessionDetail = SessionSummary & {
   events: SpanRecord[];
   lifetime: Totals;
   monthly: Record<string, Totals>;
-  modelBreakdown: { model: string; nanoAiu: string | null; calls: number; source: string }[];
+  modelBreakdown: { model: string; nanoAiu: string | null; calls: number; unknownCalls: number; unitVerified: boolean; source: string }[];
 };
 
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -61,6 +61,8 @@ let detail: SessionDetail | null = null;
 let detailRange: 'month' | 'lifetime' = 'month';
 let detailRequest = 0;
 let selectedSession: string | null = null;
+let detailLastRead: string | null = null;
+let detailRefreshing = false;
 let lastRead: string | null = null;
 
 const periodInput = el<HTMLInputElement>('period');
@@ -144,10 +146,32 @@ function renderSummary(value: Summary): void {
     timeParts.push(account.providerUpdatedAt ? `官方截止 ${dateTime(account.providerUpdatedAt)}` : '官方数据截止时间未知');
   }
   text('updated-at', timeParts.join(' · '));
-  if (account?.stale) {
+  renderRetention(value.retention);
+  if (account?.stale || account?.lastError) {
     el('page-message').hidden = false;
-    text('page-message', `账户快照已陈旧，保留上次已知值。${account.lastError?.message ? ` ${account.lastError.message}` : ''} 本机记录仍可持续更新。`);
+    text('page-message', `${account.stale ? '账户快照已陈旧，保留上次已知值。' : `账户同步失败，${account.used === null ? '尚未取得有效账单快照' : '显示当前已有值'}。`}${account.lastError ? ` ${account.lastError.code}：${account.lastError.message}` : ''} 本机记录仍可持续更新。`);
   }
+}
+
+function retentionNotice(): string | null {
+  const retention = summary?.retention;
+  return retention && retention.prunedSpans > 0
+    ? `历史已清理，当前用量和生命周期明细仅包含保留记录。累计清理 ${retention.prunedSpans} 条计量记录。${retention.days === null ? '自动清理现已关闭；' : ''}关闭清理也无法恢复已删除记录。`
+    : null;
+}
+
+function renderRetention(retention: Summary['retention'] | undefined): void {
+  if (!retention) {
+    text('retention-policy', '保留策略暂不可用');
+    text('retention-history', '等待服务提供历史保留状态。');
+    el('retention-notice').hidden = true;
+    return;
+  }
+  text('retention-policy', retention.days === null ? '自动清理已关闭' : `明细清理阈值 ${retention.days} 天`);
+  const notice = retentionNotice();
+  el('retention-notice').hidden = !notice;
+  text('retention-notice', notice ?? '');
+  text('retention-history', `${notice ?? '尚无历史清理记录。'}${retention.lastRunAt ? ` 最近检查 ${dateTime(retention.lastRunAt)}。` : ''}${retention.cutoff ? ` 最近清理阈值 ${dateTime(retention.cutoff)}。` : ''}`);
 }
 
 function renderSettings(value: Settings): void {
@@ -245,9 +269,11 @@ async function loadDashboard(): Promise<void> {
     else text('account-status', '设置读取失败 · 将自动重试');
     if (diagnosticsResult.status === 'fulfilled') renderDiagnostics(diagnosticsResult.value.items);
     else text('diagnostics', '诊断暂时不可用 · 将自动重试');
+    if (dialog.open) { renderDetail(); await refreshDetail(); }
   } catch (error) {
     if (generation !== requestGeneration) return;
     connection(false, errorMessage(error));
+    if (dialog.open) detailStatus(errorMessage(error));
     if (!summary) text('sessions', '尚未读取会话。服务连接后自动重试。');
   } finally {
     if (generation === requestGeneration) refreshing = false;
@@ -255,22 +281,45 @@ async function loadDashboard(): Promise<void> {
 }
 
 async function openDetail(session: SessionSummary): Promise<void> {
-  const generation = ++detailRequest;
+  detailRequest++;
   selectedSession = session.id;
   detail = null;
+  detailLastRead = null;
+  detailRefreshing = false;
   detailRange = 'month';
   text('detail-title', `会话 ${session.sessionId.slice(0, 14)}`);
   text('detail-id', `${session.sessionId} · 来源 ${session.sourceContext}`);
   text('detail-body', '正在读取会话明细…');
+  text('detail-status', '正在读取会话明细…');
   el('detail-month').setAttribute('aria-pressed', 'true');
   el('detail-lifetime').setAttribute('aria-pressed', 'false');
   if (!dialog.open) dialog.showModal();
+  await refreshDetail();
+}
+
+function detailStatus(error?: string): void {
+  text('detail-status', error
+    ? `${detailLastRead ? `详情更新失败，保留 ${dateTime(detailLastRead)} 读取的记录。` : '尚未取得会话详情。'} ${error}`
+    : `详情读取 ${dateTime(detailLastRead)} · 每 5 秒更新`);
+}
+
+async function refreshDetail(): Promise<void> {
+  if (!selectedSession || !dialog.open || detailRefreshing) return;
+  const sessionId = selectedSession;
+  const generation = ++detailRequest;
+  detailRefreshing = true;
   try {
-    const result = await api<SessionDetail>(`/api/sessions/${encodeURIComponent(session.id)}?period=${encodeURIComponent(periodInput.value)}`);
+    const result = await api<SessionDetail>(`/api/sessions/${encodeURIComponent(sessionId)}?period=${encodeURIComponent(periodInput.value)}`);
     if (generation !== detailRequest || !dialog.open) return;
     detail = result;
+    detailLastRead = new Date().toISOString();
+    detailStatus();
     renderDetail();
-  } catch (error) { if (generation === detailRequest) text('detail-body', `无法读取明细：${errorMessage(error)}`); }
+  } catch (error) {
+    if (generation !== detailRequest || !dialog.open) return;
+    detailStatus(errorMessage(error));
+    if (!detail) text('detail-body', `无法读取明细：${errorMessage(error)}`);
+  } finally { if (generation === detailRequest) detailRefreshing = false; }
 }
 
 function monthTotals(value: SessionDetail): Totals | undefined {
@@ -288,6 +337,8 @@ function renderDetail(): void {
   fragment.append(total);
   const notes = node('p', 'detail-notes', `${detailRange === 'lifetime' ? '生命周期内已观测' : `${periodInput.value} · UTC 月份`} · ${totals?.knownCalls ?? 0} 次已知调用 · ${totals?.unknownCalls ?? 0} 次用量未知 · ${totals?.pendingCalls ?? 0} 次待分类。仅包含已采集记录。`);
   fragment.append(notes);
+  const retention = retentionNotice();
+  if (retention) fragment.append(node('p', 'notice', retention));
   const models = node('section', 'detail-section');
   models.append(node('h3', '', '已观测模型（生命周期）'));
   const tags = node('div', 'model-tags');
@@ -298,7 +349,7 @@ function renderDetail(): void {
     const breakdown = node('ul', 'call-list');
     for (const item of detail.modelBreakdown) {
       const entry = node('li');
-      entry.append(node('span', '', `${item.model} · ${item.calls} 次 chat 观测`), node('span', 'call-amount', `${measured(item.nanoAiu, verified)} ${unit}`));
+      entry.append(node('span', '', `${item.model} · ${item.calls} 次 chat 观测 · ${item.unknownCalls} 次用量未知`), node('span', 'call-amount', `${measured(item.nanoAiu, item.unitVerified)} ${item.unitVerified ? 'AI Credits' : 'nano AIU'}`));
       breakdown.append(entry);
     }
     models.append(breakdown, node('p', 'small muted', '以上为生命周期内的 chat 明细，可能覆盖不完整；不再加到顶层总额中，也不代表经过对账的完整模型费用分摊。'));

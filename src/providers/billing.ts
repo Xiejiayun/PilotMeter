@@ -139,9 +139,10 @@ export class BillingProvider {
     return entry;
   }
 
-  /** Resume only after an explicit credential/permission change; 403 is never busy-retried. */
+  /** Explicit reconnection may resume permission failures, but must not bypass retry deadlines. */
   resume(account: BillingAccount, period: string): void {
     const entry = this.#entry(this.#key(account, period));
+    if (!entry.permissionDenied) return;
     entry.permissionDenied = false; entry.nextAllowedAt = 0; entry.failures = 0;
   }
 
@@ -150,15 +151,34 @@ export class BillingProvider {
     return entry && !entry.permissionDenied && entry.nextAllowedAt > 0 ? new Date(entry.nextAllowedAt).toISOString() : null;
   }
 
-  /** Restore a last-successful snapshot after restart without treating it as fresh or official. */
+  /** Restore data and retry gates together; a restart must not bypass an upstream retry deadline. */
   restoreSnapshot(snapshot: UsageSnapshot): void {
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot) || typeof snapshot.billingEntity !== 'string') return;
     const match = /^(user|organization|enterprise):([a-z\d-]+)$/i.exec(snapshot.billingEntity);
-    if (!match || snapshot.source !== 'billing-rest' || snapshot.state !== 'known') return;
-    const period = snapshot.periodStart.slice(0, 7); const range = monthlyPeriod(period);
-    if (timestamp(snapshot.periodStart) !== Date.parse(range.start) || timestamp(snapshot.periodEnd) !== Date.parse(range.end)) return;
-    try { nonNegativeDecimal(snapshot.used); } catch { return; }
+    if (!match || snapshot.source !== 'billing-rest' || !['known', 'empty', 'unknown', 'unsupported'].includes(snapshot.state)
+      || typeof snapshot.usageSubject !== 'string' || snapshot.usageSubject.toLowerCase() !== snapshot.billingEntity.toLowerCase()
+      || typeof snapshot.periodStart !== 'string' || typeof snapshot.stale !== 'boolean' || snapshot.poolId !== null) return;
     const account: BillingAccount = { kind: match[1]!.toLowerCase() as BillingAccount['kind'], login: match[2]! };
-    this.#entry(this.#key(account, period)).snapshot = { ...structuredClone(snapshot), stale: true, coverage: 'partial', limit: null, limitKind: 'unknown', verifiedAt: null };
+    const period = snapshot.periodStart.slice(0, 7); let range;
+    try { billingEntity(account); range = monthlyPeriod(period); } catch { return; }
+    if (timestamp(snapshot.periodStart) !== Date.parse(range.start) || timestamp(snapshot.periodEnd) !== Date.parse(range.end)) return;
+    if (timestamp(snapshot.fetchedAt) === null || !Array.isArray(snapshot.products)
+      || snapshot.products.some(product => product !== 'Copilot AI Credits') || snapshot.products.length > 1) return;
+    if (snapshot.state === 'known') {
+      if (snapshot.billingMode !== 'ai-credits' || snapshot.unit !== 'ai-credits' || snapshot.products.length !== 1) return;
+      try { nonNegativeDecimal(snapshot.used); } catch { return; }
+    } else if (snapshot.used !== null || snapshot.billingMode !== 'unknown' || snapshot.unit !== 'unknown' || snapshot.products.length !== 0) return;
+    const error = snapshot.lastError;
+    if (error !== null && (!object(error) || typeof error.code !== 'string' || !/^[A-Z][A-Z0-9_]{0,63}$/.test(error.code)
+      || typeof error.message !== 'string' || error.message.length > 1000 || /[\u0000-\u001f\u007f-\u009f]/.test(error.message))) return;
+    const retry = snapshot.retryAt === undefined || snapshot.retryAt === null ? null : timestamp(snapshot.retryAt);
+    if (snapshot.retryAt !== undefined && snapshot.retryAt !== null && retry === null) return;
+    const entry = this.#entry(this.#key(account, period));
+    entry.permissionDenied = error?.code === 'PERMISSION_DENIED' || error?.code === 'AUTHENTICATION_FAILED';
+    entry.nextAllowedAt = entry.permissionDenied ? 0 : retry ?? 0;
+    entry.snapshot = { ...structuredClone(snapshot), stale: snapshot.state === 'known' || snapshot.stale,
+      coverage: snapshot.state === 'known' ? 'partial' : 'unknown', limit: null, limitKind: 'unknown', verifiedAt: null,
+      retryAt: entry.permissionDenied ? null : snapshot.retryAt ?? null };
   }
 
   async fetchSnapshot(account: BillingAccount, period: string, token: string): Promise<UsageSnapshot> {
@@ -174,9 +194,10 @@ export class BillingProvider {
 
   #failure(entry: Entry, account: BillingAccount, period: string, error: SafeError, state: UsageSnapshot['state'] = 'unknown'): UsageSnapshot {
     const previous = entry.snapshot;
+    const retryAt = !entry.permissionDenied && entry.nextAllowedAt > 0 ? new Date(entry.nextAllowedAt).toISOString() : null;
     const snapshot: UsageSnapshot = previous?.state === 'known'
-      ? { ...previous, stale: true, lastError: error }
-      : { ...unknownBillingSnapshot(account, period, this.#now(), error), state };
+      ? { ...previous, stale: true, lastError: error, retryAt }
+      : { ...unknownBillingSnapshot(account, period, this.#now(), error), state, retryAt };
     entry.snapshot = snapshot;
     return structuredClone(snapshot);
   }
@@ -196,13 +217,13 @@ export class BillingProvider {
         await response.body?.cancel();
         throw new ProviderFailure({ code: 'UPSTREAM_REDIRECT', message: '账单接口重定向已拒绝' });
       }
+      if (response.status === 429 || response.status === 403 && (response.headers.has('retry-after') || response.headers.get('x-ratelimit-remaining') === '0')) {
+        entry.failures++; entry.nextAllowedAt = retryDeadline(response, now, entry.failures); await response.body?.cancel();
+        return this.#failure(entry, account, period, { code: 'RATE_LIMITED', message: '账单接口限流；已按重试提示延后同步' });
+      }
       if (response.status === 403 || response.status === 401) {
         entry.permissionDenied = true; await response.body?.cancel();
         return this.#failure(entry, account, period, { code: response.status === 403 ? 'PERMISSION_DENIED' : 'AUTHENTICATION_FAILED', message: response.status === 403 ? `权限不足；需要 ${BILLING_REQUIREMENTS[account.kind].permission} 和相应账单角色，更新权限后再重试` : '账单认证失败；更新凭据后再重试' });
-      }
-      if (response.status === 429) {
-        entry.failures++; entry.nextAllowedAt = retryDeadline(response, now, entry.failures); await response.body?.cancel();
-        return this.#failure(entry, account, period, { code: 'RATE_LIMITED', message: '账单接口限流；已按重试提示延后同步' });
       }
       if (!response.ok) {
         await response.body?.cancel();
