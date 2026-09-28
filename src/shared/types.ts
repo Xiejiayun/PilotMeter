@@ -22,7 +22,11 @@ export interface ImportResult { accepted: number; duplicates: number; conflicts:
 export interface Settings {
   monthlyBudget: string | null; unitVerification: { cliVersion: string; verifiedAt: string; evidence: string } | null;
   account: { kind: 'user' | 'organization' | 'enterprise'; login: string; directBilling?: boolean } | null;
+  retentionDays: number | null;
   demo: boolean;
+}
+export interface RetentionStatus {
+  lastRunAt: string | null; cutoff: string | null; prunedTraces: number; prunedSpans: number;
 }
 export interface UsageSnapshot {
   source: 'billing-rest' | 'sdk-quota' | 'local-otel'; billingEntity: string; usageSubject: string;
@@ -33,6 +37,7 @@ export interface UsageSnapshot {
   limitKind: 'official' | 'manual-official' | 'custom' | 'unlimited' | 'unknown';
   verifiedAt: string | null; fetchedAt: string; providerUpdatedAt: string | null;
   stale: boolean; lastError: { code: string; message: string } | null;
+  retryAt?: string | null;
 }
 export interface DisplayMode {
   mode: 'official' | 'custom' | 'usage'; label: string; used: string | null;
@@ -41,4 +46,5 @@ export interface DisplayMode {
 export interface Summary {
   period: string; local: LocalUsage; account: UsageSnapshot | null; display: DisplayMode;
   updatedAt: string; demo: boolean;
+  retention: RetentionStatus & { days: number | null };
 }

@@ -17,7 +17,7 @@ import { adaptQuota, type QuotaData, type QuotaEvidence } from '../providers/quo
 import { seedDemo } from './demo.js';
 
 class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
-const defaultSettings: Settings = { monthlyBudget: null, unitVerification: null, account: null, demo: false };
+const defaultSettings: Settings = { monthlyBudget: null, unitVerification: null, account: null, retentionDays: null, demo: false };
 function equal(a: string | undefined, b: string): boolean { return !!a && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b)); }
 async function body(req: IncomingMessage): Promise<unknown> {
   if (!/^application\/json(?:;|$)/i.test(req.headers['content-type'] || '')) throw new HttpError(415, 'Only application/json is supported.');
@@ -57,7 +57,13 @@ export async function serve(dir: string, demo = false): Promise<void> {
     const quota = entity ? repo.getSnapshot(period, { entity, source: 'sdk-quota' }) : null;
     let account = entity ? (officialSnapshotEligible(quota, period, entity) ? quota : repo.getSnapshot(period, { entity, source: 'billing-rest' }) || quota) : null;
     if (account) account = { ...account, stale: account.stale || Date.now() - Date.parse(account.fetchedAt) > 15 * 60_000 };
-    return { period, local, account, display: buildDisplay(local, account, settings), updatedAt: new Date().toISOString(), demo: settings.demo };
+    const retention = { days: settings.retentionDays, ...repo.getRetentionStatus() };
+    const display = buildDisplay(local, account, settings);
+    if (retention.prunedSpans > 0 && display.mode !== 'official') {
+      display.scope = '本机仍保留的会话记录';
+      display.reason = `${display.reason ? `${display.reason}；` : ''}部分历史明细已清理，当前小计不代表清理前的完整用量`;
+    }
+    return { period, local, account, display, retention, updatedAt: new Date().toISOString(), demo: settings.demo };
   }
   let cacheChain = Promise.resolve();
   function updateCache(): Promise<void> { const snapshot = summary(); cacheChain = cacheChain.catch(() => {}).then(() => atomicJson(join(dir, 'status.json'), snapshot)); return cacheChain; }
@@ -113,7 +119,7 @@ export async function serve(dir: string, demo = false): Promise<void> {
       if (route.startsWith('/api/') && req.method !== 'GET' && !management && !(req.headers.origin === instance.url && equal(req.headers['x-pilotmeter-csrf'] as string | undefined, csrf))) throw new HttpError(403, 'Mutation requires local authorization.');
       if (req.method === 'GET' && route === '/api/summary') { json(res, 200, summary(month(url.searchParams.get('period') || undefined))); return; }
       if (req.method === 'GET' && route === '/api/sessions') { json(res, 200, repo.sessions(month(url.searchParams.get('period') || undefined), { cursor: url.searchParams.get('cursor') || undefined, sort: url.searchParams.get('sort') || 'usage', limit: 50 })); return; }
-      if (req.method === 'GET' && route.startsWith('/api/sessions/')) { const result = repo.session(decodeURIComponent(route.slice(14))); if (!result) throw new HttpError(404, 'Session not found.'); json(res, 200, result); return; }
+      if (req.method === 'GET' && route.startsWith('/api/sessions/')) { const result = repo.session(decodeURIComponent(route.slice(14)), settings.unitVerification); if (!result) throw new HttpError(404, 'Session not found.'); json(res, 200, result); return; }
       if (req.method === 'GET' && route === '/api/settings') { json(res, 200, settings); return; }
       if (req.method === 'POST' && route === '/api/collector-context') {
         if (!management) throw new HttpError(403, 'Collector registration requires CLI authentication.');
@@ -165,10 +171,18 @@ export async function serve(dir: string, demo = false): Promise<void> {
       if (req.method === 'PATCH' && route === '/api/settings') {
         const patch = await body(req) as Record<string, unknown>;
         if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new HttpError(400, 'Expected settings object.');
-        if (Object.keys(patch).some(key => !['monthlyBudget'].includes(key))) throw new HttpError(400, 'Unknown settings field.');
+        if (Object.keys(patch).some(key => !['monthlyBudget', 'retentionDays'].includes(key))) throw new HttpError(400, 'Unknown settings field.');
         if ('monthlyBudget' in patch && patch.monthlyBudget !== null && (typeof patch.monthlyBudget !== 'string' || !/^\d{1,18}(\.\d{1,9})?$/.test(patch.monthlyBudget))) throw new HttpError(400, 'Budget must be a nonnegative decimal string.');
-        settings = { ...settings, ...patch } as Settings;
-        repo.setSetting('settings', settings); await updateCache(); json(res, 200, settings); return;
+        if ('retentionDays' in patch) {
+          if (!management) throw new HttpError(403, 'Retention changes require explicit CLI authentication.');
+          if (settings.demo) throw new HttpError(409, 'Retention is not configurable for synthetic demo data.');
+          if (patch.retentionDays !== null && (typeof patch.retentionDays !== 'number' || !Number.isSafeInteger(patch.retentionDays) || patch.retentionDays < 1 || patch.retentionDays > 36500)) throw new HttpError(400, 'Retention days must be an integer from 1 to 36500, or null to disable future cleanup.');
+        }
+        const nextSettings = { ...settings, ...patch } as Settings;
+        if ('retentionDays' in patch) repo.saveSettingsWithRetention(nextSettings);
+        else repo.setSetting('settings', nextSettings);
+        settings = nextSettings;
+        await updateCache(); json(res, 200, settings); return;
       }
       if (req.method === 'GET' && route === '/api/diagnostics') { json(res, 200, { items: repo.diagnostics(), collection: 'Traces only; metrics and logs are acknowledged without storage.' }); return; }
       if (req.method === 'POST' && route === '/api/import') {
@@ -200,7 +214,7 @@ export async function serve(dir: string, demo = false): Promise<void> {
       throw new HttpError(404, 'Not found.');
     } catch (error) {
       const status = error instanceof HttpError ? error.status : error instanceof RangeError || /period must|cursor|YYYY-MM/i.test((error as Error).message) ? 400 : 500;
-      if (!res.headersSent) json(res, status, { error: status === 500 ? 'Local operation failed; data was not cleared.' : (error as Error).message }); else res.end();
+      if (!res.headersSent) json(res, status, { error: status === 500 ? 'Local operation failed; refresh status to confirm any changes before retrying.' : (error as Error).message }); else res.end();
     }
   });
   server.requestTimeout = 10_000; server.headersTimeout = 10_000;
@@ -215,8 +229,15 @@ export async function serve(dir: string, demo = false): Promise<void> {
     if ((await readJson<Instance>(join(dir, 'instance.json')))?.instanceId === instance.instanceId) await rm(join(dir, 'instance.json'), { force: true });
     await release();
   }
-  const refreshTimer = setInterval(() => { if (!closing) { void updateCache().catch(() => {}); void trackedRefresh().catch(() => {}); } }, 60_000); refreshTimer.unref();
+  const refreshTimer = setInterval(() => {
+    if (!closing) {
+      try { repo.applyRetention(settings.retentionDays); }
+      catch { console.error('PilotMeter: retention cleanup failed; the cleanup transaction was not applied.'); }
+      void updateCache().catch(() => {}); void trackedRefresh().catch(() => {});
+    }
+  }, 60_000); refreshTimer.unref();
   try {
+    repo.applyRetention(settings.retentionDays);
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => resolve()); });
     instance.url = `http://127.0.0.1:${(server.address() as {port: number}).port}`;
     await updateCache(); await atomicJson(join(dir, 'instance.json'), instance);

@@ -3,14 +3,14 @@ import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { identifier, integer, metadata, serverAddress } from '../collectors/otlp.js';
-import type { Classification, Diagnostic, ImportResult, LocalUsage, SessionSummary, Settings, SpanRecord, UsageSnapshot } from '../shared/types.js';
+import type { Classification, Diagnostic, ImportResult, LocalUsage, RetentionStatus, SessionSummary, Settings, SpanRecord, UsageSnapshot } from '../shared/types.js';
 
 export interface ImportCursor {
   fileKey: string; fileIdentity: string; generation: number; offset: number; prefixHash: string;
 }
 type StoredSpan = SpanRecord & { classification: Classification; conflicted: boolean; reason: string | null };
 interface Totals { nanoAiu: string | null; knownCalls: number; unknownCalls: number; pendingCalls: number }
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const ROOT_CLI_VERSIONS = new Set(['1.0.88']);
 const now = (): string => new Date().toISOString();
 const key = (span: Pick<SpanRecord, 'traceId' | 'spanId'>): string => `${span.traceId}/${span.spanId}`;
@@ -101,10 +101,11 @@ export class Repository {
       if (version < SCHEMA_VERSION) {
         if (hadData) {
           // Checkpoint before a byte-for-byte migration backup, preserving the original on failure.
-          this.#db.exec('PRAGMA wal_checkpoint(FULL)');
+          const checkpoint = this.#db.prepare('PRAGMA wal_checkpoint(FULL)').get();
+          if (Number(checkpoint?.busy ?? 0) !== 0) throw new Error('Database is busy; migration backup could not be completed');
           copyFileSync(dbPath, `${dbPath}.before-v${SCHEMA_VERSION}-${Date.now()}.bak`);
         }
-        this.#migrate();
+        this.#migrate(version);
       }
       this.#db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;');
     } catch (error) {
@@ -113,9 +114,10 @@ export class Repository {
     }
   }
 
-  #migrate(): void {
+  #migrate(version: number): void {
     this.#transaction(() => {
-      this.#db.exec(`
+      if (version < 1) {
+        this.#db.exec(`
         CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS source_contexts (id TEXT PRIMARY KEY, created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS usage_events (
@@ -160,8 +162,23 @@ export class Repository {
           code TEXT NOT NULL, message TEXT NOT NULL, created_at TEXT NOT NULL,
           count INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (code, message)
         );
-      `);
-      this.#db.prepare('INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(SCHEMA_VERSION, now());
+        `);
+        this.#db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(1, now());
+      }
+      if (version < 2) {
+        this.#db.exec(`
+          CREATE TABLE retired_traces (
+            trace_id TEXT PRIMARY KEY, retired_at TEXT NOT NULL, cutoff_at TEXT NOT NULL,
+            span_count INTEGER NOT NULL CHECK (span_count > 0)
+          );
+          CREATE TABLE retention_status (
+            id INTEGER PRIMARY KEY CHECK (id = 1), last_run_at TEXT, cutoff_at TEXT,
+            pruned_traces INTEGER NOT NULL DEFAULT 0, pruned_spans INTEGER NOT NULL DEFAULT 0
+          );
+          INSERT INTO retention_status (id) VALUES (1);
+        `);
+        this.#db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(2, now());
+      }
       this.#db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     });
   }
@@ -181,7 +198,71 @@ export class Repository {
   }
 
   close(): void { this.#db.close(); }
-  hasUsageEvents(): boolean { return !!this.#db.prepare('SELECT 1 FROM usage_events LIMIT 1').get(); }
+  hasUsageEvents(): boolean {
+    return !!this.#db.prepare('SELECT 1 FROM usage_events UNION ALL SELECT 1 FROM retired_traces LIMIT 1').get();
+  }
+
+  getRetentionStatus(): RetentionStatus {
+    const row = this.#db.prepare('SELECT last_run_at, cutoff_at, pruned_traces, pruned_spans FROM retention_status WHERE id = 1').get()!;
+    return { lastRunAt: row.last_run_at === null ? null : String(row.last_run_at), cutoff: row.cutoff_at === null ? null : String(row.cutoff_at),
+      prunedTraces: Number(row.pruned_traces), prunedSpans: Number(row.pruned_spans) };
+  }
+
+  /** Persist the policy only when its first cleanup also commits successfully. */
+  saveSettingsWithRetention(settings: Settings, at?: Date): RetentionStatus {
+    return this.#transaction(() => {
+      this.setSetting('settings', settings);
+      return this.applyRetention(settings.retentionDays, at);
+    });
+  }
+
+  /** Retire whole traces, retaining their identities permanently so backfill cannot revive their costs. */
+  applyRetention(days: number | null, at = new Date()): RetentionStatus {
+    if (days === null) return this.getRetentionStatus();
+    if (!Number.isInteger(days) || days < 1 || days > 36500) throw new Error('Retention days must be an integer between 1 and 36500, or null');
+    if (!(at instanceof Date) || !Number.isFinite(at.getTime()) || !validTime(at.toISOString())) throw new Error('Invalid retention run time');
+    const cutoffDate = new Date(at.getTime() - days * 86_400_000);
+    if (!Number.isFinite(cutoffDate.getTime()) || !validTime(cutoffDate.toISOString())) throw new Error('Invalid retention cutoff time');
+    const runAt = at.toISOString();
+    const cutoff = cutoffDate.toISOString();
+    return this.#transaction(() => {
+      const traces = new Map<string, { eligible: boolean; spanCount: number }>();
+      for (const row of this.#db.prepare('SELECT trace_id, payload, conflicted FROM usage_events').all()) {
+        const traceId = String(row.trace_id);
+        const trace = traces.get(traceId) ?? { eligible: true, spanCount: 0 };
+        const span = JSON.parse(String(row.payload)) as SpanRecord;
+        const start = validTime(span.startTime);
+        const end = validTime(span.endTime);
+        // A conflicting copy may have a later timestamp than the retained original.
+        trace.eligible &&= row.conflicted === 0 && start !== null && end !== null && start <= end && end < cutoff;
+        trace.spanCount++;
+        traces.set(traceId, trace);
+      }
+      for (const row of this.#db.prepare('SELECT DISTINCT trace_id FROM quarantine_events').all()) {
+        const trace = traces.get(String(row.trace_id));
+        if (trace) trace.eligible = false;
+      }
+      let prunedTraces = 0;
+      let prunedSpans = 0;
+      for (const [traceId, trace] of traces) {
+        if (!trace.eligible) continue;
+        this.#db.prepare('INSERT INTO retired_traces (trace_id, retired_at, cutoff_at, span_count) VALUES (?, ?, ?, ?)')
+          .run(traceId, runAt, cutoff, trace.spanCount);
+        this.#db.prepare('DELETE FROM span_classification WHERE trace_id = ?').run(traceId);
+        this.#db.prepare('DELETE FROM quarantine_events WHERE trace_id = ?').run(traceId);
+        this.#db.prepare('DELETE FROM usage_events WHERE trace_id = ?').run(traceId);
+        prunedTraces++;
+        prunedSpans += trace.spanCount;
+      }
+      this.#db.exec(`DELETE FROM sessions WHERE NOT EXISTS (
+        SELECT 1 FROM usage_events WHERE usage_events.source_context = sessions.source_context AND usage_events.session_id = sessions.session_id
+      )`);
+      this.#db.prepare(`UPDATE retention_status SET last_run_at = ?, cutoff_at = ?,
+        pruned_traces = pruned_traces + ?, pruned_spans = pruned_spans + ? WHERE id = 1`)
+        .run(runAt, cutoff, prunedTraces, prunedSpans);
+      return this.getRetentionStatus();
+    });
+  }
 
   #diagnose(code: string, message: string): void {
     this.#db.prepare(`INSERT INTO diagnostics (code, message, created_at) VALUES (?, ?, ?)
@@ -196,6 +277,11 @@ export class Repository {
         if (!span.traceId || !span.spanId) {
           result.rejected++;
           this.#diagnose('invalid-identity', 'A span with an invalid trace or span identifier was rejected.');
+          continue;
+        }
+        if (this.#db.prepare('SELECT 1 FROM retired_traces WHERE trace_id = ?').get(span.traceId)) {
+          result.rejected++;
+          this.#diagnose('retired-trace', 'A span from a trace already removed by retention was skipped; cleared usage cannot be restored by replay.');
           continue;
         }
         const digest = fingerprint(span);
@@ -347,7 +433,7 @@ export class Repository {
     return { items, nextCursor: offset + limit < all.length ? Buffer.from(JSON.stringify({ period, sort, after: items.at(-1)!.id })).toString('base64url') : null };
   }
 
-  session(id: string): (SessionSummary & { lifetime: Totals; monthly: Record<string, Totals>; events: StoredSpan[]; modelBreakdown: { model: string; nanoAiu: string | null; calls: number; source: string }[] }) | null {
+  session(id: string, unitVerification: Settings['unitVerification'] = null): (SessionSummary & { lifetime: Totals; monthly: Record<string, Totals>; events: StoredSpan[]; modelBreakdown: { model: string; nanoAiu: string | null; calls: number; unknownCalls: number; unitVerified: boolean; source: string }[] }) | null {
     const row = this.#db.prepare('SELECT source_context, session_id FROM sessions WHERE id = ?').get(id);
     if (!row) return null;
     const spans = this.#spans('WHERE e.source_context = ? AND e.session_id = ?', [String(row.source_context), String(row.session_id)]);
@@ -360,15 +446,18 @@ export class Repository {
       group.push(span); grouped.set(period, group);
     }
     const chatModels = new Map<string, StoredSpan[]>();
-    for (const span of spans.filter(item => item.operation === 'chat' && !item.conflicted)) {
+    for (const span of spans.filter(item => item.operation === 'chat')) {
       const model = span.model ?? 'unknown';
       const group = chatModels.get(model) ?? [];
       group.push(span); chatModels.set(model, group);
     }
     const modelBreakdown = [...chatModels].map(([model, chats]) => {
-      const metered = chats.filter(chat => chat.nanoAiu !== null);
+      const metered = chats.filter(chat => chat.nanoAiu !== null && !['invalid', 'conflict', 'pending'].includes(chat.classification));
+      const unitVerified = Boolean(unitVerification && metadata(unitVerification.evidence, 4096)
+        && Number.isFinite(Date.parse(unitVerification.verifiedAt)) && metered.length
+        && metered.every(chat => chat.serviceVersion === unitVerification.cliVersion));
       return { model, nanoAiu: metered.length ? metered.reduce((sum, chat) => sum + BigInt(chat.nanoAiu!), 0n).toString() : null,
-        calls: chats.length, source: 'chat-spans-detail-not-added-to-root-total' };
+        calls: chats.length, unknownCalls: chats.length - metered.length, unitVerified, source: 'chat-spans-detail-not-added-to-root-total' };
     });
     return { ...this.#sessionSummary(spans), lifetime: totals(spans), monthly: Object.fromEntries([...grouped].sort().map(([period, items]) => [period, totals(items)])),
       events: spans.sort((a, b) => (a.endTime ?? '').localeCompare(b.endTime ?? '') || key(a).localeCompare(key(b))), modelBreakdown };

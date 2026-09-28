@@ -33,6 +33,7 @@
           <dl class="context-list"><div><dt>官方月度额度</dt><dd id="official-state">未确认</dd></div><div><dt>计量单位</dt><dd id="unit-state">等待数据</dd></div><div><dt>本机覆盖</dt><dd>启用采集后的部分记录</dd></div></dl>
           <p id="mode-reason" class="muted">本机记录不代表整个账户的消费。官方比例仅在单位、额度池、周期和覆盖范围核实后显示。</p>
           <p id="account-usage" class="account-snapshot small" hidden></p>
+          <p id="retention-notice" class="notice small" hidden></p>
           <p class="sync-time"><span aria-hidden="true">◷</span> <span id="updated-at">尚未获取数据</span></p>
         </div>
       </section>
@@ -57,6 +58,7 @@
             <p class="panel-description">以本机已记录的 AI Credits 衡量你的预算进度。此设置不代表官方套餐额度。</p>
             <form id="budget-form"><label for="budget">预算 <span class="muted">AI Credits / 月</span></label><div class="input-action"><input id="budget" type="text" inputmode="decimal" placeholder="例如 1500" autocomplete="off" aria-describedby="budget-help budget-feedback" /><button id="save-budget" class="button primary" type="submit">保存</button></div><p id="budget-help" class="small muted">留空可清除预算。单位验证通过后才显示预算百分比。</p><p id="budget-feedback" class="form-feedback" role="status"></p></form>
             <div class="account-info"><span class="metric-label">账户连接</span><p id="account-status">正在读取设置</p><p class="small muted">组织或企业代付需连接对应的计费主体，并具备相应读取权限。</p></div>
+            <div class="account-info"><span class="metric-label">本地历史保留</span><p id="retention-policy">正在读取策略</p><p id="retention-history" class="small muted"></p><p class="small muted">保留策略仅通过命令行显式配置；删除历史无法撤销。</p></div>
           </section>
           <section class="panel diagnostics-panel" aria-labelledby="diagnostics-title"><details><summary><span><span class="eyebrow">COLLECTOR HEALTH</span><strong id="diagnostics-title">采集与诊断</strong></span><span id="diagnostic-count" class="count-badge">—</span></summary><div class="diagnostics-content"><p class="small muted">这里只保存必要的计量元数据，不读取对话内容作为标题。</p><div id="diagnostics"><p class="muted small">正在获取诊断…</p></div><p class="small muted">进一步检查：<code>pilotmeter doctor</code></p></div></details></section>
         </aside>
@@ -66,6 +68,7 @@
     <dialog id="session-dialog" aria-labelledby="detail-title">
       <div class="dialog-heading"><div><p class="eyebrow">SESSION DETAILS</p><h2 id="detail-title">会话详情</h2></div><button id="close-detail" class="icon-button" type="button" aria-label="关闭会话详情">×</button></div>
       <p id="detail-id" class="detail-id"></p>
+      <p id="detail-status" class="small muted" role="status"></p>
       <div class="segmented" aria-label="会话统计范围"><button id="detail-month" type="button" aria-pressed="true">所选月份</button><button id="detail-lifetime" type="button" aria-pressed="false">生命周期</button></div>
       <div id="detail-body" aria-live="polite"></div>
     </dialog>

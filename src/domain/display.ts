@@ -48,7 +48,7 @@ export function buildDisplay(local: LocalUsage, account: UsageSnapshot | null, s
       mode: 'official', label: unlimited ? '官方额度（无固定上限）' : '本月官方额度已用',
       used: account.used, limit: account.limit, percentage, unit: account.unit,
       scope: `官方账户额度池 · ${account.billingEntity}`,
-      reason: unlimited ? '无固定上限' : percentage === null ? '额度为 0' : account.stale ? '数据已陈旧；显示上次成功同步值' : null,
+      reason: [unlimited ? '无固定上限' : percentage === null ? '额度为 0' : null, account.stale ? '数据已陈旧；显示上次成功同步值' : null].filter(Boolean).join('；') || null,
     };
   }
 
