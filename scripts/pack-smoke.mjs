@@ -209,7 +209,8 @@ try {
   const doctor = JSON.parse((await cli(dataDir, ['doctor'])).stdout);
   assert.equal(doctor.platform, process.platform);
   assert.equal(doctor.node, process.version);
-  assert.match(doctor.copilot, /^GitHub Copilot CLI 1\.0\.88\./, 'The installed platform must include the pinned native Copilot runtime.');
+  assert.match(doctor.copilot, /^GitHub Copilot CLI 1\.0\.88\./,
+    `The installed platform must include the pinned native Copilot runtime. Probe: ${JSON.stringify(doctor.copilotProbe)}`);
   assert.equal(doctor.service, 'stopped');
   assert.equal(doctor.officialQuota, 'unverified');
   assert.equal(await exists(dataDir), false, 'Read-only help/doctor must not create runtime data');

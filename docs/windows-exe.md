@@ -119,7 +119,7 @@ build/windows/SHA256SUMS
 - 缓存文件被修改时启动器拒绝执行，恢复原始文件后可再次运行。构建检查固定 Node 摘要、精确生产依赖、许可证及包成员白名单，并扫描敏感文件和凭据形态。
 - `preview.5` 单独在本机实际 TTY 中验证 `watch` 的 `q` 和 Ctrl+C 正常退出；其无参数入口当时打开浏览器。`preview.7` 已改为桌面挂件，自动化用显式 `start --background` 验证无桌面启动。
 
-当前 `preview.7` 纯原生修订已通过 219 项完整 Node 回归、36 项浏览器回归、194 项原生检查和 7 组实际 npm 安装验收。原生检查覆盖路径归一、参数解析、DTO、JSON 上界、API 白名单、CSRF、服务身份变化，以及真实 loopback 请求和半截响应体取消。当前 GUI EXE 的 `watch` 已在本机 TTY 中验证 `q` 和 Ctrl+C 正常退出；实际 EXE 的最终验收及三平台结果见对应 PR 检查记录和 Release。
+当前 `preview.7` 纯原生修订已通过 225 项完整 Node 回归、36 项浏览器回归、194 项原生检查和 7 组实际 npm 安装验收。原生检查覆盖路径归一、参数解析、DTO、JSON 上界、API 白名单、CSRF、服务身份变化，以及真实 loopback 请求和半截响应体取消。当前 GUI EXE 的 `watch` 已在本机 TTY 中验证 `q` 和 Ctrl+C 正常退出；实际 EXE 的最终验收及三平台结果见对应 PR 检查记录和 Release。
 
 原生窗口的实际交互和视觉验收受工具错误阻挡：重新选择窗口后，激活操作仍返回 `GetCursorPos: Access is denied (0x80070005)`，未能完成点击、拖动、托盘恢复与窗口布局检查。无窗口契约检查、真实 loopback 请求和网页截图均不替代这些桌面验收。
 

@@ -1,11 +1,11 @@
 import { Command } from 'commander';
 import { join, resolve } from 'node:path';
-import crossSpawn from 'cross-spawn';
 import { open, readFile, writeFile } from 'node:fs/promises';
 import { dataDirectory, month, VERSION } from '../shared/runtime.js';
 import { ensureService, instanceAt, request, collectorForRun } from '../daemon/client.js';
 import { statusText, cachedStatus, watch, openBrowser, terminalLink } from './terminal.js';
 import { runCopilot } from './run.js';
+import { probeCopilotVersion } from './doctor.js';
 import type { Summary } from '../shared/types.js';
 import { installStatusline, restoreStatusline, inspectStatusline } from './statusline-config.js';
 import type { ReconciliationInspection, ReconciliationReport } from '../domain/reconciliation-evidence.js';
@@ -15,17 +15,7 @@ import type { AccountLogin, AccountsOverview } from '../shared/accounts.js';
 const program = new Command().name('pilotmeter').description('Local Copilot CLI usage meter; official quota stays unknown until verified.').version(VERSION).option('--data-dir <directory>', 'isolated application data directory').enablePositionalOptions();
 const dir = () => dataDirectory(program.opts().dataDir);
 const copilotCommand = () => process.env.PILOTMETER_COPILOT_BIN || resolveCopilotCommand();
-async function copilotVersion() {
-  const override = !!process.env.PILOTMETER_COPILOT_BIN;
-  const command = copilotCommand();
-  for (let attempt = 0; ; attempt++) {
-    const result = crossSpawn.sync(command, override ? ['--version'] : ['--no-auto-update', '--version'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
-    const code = (result.error as NodeJS.ErrnoException | undefined)?.code;
-    // A newly extracted executable can be temporarily busy. Never retry an already completed command.
-    if (override || attempt >= 2 || !code || !['EPERM', 'EBUSY', 'ETIMEDOUT'].includes(code)) return result;
-    await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
-  }
-}
+const copilotVersion = () => probeCopilotVersion(copilotCommand(), !process.env.PILOTMETER_COPILOT_BIN);
 program.command('__serve', { hidden: true }).option('--demo').action(async options => { const { serve } = await import('../daemon/server.js'); await serve(dir(), options.demo); });
 program.command('doctor').description('Read-only environment and service checks').action(async () => {
   const copilot = await copilotVersion();
