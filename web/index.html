@@ -16,10 +16,26 @@
     </header>
     <main id="main">
       <div class="page-heading">
-        <div><p class="eyebrow">COPILOT CLI / USAGE</p><h1>每一次调用，都有迹可循。</h1><p class="subheading">了解本机已记录的用量，查看每个会话的消耗。</p></div>
+        <div><p class="eyebrow">COPILOT / YOUR ACCOUNTS</p><h1>你的账号，用量一目了然。</h1><p class="subheading">登录 GitHub 查看个人 Copilot 额度，按账号查看本机采集记录。</p></div>
         <div class="toolbar"><div class="period-field"><label for="period">统计月份 <span>UTC</span></label><input id="period" type="month" required /></div><button id="refresh" class="button secondary" type="button"><span aria-hidden="true">↻</span> 刷新</button></div>
       </div>
       <p id="page-message" class="notice" role="status" hidden></p>
+      <section id="github-accounts" class="panel accounts-panel" aria-labelledby="github-title" aria-busy="true">
+        <div class="account-heading"><div><p class="eyebrow">GITHUB ACCOUNT</p><h2 id="github-title">连接你的 GitHub 账号</h2><p id="github-description" class="account-description">登录后查看当前账号的 Copilot 额度。可添加个人、工作等多个账号。</p></div><button id="github-login" class="button primary" type="button" disabled>登录 GitHub</button></div>
+        <p id="github-feedback" class="form-feedback" role="status">正在读取账号…</p>
+        <div id="github-controls" class="account-controls" hidden>
+          <div class="account-select-field"><label for="github-select">当前查看的账号</label><select id="github-select" aria-describedby="github-scope"></select></div>
+          <div class="account-actions"><button id="github-refresh" class="button secondary" type="button">同步额度</button><button id="github-reauth" class="button secondary" type="button">重新登录</button><button id="github-remove" class="button secondary" type="button">移除账号</button></div>
+        </div>
+        <p id="github-scope" class="account-scope">尚未登录；下方显示全部本机记录。</p>
+        <section id="personal-quota" class="personal-quota" aria-labelledby="quota-title" hidden>
+          <div class="quota-heading"><h3 id="quota-title">个人 Copilot 额度</h3><span class="quota-period">GitHub 当前周期 · 不随下方月份切换</span></div>
+          <p id="quota-status" class="small muted" role="status"></p><div id="quota-buckets" class="quota-buckets"></div>
+          <p class="small muted quota-note">此处仅表示登录账号的 Copilot 额度。组织账单和本机采集记录另行展示；不能据此推导本机 nano AIU 的换算。</p>
+        </section>
+        <div class="capture-guide"><div><strong>开始记录新会话</strong><p class="small muted">在终端运行下面的命令，使用执行时选中的账号启动 Copilot。打开此页面本身不会采集会话。</p><p class="small muted">记录按启动时的账号归类。在 Copilot 内切换账号后，请退出并从 PilotMeter 重新启动。</p></div><div class="capture-command"><code id="github-run-command">pilotmeter run --</code><button id="copy-run-command" class="button secondary" type="button" aria-label="复制采集命令">复制命令</button></div><p id="copy-command-feedback" class="form-feedback" role="status"></p></div>
+      </section>
+      <div class="local-section-heading"><h2>本机记录与账单核验</h2><p id="local-account-scope" class="small muted">从启用采集起记录；历史记录不会自动归属于新登录账号。</p></div>
       <section class="overview" aria-label="用量概览">
         <div class="usage-card">
           <div class="card-heading"><span id="mode" class="mode-label">正在读取用量</span><span id="mode-badge" class="pill">本机记录</span></div>
@@ -67,7 +83,7 @@
             <div class="panel-heading"><div><p class="eyebrow">YOUR PACE</p><h2 id="budget-title">自定义月度预算</h2></div></div>
             <p class="panel-description">以本机已记录的 AI Credits 衡量你的预算进度。此设置不代表官方套餐额度。</p>
             <form id="budget-form"><label for="budget">预算 <span class="muted">AI Credits / 月</span></label><div class="input-action"><input id="budget" type="text" inputmode="decimal" placeholder="例如 1500" autocomplete="off" aria-describedby="budget-help budget-feedback" /><button id="save-budget" class="button primary" type="submit">保存</button></div><p id="budget-help" class="small muted">留空可清除预算。单位验证通过后才显示预算百分比。</p><p id="budget-feedback" class="form-feedback" role="status"></p></form>
-            <div class="account-info"><span class="metric-label">账户连接</span><p id="account-status">正在读取设置</p><p class="small muted">组织或企业代付需连接对应的计费主体，并具备相应读取权限。</p></div>
+            <div class="account-info"><span class="metric-label">组织 / 企业账单连接</span><p id="account-status">正在读取设置</p><p class="small muted">账单读取与上方个人 GitHub 登录独立；需对应计费主体的读取权限。</p></div>
             <div class="account-info"><span class="metric-label">本地历史保留</span><p id="retention-policy">正在读取策略</p><p id="retention-history" class="small muted"></p><p class="small muted">保留策略仅通过命令行显式配置；删除历史无法撤销。</p></div>
           </section>
           <section class="panel diagnostics-panel" aria-labelledby="diagnostics-title"><details><summary><span><span class="eyebrow">COLLECTOR HEALTH</span><strong id="diagnostics-title">采集与诊断</strong></span><span id="diagnostic-count" class="count-badge">—</span></summary><div class="diagnostics-content"><p class="small muted">这里只保存必要的计量元数据，不读取对话内容作为标题。</p><div id="diagnostics"><p class="muted small">正在获取诊断…</p></div><p class="small muted">进一步检查：<code>pilotmeter doctor</code></p></div></details></section>
@@ -82,6 +98,15 @@
       <div class="segmented" aria-label="会话统计范围"><button id="detail-month" type="button" aria-pressed="true">所选月份</button><button id="detail-lifetime" type="button" aria-pressed="false">生命周期</button></div>
       <div id="detail-body" aria-live="polite"></div>
     </dialog>
+    <dialog id="github-login-dialog" aria-labelledby="login-title" aria-describedby="login-description">
+      <div class="dialog-heading"><div><p class="eyebrow">CONNECT GITHUB</p><h2 id="login-title">登录 GitHub</h2></div><button id="close-github-login" class="icon-button" type="button" aria-label="关闭 GitHub 登录">×</button></div>
+      <p id="login-description" class="login-description">在 GitHub 完成授权后，账号会显示在 PilotMeter。添加其他账号时，请在 GitHub 授权页确认当前登录的是目标账号。</p>
+      <form id="github-host-form"><label for="github-host">GitHub 地址</label><input id="github-host" type="url" value="https://github.com" required autocomplete="url" aria-describedby="github-host-help" /><p id="github-host-help" class="small muted">一般使用 github.com；企业托管账号可填写 https://你的企业.ghe.com。</p><button id="start-github-login" class="button primary" type="submit">获取登录验证码</button></form>
+      <div id="device-login" hidden><p>1. 复制这次登录验证码</p><div class="device-code-row"><code id="github-user-code" tabindex="0"></code><button id="copy-github-code" class="button secondary" type="button">复制验证码</button></div><p id="copy-code-feedback" class="form-feedback" role="status"></p><p>2. 打开 GitHub，输入验证码并确认账号</p><a id="github-verification-link" class="button primary" target="_blank" rel="noopener noreferrer">前往 GitHub 授权</a><p id="login-expiry" class="small muted"></p></div>
+      <p id="login-status" class="login-status" role="status" aria-live="polite"></p>
+      <div class="login-footer"><button id="retry-github-login" class="button secondary" type="button" hidden>重新获取验证码</button><button id="cancel-github-login" class="button secondary" type="button">取消登录</button></div>
+    </dialog>
+    <dialog id="github-remove-dialog" aria-labelledby="remove-title"><div class="dialog-heading"><h2 id="remove-title">从 PilotMeter 移除账号</h2><button id="close-github-remove" class="icon-button" type="button" aria-label="取消移除账号">×</button></div><p id="remove-description" class="login-description"></p><p class="small muted">只移除此应用保存的登录连接，不撤销 GitHub 上的授权，也不删除已经采集的记录。</p><p id="remove-feedback" class="form-feedback" role="status"></p><div class="login-footer"><button id="cancel-github-remove" class="button secondary" type="button">保留账号</button><button id="confirm-github-remove" class="button primary" type="button">确认移除</button></div></dialog>
     <script type="module" src="/main.ts"></script>
   </body>
 </html>

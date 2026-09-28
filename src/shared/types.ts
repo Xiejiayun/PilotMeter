@@ -46,6 +46,7 @@ export interface DisplayMode {
   limit: string | null; percentage: string | null; unit: string; scope: string; reason: string | null;
 }
 export interface Summary {
+  githubAccount?: { id: string; login: string; host: string } | null;
   period: string; local: LocalUsage; account: UsageSnapshot | null; display: DisplayMode;
   updatedAt: string; demo: boolean;
   retention: RetentionStatus & { days: number | null };

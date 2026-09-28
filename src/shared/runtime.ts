@@ -3,10 +3,10 @@ import { realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { readFile, writeFile, rename, mkdir, rm } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
-export const VERSION = '0.1.0-preview.5';
+export const VERSION = '0.1.0-preview.6';
 export const APP = 'pilotmeter';
-export function sourceContextId(label = ''): string {
-  let home = resolve(process.env.COPILOT_HOME || join(homedir(), '.copilot'));
+export function sourceContextId(label = '', explicitHome?: string): string {
+  let home = resolve(explicitHome || process.env.COPILOT_HOME || join(homedir(), '.copilot'));
   try { home = realpathSync.native(home); } catch { /* A not-yet-created home still has a canonical absolute path. */ }
   if (process.platform === 'win32') home = home.toLowerCase();
   return createHash('sha256').update(JSON.stringify([hostname(), home, label])).digest('hex');

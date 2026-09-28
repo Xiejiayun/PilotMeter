@@ -16,6 +16,8 @@ import { RefreshScheduler } from '../providers/scheduler.js';
 import { adaptQuota, type QuotaData, type QuotaEvidence } from '../providers/quota.js';
 import { seedDemo } from './demo.js';
 import { inspectReconciliation, reconciliationReport, verifyReconciliationEvidence } from '../domain/reconciliation-evidence.js';
+import { AccountsManager, AccountError, type AccountsOptions } from '../providers/accounts.js';
+import { CopilotClientError } from '../providers/copilot-client.js';
 
 class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 const defaultSettings: Settings = { monthlyBudget: null, unitVerification: null, account: null, retentionDays: null, demo: false };
@@ -28,7 +30,7 @@ async function body(req: IncomingMessage): Promise<unknown> {
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new HttpError(400, 'Invalid JSON.'); }
 }
 function json(res: ServerResponse, status: number, data: unknown): void { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(data)); }
-export async function serve(dir: string, demo = false): Promise<void> {
+export async function serve(dir: string, demo = false, options: { accounts?: Pick<AccountsOptions, 'clientFactory' | 'now'> } = {}): Promise<void> {
   await prepareDirectory(dir);
   const release = await acquireLock(dir);
   let repo: Repository;
@@ -52,7 +54,19 @@ export async function serve(dir: string, demo = false): Promise<void> {
   }
   const source = `unverified:${sourceContextId()}`;
   const collectorContexts = new Map<string, string>([[instance.collectorToken, source]]);
+  const shellQuote = (value: string) => `'${value.replaceAll("'", process.platform === 'win32' ? "''" : "'\\''")}'`;
+  const entry = fileURLToPath(new URL('../../bin/pilotmeter.js', import.meta.url));
+  const invocation = process.env.PILOTMETER_LAUNCHER_PATH ? shellQuote(process.env.PILOTMETER_LAUNCHER_PATH) : `${shellQuote(process.execPath)} ${shellQuote(entry)}`;
+  const accounts = new AccountsManager(dir, { ...options.accounts, runCommand: `${process.platform === 'win32' ? '& ' : ''}${invocation} --data-dir ${shellQuote(dir)} run --`, onChange: () => { void updateCache().catch(() => {}); } });
+  try { await accounts.initialize(); } catch (error) { repo.close(); await release(); throw error; }
+  const scope = () => { const active = accounts.active(); return active ? { sourceContextPrefix: `profile:${active.id}:` } : undefined; };
+  function scopedSettings(): Settings {
+    const active = accounts.active();
+    return active ? { ...settings, account: null, monthlyBudget: repo.getSetting<string>(`github-budget:${active.id}`) } : settings;
+  }
   function accountSnapshot(period: string): UsageSnapshot | null {
+    // Legacy billing bindings were never verified against a signed-in profile.
+    if (accounts.active()) return null;
     const entity = settings.account ? billingEntity(settings.account) : null;
     const quota = entity ? repo.getSnapshot(period, { entity, source: 'sdk-quota' }) : null;
     let account = entity ? (officialSnapshotEligible(quota, period, entity) ? quota : repo.getSnapshot(period, { entity, source: 'billing-rest' }) || quota) : null;
@@ -61,19 +75,22 @@ export async function serve(dir: string, demo = false): Promise<void> {
   }
   function reconciliation(period: string) {
     const account = accountSnapshot(period);
-    const basis = repo.reconciliationBasis(period, account?.providerUpdatedAt ?? null, settings.unitVerification);
+    const basis = repo.reconciliationBasis(period, account?.providerUpdatedAt ?? null, settings.unitVerification, scope());
     return { account, basis, report: reconciliationReport(basis, account, repo.getSetting(`reconciliation:${period}`)) };
   }
   function summary(period = month()): Summary {
-    const local = repo.summary(period, settings.unitVerification);
+    const local = repo.summary(period, settings.unitVerification, scope());
     const { account, report } = reconciliation(period);
     const retention = { days: settings.retentionDays, ...repo.getRetentionStatus() };
-    const display = buildDisplay(local, account, settings);
+    const display = buildDisplay(local, account, scopedSettings());
     if (retention.prunedSpans > 0 && display.mode !== 'official') {
       display.scope = '本机仍保留的会话记录';
       display.reason = `${display.reason ? `${display.reason}；` : ''}部分历史明细已清理，当前小计不代表清理前的完整用量`;
     }
-    return { period, local, account, display, retention, reconciliation: report, updatedAt: new Date().toISOString(), demo: settings.demo };
+    const active = accounts.active();
+    if (active && display.mode !== 'official') display.scope = `${active.login} · 通过 PilotMeter 启动的本机会话`;
+    return { period, local, account, display, retention, reconciliation: report, updatedAt: new Date().toISOString(), demo: settings.demo,
+      githubAccount: active ? { id: active.id, login: active.login, host: active.host } : null };
   }
   let cacheChain = Promise.resolve();
   function updateCache(): Promise<void> { const snapshot = summary(); cacheChain = cacheChain.catch(() => {}).then(() => atomicJson(join(dir, 'status.json'), snapshot)); return cacheChain; }
@@ -101,6 +118,9 @@ export async function serve(dir: string, demo = false): Promise<void> {
       if (req.headers.origin && req.headers.origin !== instance.url) throw new HttpError(403, 'Cross-origin access is forbidden.');
       const url = new URL(req.url || '/', instance.url);
       const route = url.pathname;
+      const requestProfile = accounts.active();
+      if ((route === '/api/summary' || route === '/api/sessions' || route.startsWith('/api/sessions/') || route === '/api/settings') && url.searchParams.has('accountId')
+        && url.searchParams.get('accountId') !== (accounts.active()?.id ?? '')) throw new HttpError(409, '当前账号已在另一窗口切换，请刷新后重试。');
       const management = equal(req.headers.authorization, `Bearer ${instance.managementToken}`);
       const presentedToken = (req.headers['x-pilotmeter-token'] as string | undefined) || req.headers.authorization?.replace(/^Bearer /, '');
       const collectorSource = typeof presentedToken === 'string' ? collectorContexts.get(presentedToken) : undefined;
@@ -127,10 +147,46 @@ export async function serve(dir: string, demo = false): Promise<void> {
       if (req.method === 'GET' && route === '/health') { json(res, 200, { app: APP, version: VERSION, instanceId: instance.instanceId }); return; }
       if (req.method === 'GET' && route === '/api/session') { json(res, 200, { csrfToken: csrf }); return; }
       if (route.startsWith('/api/') && req.method !== 'GET' && !management && !(req.headers.origin === instance.url && equal(req.headers['x-pilotmeter-csrf'] as string | undefined, csrf))) throw new HttpError(403, 'Mutation requires local authorization.');
+      if (route.startsWith('/api/auth/')) {
+        if (route === '/api/auth/accounts' && req.method === 'GET') { json(res, 200, accounts.overview(!settings.demo)); return; }
+        if (settings.demo) throw new HttpError(409, '演示模式不能登录真实账号，请打开普通仪表盘。');
+        if (route === '/api/auth/login' && req.method === 'POST') {
+          const input = await body(req) as { host?: unknown; accountId?: unknown };
+          if (!input || typeof input !== 'object' || Array.isArray(input) || input.host !== undefined && typeof input.host !== 'string' || input.accountId !== undefined && typeof input.accountId !== 'string') throw new HttpError(400, '登录参数无效。');
+          json(res, 200, await accounts.startLogin(input.host as string | undefined, input.accountId as string | undefined)); return;
+        }
+        const loginRoute = /^\/api\/auth\/login\/([a-f0-9-]+)(\/cancel)?$/.exec(route);
+        if (loginRoute && req.method === (loginRoute[2] ? 'POST' : 'GET')) {
+          json(res, 200, loginRoute[2] ? await accounts.cancelLogin(loginRoute[1]!) : await accounts.loginStatus(loginRoute[1]!)); return;
+        }
+        if (route === '/api/auth/select' && req.method === 'POST') {
+          const input = await body(req) as { accountId?: unknown };
+          if (!input || input.accountId !== null && typeof input.accountId !== 'string') throw new HttpError(400, '请选择有效账号。');
+          const result = await accounts.select(input.accountId as string | null); await updateCache(); json(res, 200, result); return;
+        }
+        const accountRoute = /^\/api\/auth\/accounts\/([a-f0-9-]+)$/.exec(route);
+        if (accountRoute && req.method === 'DELETE') { const result = await accounts.remove(accountRoute[1]!); await updateCache(); json(res, 200, result); return; }
+        if (route === '/api/auth/refresh' && req.method === 'POST') {
+          // Start the bounded request without tying browser response latency to upstream RPC latency.
+          void accounts.refresh().catch(() => {}); json(res, 200, accounts.overview()); return;
+        }
+        if (route === '/api/auth/run-context' && req.method === 'POST') {
+          if (!management) throw new HttpError(403, '采集启动必须通过本机 CLI。');
+          const input = await body(req) as { accountId?: unknown; sourceLabel?: unknown };
+          if (!input || typeof input !== 'object' || Array.isArray(input) || input.accountId !== undefined && typeof input.accountId !== 'string' || input.sourceLabel !== undefined && (typeof input.sourceLabel !== 'string' || input.sourceLabel.length > 200)) throw new HttpError(400, '采集账号参数无效。');
+          const selected = await accounts.runProfile(input.accountId as string | undefined);
+          if (!selected) { json(res, 200, { profile: null }); return; }
+          const context = `profile:${selected.profile.id}:${sourceContextId(input.sourceLabel as string | undefined, selected.home)}`;
+          if (collectorContexts.size >= 1024) throw new HttpError(429, '采集上下文过多，请重启服务。');
+          const token = randomBytes(32).toString('hex'); collectorContexts.set(token, context);
+          json(res, 200, { ...selected, collectorToken: token }); return;
+        }
+        throw new HttpError(404, '账号接口不存在。');
+      }
       if (req.method === 'GET' && route === '/api/summary') { json(res, 200, summary(month(url.searchParams.get('period') || undefined))); return; }
-      if (req.method === 'GET' && route === '/api/sessions') { json(res, 200, repo.sessions(month(url.searchParams.get('period') || undefined), { cursor: url.searchParams.get('cursor') || undefined, sort: url.searchParams.get('sort') || 'usage', limit: 50 })); return; }
-      if (req.method === 'GET' && route.startsWith('/api/sessions/')) { const result = repo.session(decodeURIComponent(route.slice(14)), settings.unitVerification); if (!result) throw new HttpError(404, 'Session not found.'); json(res, 200, result); return; }
-      if (req.method === 'GET' && route === '/api/settings') { json(res, 200, settings); return; }
+      if (req.method === 'GET' && route === '/api/sessions') { json(res, 200, { ...repo.sessions(month(url.searchParams.get('period') || undefined), { cursor: url.searchParams.get('cursor') || undefined, sort: url.searchParams.get('sort') || 'usage', limit: 50, scope: scope() }), accountId: accounts.active()?.id ?? null }); return; }
+      if (req.method === 'GET' && route.startsWith('/api/sessions/')) { const result = repo.session(decodeURIComponent(route.slice(14)), settings.unitVerification, scope()); if (!result) throw new HttpError(404, 'Session not found.'); json(res, 200, { ...result, accountId: accounts.active()?.id ?? null }); return; }
+      if (req.method === 'GET' && route === '/api/settings') { json(res, 200, scopedSettings()); return; }
       if (req.method === 'GET' && route === '/api/reconciliation') {
         json(res, 200, reconciliation(month(url.searchParams.get('period') || undefined)).report); return;
       }
@@ -213,11 +269,17 @@ export async function serve(dir: string, demo = false): Promise<void> {
           if (settings.demo) throw new HttpError(409, 'Retention is not configurable for synthetic demo data.');
           if (patch.retentionDays !== null && (typeof patch.retentionDays !== 'number' || !Number.isSafeInteger(patch.retentionDays) || patch.retentionDays < 1 || patch.retentionDays > 36500)) throw new HttpError(400, 'Retention days must be an integer from 1 to 36500, or null to disable future cleanup.');
         }
-        const nextSettings = { ...settings, ...patch } as Settings;
+        if (requestProfile?.id !== accounts.active()?.id) throw new HttpError(409, '当前账号已切换，请刷新后重试。');
+        const globalPatch = { ...patch };
+        if (requestProfile && 'monthlyBudget' in patch) {
+          repo.setSetting(`github-budget:${requestProfile.id}`, patch.monthlyBudget);
+          delete globalPatch.monthlyBudget;
+        }
+        const nextSettings = { ...settings, ...globalPatch } as Settings;
         if ('retentionDays' in patch) repo.saveSettingsWithRetention(nextSettings);
         else repo.setSetting('settings', nextSettings);
         settings = nextSettings;
-        await updateCache(); json(res, 200, settings); return;
+        await updateCache(); json(res, 200, scopedSettings()); return;
       }
       if (req.method === 'GET' && route === '/api/diagnostics') { json(res, 200, { items: repo.diagnostics(), collection: 'Traces only; metrics and logs are acknowledged without storage.' }); return; }
       if (req.method === 'POST' && route === '/api/import') {
@@ -248,19 +310,19 @@ export async function serve(dir: string, demo = false): Promise<void> {
       }
       throw new HttpError(404, 'Not found.');
     } catch (error) {
-      const status = error instanceof HttpError ? error.status : error instanceof RangeError || /period must|cursor|YYYY-MM/i.test((error as Error).message) ? 400 : 500;
+      const status = error instanceof HttpError || error instanceof AccountError ? error.status : error instanceof CopilotClientError ? error.code === 'HOST_INVALID' ? 400 : 503 : error instanceof RangeError || /period must|cursor|YYYY-MM/i.test((error as Error).message) ? 400 : 500;
       if (!res.headersSent) json(res, status, { error: status === 500 ? 'Local operation failed; refresh status to confirm any changes before retrying.' : (error as Error).message }); else res.end();
     }
   });
   server.requestTimeout = 10_000; server.headersTimeout = 10_000;
   async function shutdown(): Promise<void> {
     if (closing) return; closing = true;
-    clearInterval(refreshTimer);
+    clearInterval(refreshTimer); clearInterval(loginTimer);
     await new Promise<void>(resolve => {
       const deadline = setTimeout(() => server.closeAllConnections(), 5000); deadline.unref();
       server.close(() => { clearTimeout(deadline); resolve(); }); server.closeIdleConnections();
     });
-    await refreshPending?.catch(() => {}); await cacheChain.catch(() => {}); repo.close();
+    await accounts.close(); await refreshPending?.catch(() => {}); await cacheChain.catch(() => {}); repo.close();
     if ((await readJson<Instance>(join(dir, 'instance.json')))?.instanceId === instance.instanceId) await rm(join(dir, 'instance.json'), { force: true });
     await release();
   }
@@ -271,8 +333,13 @@ export async function serve(dir: string, demo = false): Promise<void> {
       try { repo.refreshPendingClassifications(); }
       catch { console.error('PilotMeter: pending classification maintenance failed; its transaction was not applied.'); }
       void updateCache().catch(() => {}); void trackedRefresh().catch(() => {});
+      if (!settings.demo) void accounts.refresh().catch(() => {});
     }
   }, 60_000); refreshTimer.unref();
+  const loginTimer = setInterval(() => {
+    const login = accounts.overview().login;
+    if (!closing && login && ['starting', 'pending', 'verifying'].includes(login.status)) void accounts.loginStatus(login.id).catch(() => {});
+  }, 1000); loginTimer.unref();
   try {
     repo.applyRetention(settings.retentionDays);
     repo.refreshPendingClassifications();
@@ -280,6 +347,7 @@ export async function serve(dir: string, demo = false): Promise<void> {
     instance.url = `http://127.0.0.1:${(server.address() as {port: number}).port}`;
     await updateCache(); await atomicJson(join(dir, 'instance.json'), instance);
     void trackedRefresh().catch(() => {});
+    if (!settings.demo) void accounts.refresh().catch(() => {});
     process.once('SIGINT', () => { void shutdown(); }); process.once('SIGTERM', () => { void shutdown(); });
-  } catch (error) { clearInterval(refreshTimer); server.close(); repo.close(); await release(); throw error; }
+  } catch (error) { clearInterval(refreshTimer); clearInterval(loginTimer); await accounts.close(); server.close(); repo.close(); await release(); throw error; }
 }

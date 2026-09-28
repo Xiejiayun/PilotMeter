@@ -10,6 +10,7 @@ import type { Classification, Diagnostic, ImportResult, LocalUsage, RetentionSta
 export interface ImportCursor {
   fileKey: string; fileIdentity: string; generation: number; offset: number; prefixHash: string;
 }
+export interface UsageScope { sourceContextPrefix: string }
 type StoredSpan = SpanRecord & { classification: Classification; conflicted: boolean; reason: string | null };
 interface Totals { nanoAiu: string | null; knownCalls: number; unknownCalls: number; pendingCalls: number }
 const SCHEMA_VERSION = 2;
@@ -19,6 +20,16 @@ const PENDING_TIMEOUT_PREFIX = 'pending-timeout:';
 const now = (): string => new Date().toISOString();
 const key = (span: Pick<SpanRecord, 'traceId' | 'spanId'>): string => `${span.traceId}/${span.spanId}`;
 const sessionKey = (source: string, session: string): string => createHash('sha256').update(`${source}\0${session}`).digest('hex');
+
+function scopePrefix(scope: UsageScope | undefined): string | null {
+  if (scope === undefined) return null;
+  if (scope === null || typeof scope !== 'object' || Array.isArray(scope)
+    || typeof scope.sourceContextPrefix !== 'string'
+    || !/^profile:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:$/.test(scope.sourceContextPrefix)) {
+    throw new Error('Invalid usage scope; expected profile:<lowercase UUID>: source context prefix');
+  }
+  return scope.sourceContextPrefix;
+}
 
 function periodBounds(period: string): [string, string] {
   if (!/^\d{4}-(?:0[1-9]|1[0-2])$/.test(period) || period < '1970-01' || period > '9998-12') throw new Error('Invalid UTC month; expected YYYY-MM');
@@ -390,13 +401,15 @@ export class Repository {
     return newlyTimedOut;
   }
 
-  #month(period: string): StoredSpan[] {
+  #month(period: string, scope?: UsageScope): StoredSpan[] {
     const [start, end] = periodBounds(period);
-    return this.#spans('WHERE e.end_at >= ? AND e.end_at < ?', [start, end]);
+    const prefix = scopePrefix(scope);
+    return prefix === null ? this.#spans('WHERE e.end_at >= ? AND e.end_at < ?', [start, end])
+      : this.#spans('WHERE e.end_at >= ? AND e.end_at < ? AND substr(e.source_context, 1, length(?)) = ?', [start, end, prefix, prefix]);
   }
 
-  summary(period: string, unitVerification: Settings['unitVerification'] = null): LocalUsage {
-    const spans = this.#month(period);
+  summary(period: string, unitVerification: Settings['unitVerification'] = null, scope?: UsageScope): LocalUsage {
+    const spans = this.#month(period, scope);
     const aggregate = totals(spans);
     const known = spans.filter(span => span.classification === 'root' && span.nanoAiu !== null);
     const unitVerified = Boolean(unitVerification && metadata(unitVerification.evidence, 4096)
@@ -410,8 +423,10 @@ export class Repository {
   }
 
   /** A finite local basis; neither its known subtotal nor its source IDs establish account identity or complete collection. */
-  reconciliationBasis(period: string, cutoff: string | null, unitVerification: Settings['unitVerification'] = null): ReconciliationBasis {
+  reconciliationBasis(period: string, cutoff: string | null, unitVerification: Settings['unitVerification'] = null, scope?: UsageScope): ReconciliationBasis {
     const [start, monthEnd] = periodBounds(period);
+    const prefix = scopePrefix(scope);
+    const matchesScope = (source: string): boolean => prefix === null || source.startsWith(prefix);
     const cutoffTime = timestamp(cutoff);
     const normalizedCutoff = cutoffTime === null ? null : new Date(cutoffTime).toISOString();
     const validCutoff = normalizedCutoff !== null && normalizedCutoff > start && normalizedCutoff <= monthEnd;
@@ -437,9 +452,9 @@ export class Repository {
       const quarantined = quarantineRows.map(row => JSON.parse(String(row.payload)) as SpanRecord);
       const sourceContexts = [...new Set([
         ...sourceRows.map(row => String(row.id)), ...spans.map(span => span.sourceContext), ...quarantined.map(span => span.sourceContext),
-      ])].sort();
+      ])].filter(matchesScope).sort();
       const within = (span: SpanRecord): boolean => Boolean(validCutoff && span.endTime && span.endTime >= start && span.endTime < normalizedCutoff!);
-      const scoped = spans.filter(within);
+      const scoped = spans.filter(span => matchesScope(span.sourceContext) && within(span));
       const aggregate = totals(scoped);
       const known = scoped.filter(span => span.classification === 'root' && span.nanoAiu !== null);
       const unitVerified = Boolean(unitVerification && metadata(unitVerification.evidence, 4096)
@@ -448,6 +463,7 @@ export class Repository {
       if (validCutoff && known.length === 0) blockers.add('no-known-root-usage');
       if (scoped.some(span => span.classification === 'root' && span.nanoAiu === null)) blockers.add('unknown-root-metering');
       if (!unitVerified) blockers.add('unit-unverified');
+      // Unlocated events, source-less rejection diagnostics and retention tombstones cannot establish scoped coverage.
       if (spans.some(span => validTime(span.endTime) === null) || quarantined.some(span => validTime(span.endTime) === null)) blockers.add('unlocated-events');
       if (rejectionRows.length) blockers.add('unlocated-rejections');
       if (retiredRows.some(row => String(row.cutoff_at) > start)) blockers.add('retention-overlap');
@@ -456,6 +472,7 @@ export class Repository {
       const involved = new Set(scoped.map(key));
       // A conflicting copy may move an originally out-of-window event into this interval.
       for (const span of quarantined) {
+        if (!matchesScope(span.sourceContext) && !matchesScope(byId.get(key(span))?.sourceContext ?? '')) continue;
         if (!within(span) && validTime(span.endTime) !== null) continue;
         blockers.add('conflicting-events');
         if (byId.has(key(span))) involved.add(key(span));
@@ -469,6 +486,7 @@ export class Repository {
           seen.add(parentKey);
           const parent = byId.get(parentKey);
           if (!parent) { blockers.add('unresolved-ancestry'); break; }
+          if (!matchesScope(parent.sourceContext)) blockers.add('unresolved-ancestry');
           involved.add(parentKey);
           current = parent;
         }
@@ -482,6 +500,7 @@ export class Repository {
       }
 
       const hash = createHash('sha256');
+      if (prefix !== null) hash.update(JSON.stringify(['usage-scope-v1', prefix]));
       // Include the entire ledger, including other months and ancestry. Ignore maintenance/observation timestamps and import cursors.
       for (const part of [
         ['basis-v1', period, normalizedCutoff, [...ROOT_CLI_VERSIONS].sort()],
@@ -503,13 +522,14 @@ export class Repository {
     };
   }
 
-  sessions(period: string, options: { cursor?: string; limit?: number; sort?: string } = {}): { items: SessionSummary[]; nextCursor: string | null } {
+  sessions(period: string, options: { cursor?: string; limit?: number; sort?: string; scope?: UsageScope } = {}): { items: SessionSummary[]; nextCursor: string | null } {
+    const prefix = scopePrefix(options.scope);
     const limit = options.limit ?? 50;
     const sort = options.sort ?? 'recent';
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new Error('Session page limit must be between 1 and 200');
     if (!['usage', 'recent', 'time'].includes(sort)) throw new Error('Unsupported session sort');
     const groups = new Map<string, StoredSpan[]>();
-    for (const span of this.#month(period)) {
+    for (const span of this.#month(period, options.scope)) {
       if (!span.sessionId) continue;
       const id = sessionKey(span.sourceContext, span.sessionId);
       const group = groups.get(id) ?? [];
@@ -527,21 +547,24 @@ export class Repository {
     });
     let offset = 0;
     if (options.cursor) {
-      let cursor: { period?: string; sort?: string; after?: string };
+      let cursor: { period?: string; sort?: string; after?: string; scope?: string };
       try { cursor = JSON.parse(Buffer.from(options.cursor, 'base64url').toString('utf8')); }
       catch { throw new Error('Invalid session cursor'); }
-      if (!cursor || cursor.period !== period || cursor.sort !== sort || typeof cursor.after !== 'string') throw new Error('Session cursor does not match this query');
+      if (!cursor || cursor.period !== period || cursor.sort !== sort || typeof cursor.after !== 'string'
+        || cursor.scope !== (prefix ?? undefined)) throw new Error('Session cursor does not match this query');
       const previous = all.findIndex(item => item.id === cursor.after);
       if (previous < 0) throw new Error('Session cursor is no longer available');
       offset = previous + 1;
     }
     const items = all.slice(offset, offset + limit);
-    return { items, nextCursor: offset + limit < all.length ? Buffer.from(JSON.stringify({ period, sort, after: items.at(-1)!.id })).toString('base64url') : null };
+    return { items, nextCursor: offset + limit < all.length ? Buffer.from(JSON.stringify({ period, sort, after: items.at(-1)!.id,
+      ...(prefix === null ? {} : { scope: prefix }) })).toString('base64url') : null };
   }
 
-  session(id: string, unitVerification: Settings['unitVerification'] = null): (SessionSummary & { lifetime: Totals; monthly: Record<string, Totals>; events: StoredSpan[]; modelBreakdown: { model: string; nanoAiu: string | null; calls: number; unknownCalls: number; unitVerified: boolean; source: string }[] }) | null {
+  session(id: string, unitVerification: Settings['unitVerification'] = null, scope?: UsageScope): (SessionSummary & { lifetime: Totals; monthly: Record<string, Totals>; events: StoredSpan[]; modelBreakdown: { model: string; nanoAiu: string | null; calls: number; unknownCalls: number; unitVerified: boolean; source: string }[] }) | null {
+    const prefix = scopePrefix(scope);
     const row = this.#db.prepare('SELECT source_context, session_id FROM sessions WHERE id = ?').get(id);
-    if (!row) return null;
+    if (!row || (prefix !== null && !String(row.source_context).startsWith(prefix))) return null;
     const spans = this.#spans('WHERE e.source_context = ? AND e.session_id = ?', [String(row.source_context), String(row.session_id)]);
     if (!spans.length) return null;
     const grouped = new Map<string, StoredSpan[]>();

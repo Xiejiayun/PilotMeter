@@ -62,6 +62,7 @@ async function mockApi(page, state) {
     if (state.offline) return route.abort('connectionrefused');
     let body;
     if (url.pathname === '/api/session') body = { csrfToken: 'test-csrf-capability' };
+    else if (url.pathname === '/api/auth/accounts') body = { accounts: [], activeAccountId: null, quota: null, login: null, refreshing: false, enabled: !state.summary.demo, runCommand: 'pilotmeter run --' };
     else if (url.pathname === '/api/summary') body = state.summary;
     else if (url.pathname === '/api/sessions') body = url.searchParams.has('cursor') ? state.nextPage : state.sessions;
     else if (url.pathname.startsWith('/api/sessions/')) {
@@ -100,7 +101,7 @@ test('empty collector never presents consumption as zero', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#primary-value')).toHaveText('—');
   await expect(page.getByText('还没有这个月的记录')).toBeVisible();
-  await expect(page.getByText('pilotmeter run --', { exact: true })).toBeVisible();
+  await expect(page.locator('#empty-state code')).toHaveText('pilotmeter run --');
   await expect(page.locator('#official-state')).toHaveText('未确认');
 });
 

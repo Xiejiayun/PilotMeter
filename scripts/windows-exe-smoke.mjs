@@ -15,7 +15,7 @@ let executable = join(workspace, 'build', 'windows', `PilotMeter-${manifest.vers
 for (let index = 2; index < process.argv.length; index++) {
   const argument = process.argv[index];
   if (argument === '--help') {
-    console.log('Usage: node scripts/windows-exe-smoke.mjs [--exe PATH]\nRequires Windows. Does not open a browser or launch the real Copilot CLI. Failed runs retain their isolated directory.');
+    console.log('Usage: node scripts/windows-exe-smoke.mjs [--exe PATH]\nRequires Windows. Runs the bundled Copilot version command only; never signs in, sends a model request, or opens a browser. Failed runs retain their isolated directory.');
     process.exit(0);
   }
   if (argument !== '--exe' || !process.argv[index + 1]) throw new Error('Expected --exe PATH, or --help.');
@@ -51,7 +51,7 @@ let cmdShimLimitation = { state: 'not-reached', scope: 'Existing cross-spawn / n
 
 const environment = { ...process.env };
 for (const key of Object.keys(environment)) {
-  if (/^(?:PATH|LOCALAPPDATA|APPDATA|USERPROFILE|HOME|HOMEDRIVE|HOMEPATH|TEMP|TMP|COPILOT_HOME|PILOTMETER_.*|GITHUB_TOKEN|GH_TOKEN|NODE_.*|NPM_.*|OTEL_.*|COPILOT_OTEL_.*|SSH_CONNECTION|WSL_DISTRO_NAME)$/i.test(key)) delete environment[key];
+  if (/^(?:PATH|LOCALAPPDATA|APPDATA|USERPROFILE|HOME|HOMEDRIVE|HOMEPATH|TEMP|TMP|COPILOT_.*|PILOTMETER_.*|GITHUB_.*|GH_.*|NODE_.*|NPM_.*|OTEL_.*|SSH_CONNECTION|WSL_DISTRO_NAME)$/i.test(key)) delete environment[key];
 }
 Object.assign(environment, {
   PATH: [system32, systemRoot, join(system32, 'WindowsPowerShell', 'v1.0')].join(';'),
@@ -240,7 +240,8 @@ try {
   const doctor = JSON.parse((await cli(null, ['doctor'])).stdout);
   assert.equal(doctor.node, 'v24.14.0');
   assert.equal(doctor.platform, 'win32');
-  assert.equal(doctor.copilot, 'not-found', 'The launcher must not require or install Copilot.');
+    assert.match(doctor.copilot, /^GitHub Copilot CLI 1\.0\.88\./,
+      `Doctor must resolve the bundled official Copilot without PATH installation: ${JSON.stringify(doctor.copilotProbe)}`);
   assert.equal(resolve(doctor.dataDirectory), resolve(defaultData));
   assert.equal(doctor.service, 'stopped');
   assert.equal(doctor.officialQuota, 'unverified');
@@ -254,7 +255,7 @@ try {
   const invalid = await cli(null, ['not-a-pilotmeter-command'], { expectedExit: 1 });
   assert.match(invalid.stderr, /unknown command/i);
   await assertNoService(defaultData);
-  record('Help/version/doctor, exact bundled Node version, data-directory precedence, and invalid-command exit code');
+  record('Help/version/doctor, bundled Node and official Copilot versions, data-directory precedence, and invalid-command exit code');
 
   const cacheRoot = join(defaultData, 'runtime');
   const cacheNames = (await readdir(cacheRoot, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => entry.name);
@@ -265,10 +266,21 @@ try {
   assertOwned(await realpath(cacheDirectory));
   const bundledNode = join(cacheDirectory, 'runtime', 'node.exe');
   const appRoot = join(cacheDirectory, 'app');
-  for (const path of [bundledNode, join(appRoot, 'bin', 'pilotmeter.js'), join(appRoot, 'dist', 'daemon', 'server.js'), join(appRoot, 'public', 'index.html')]) assert.ok((await stat(path)).isFile(), `Missing cached runtime file: ${path}`);
+  const bundledCopilot = join(appRoot, 'node_modules', '@github', 'copilot-win32-x64', 'copilot.exe');
+  for (const path of [bundledNode, bundledCopilot, join(appRoot, 'bin', 'pilotmeter.js'), join(appRoot, 'dist', 'daemon', 'server.js'), join(appRoot, 'dist', 'providers', 'copilot-client.js'), join(appRoot, 'public', 'index.html')]) assert.ok((await stat(path)).isFile(), `Missing cached runtime file: ${path}`);
   const cachedManifest = await readJson(join(appRoot, 'package.json'));
   assert.equal(cachedManifest.name, manifest.name);
   assert.equal(cachedManifest.version, manifest.version);
+  assert.equal(cachedManifest.dependencies['@github/copilot'], '1.0.88');
+  for (const dependency of ['copilot', 'copilot-win32-x64']) {
+    assert.equal((await readJson(join(appRoot, 'node_modules', '@github', dependency, 'package.json'))).version, '1.0.88');
+    assert.match(await readFile(join(appRoot, 'node_modules', '@github', dependency, 'LICENSE.md'), 'utf8'), /GitHub Copilot CLI License/);
+  }
+  const originalCopilotLicense = await readFile(join(appRoot, 'node_modules', '@github', 'copilot', 'LICENSE.md'));
+  assert.deepEqual(await readFile(join(cacheDirectory, 'licenses', 'GITHUB-COPILOT-LICENSE.md')), originalCopilotLicense);
+  const notices = await readFile(join(cacheDirectory, 'THIRD-PARTY-NOTICES.txt'), 'utf8');
+  assert.match(notices, /GitHub Copilot CLI 1\.0\.88/);
+  assert.match(notices, /MIT license does not apply to the bundled Copilot CLI/);
   for (const dependency of Object.keys(cachedManifest.dependencies ?? {})) await access(join(appRoot, 'node_modules', dependency, 'package.json'));
   for (const dependency of Object.keys(cachedManifest.devDependencies ?? {})) assert.equal(await exists(join(appRoot, 'node_modules', dependency)), false, `Development dependency in production payload: ${dependency}`);
   const runtime = JSON.parse((await run(bundledNode, ['-p', 'JSON.stringify({version:process.version,arch:process.arch})'])).stdout);
@@ -290,6 +302,14 @@ try {
   assert.notEqual(emptyStatus.display.mode, 'official');
   const activeDoctor = JSON.parse((await cli(dataDir, ['doctor'])).stdout);
   assert.equal(activeDoctor.service.url, instance.url);
+  const officialRunVersion = await cli(dataDir, ['run', '--', '--version']);
+  assert.match(officialRunVersion.stdout, /^GitHub Copilot CLI 1\.0\.88\./);
+  const emptyAccountsResponse = await http(instance.url, '/api/auth/accounts', { headers: { authorization: `Bearer ${instance.managementToken}` } });
+  assert.equal(emptyAccountsResponse.status, 200);
+  const emptyAccounts = await emptyAccountsResponse.json();
+  assert.deepEqual(emptyAccounts.accounts, []); assert.equal(emptyAccounts.activeAccountId, null); assert.equal(emptyAccounts.quota, null);
+  assert.deepEqual(await readdir(copilotHome), [], 'Version-only checks must not create real Copilot login state.');
+  record('Bundled Copilot run --version works without PATH; account API starts empty and no login is performed');
   record('Detached service startup, authenticated instance ownership, reuse, and unknown empty usage');
 
   const htmlResponse = await http(instance.url, '/');
@@ -564,9 +584,9 @@ internal static class NativeCopilot {
 }
 
 const report = { package: `${manifest.name}@${manifest.version}`, artifact: executable, artifactSha256: artifactHash,
-  artifactBytes: artifact.length, platform: process.platform, bundledNode: 'v24.14.0 / x64', checks,
+  artifactBytes: artifact.length, platform: process.platform, bundledNode: 'v24.14.0 / x64', bundledCopilot: '1.0.88 / win32-x64', checks,
   cmdShimLimitation,
-  browserAcceptance: 'No actual browser or Copilot session launched. Default arguments use the existing SSH remote path when that check is reached.',
+  browserAcceptance: 'Only the bundled Copilot version command ran; no login, model session, or browser was launched. Default arguments use the existing SSH remote path when that check is reached.',
   ...(failure ? { retainedDirectory: ownedRoot, failure: String(failure.stack || failure), uncertainChildPids: [...uncertainChildren] } : { result: 'passed' }) };
 if (failure) {
   if (failure instanceof AggregateError) report.causes = failure.errors.map(error => String(error.stack || error));

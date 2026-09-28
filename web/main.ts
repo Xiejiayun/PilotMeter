@@ -1,10 +1,12 @@
 import './style.css';
 import type { Diagnostic, SessionSummary, Settings, SpanRecord, Summary } from '../src/shared/types';
 import type { ReconciliationReport } from '../src/domain/reconciliation-evidence';
+import { initializeAccounts } from './accounts';
 
-type SessionPage = { items: SessionSummary[]; nextCursor: string | null };
+type SessionPage = { items: SessionSummary[]; nextCursor: string | null; accountId?: string | null };
 type Totals = Pick<SessionSummary, 'nanoAiu' | 'knownCalls' | 'unknownCalls' | 'pendingCalls'>;
 type SessionDetail = SessionSummary & {
+  accountId?: string | null;
   events: (SpanRecord & { reason?: string | null })[];
   lifetime: Totals;
   monthly: Record<string, Totals>;
@@ -67,6 +69,8 @@ let detailRefreshing = false;
 let lastRead: string | null = null;
 let serviceConnected = false;
 let reconciliationExpiry: number | undefined;
+let accountChanging = false;
+let dashboardAccountId: string | null | undefined;
 
 const periodInput = el<HTMLInputElement>('period');
 const budgetInput = el<HTMLInputElement>('budget');
@@ -92,6 +96,67 @@ async function mutate<T>(path: string, method: string, body?: object): Promise<T
   // Refresh this capability after a daemon restart; it lives only in page memory.
   csrfToken = (await api<{ csrfToken: string }>('/api/session')).csrfToken;
   return api<T>(path, { method, headers: { 'Content-Type': 'application/json', 'X-PilotMeter-CSRF': csrfToken }, body: JSON.stringify(body ?? {}) });
+}
+
+function scoped(path: string, accountId = dashboardAccountId): string {
+  return accountId === undefined ? path : `${path}${path.includes('?') ? '&' : '?'}accountId=${encodeURIComponent(accountId ?? '')}`;
+}
+
+const accounts = initializeAccounts({
+  api,
+  mutate,
+  changing: () => {
+    accountChanging = true;
+    requestGeneration++;
+    refreshing = false;
+    dashboardAccountId = undefined;
+    clearSnapshot('正在切换账号');
+  },
+  changed: async () => { accountChanging = false; await loadDashboard(); },
+});
+
+function clearSnapshot(label: string): void {
+  summary = null;
+  settings = null;
+  budgetDirty = false;
+  budgetInput.value = '';
+  text('budget-feedback', '');
+  lastRead = null;
+  sessionItems = [];
+  sessionSignature = '';
+  nextCursor = null;
+  visiblePages = 1;
+  detailRequest++;
+  selectedSession = null;
+  detail = null;
+  detailLastRead = null;
+  detailRefreshing = false;
+  if (dialog.open) dialog.close();
+  text('detail-body', '');
+  text('detail-status', '');
+  text('primary-value', '—');
+  text('primary-unit', '');
+  text('mode', label);
+  text('mode-badge', '读取中');
+  text('usage-detail', '等待当前范围快照');
+  text('scope', '等待当前范围数据');
+  text('session-total', '');
+  text('official-state', '等待当前范围数据');
+  text('unit-state', '等待数据');
+  text('updated-at', label);
+  text('mode-reason', '正在读取当前范围的数据。');
+  renderReconciliation(undefined);
+  renderRetention(undefined);
+  el('account-usage').hidden = true;
+  el('page-message').hidden = true;
+  text('period-caption', `${periodInput.value} · UTC`);
+  for (const id of ['session-count', 'known-count', 'unknown-count', 'pending-count']) text(id, '—');
+  el('progress-wrap').hidden = true;
+  el('empty-state').hidden = true;
+  el('load-more').hidden = true;
+  text('sessions', `${label}…`);
+  text('account-status', '等待当前设置');
+  text('diagnostics', '等待当前范围诊断');
 }
 
 function connection(connected: boolean, error?: string): void {
@@ -283,27 +348,43 @@ function renderDiagnostics(items: Diagnostic[]): void {
 }
 
 async function loadDashboard(): Promise<void> {
+  if (accountChanging) return;
   const generation = ++requestGeneration;
   const period = periodInput.value;
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) return;
   refreshing = true;
   try {
+    const accountOverview = await accounts.load();
+    if (generation !== requestGeneration) return;
+    if (accountOverview) {
+      if (dashboardAccountId !== undefined && dashboardAccountId !== accountOverview.activeAccountId) clearSnapshot('正在读取当前账号');
+      dashboardAccountId = accountOverview.activeAccountId;
+      const profile = accountOverview.accounts.find(item => item.id === accountOverview.activeAccountId);
+      text('local-account-scope', profile ? `当前账号：${profile.login} · 记录按启动采集时的账号归类。` : '全部本机记录 · 包括不同账号和未分账号的旧记录，不代表某一个账号的消费。');
+    }
     const results = await Promise.allSettled([
-      api<Summary>(`/api/summary?period=${encodeURIComponent(period)}`),
-      api<SessionPage>(`/api/sessions?period=${encodeURIComponent(period)}&sort=usage`),
-      api<Settings>('/api/settings'),
+      api<Summary>(scoped(`/api/summary?period=${encodeURIComponent(period)}`)),
+      api<SessionPage>(scoped(`/api/sessions?period=${encodeURIComponent(period)}&sort=usage`)),
+      api<Settings>(scoped('/api/settings')),
       api<{ items: Diagnostic[] }>('/api/diagnostics'),
     ]);
     if (generation !== requestGeneration) return;
     const [summaryResult, sessionsResult, settingsResult, diagnosticsResult] = results;
     if (summaryResult.status === 'rejected') throw summaryResult.reason;
     if (sessionsResult.status === 'rejected') throw sessionsResult.reason;
+    const scope = summaryResult.value as Summary & { githubAccount?: { id: string } | null };
+    if (accountOverview && (('githubAccount' in scope && (scope.githubAccount?.id ?? null) !== accountOverview.activeAccountId)
+      || ('accountId' in sessionsResult.value && sessionsResult.value.accountId !== accountOverview.activeAccountId))) {
+      clearSnapshot('账号已变化，正在重新读取');
+      return;
+    }
     summary = summaryResult.value;
     let refreshedItems = sessionsResult.value.items;
     let refreshedCursor = sessionsResult.value.nextCursor;
     for (let pageIndex = 1; pageIndex < visiblePages && refreshedCursor; pageIndex++) {
-      const page = await api<SessionPage>(`/api/sessions?period=${encodeURIComponent(period)}&sort=usage&cursor=${encodeURIComponent(refreshedCursor)}`);
+      const page = await api<SessionPage>(scoped(`/api/sessions?period=${encodeURIComponent(period)}&sort=usage&cursor=${encodeURIComponent(refreshedCursor)}`));
       if (generation !== requestGeneration) return;
+      if ('accountId' in page && page.accountId !== dashboardAccountId) throw new Error('账号已变化，请刷新当前账号记录。');
       const existing = new Set(refreshedItems.map(item => item.id));
       refreshedItems = [...refreshedItems, ...page.items.filter(item => !existing.has(item.id))];
       refreshedCursor = page.nextCursor;
@@ -358,8 +439,9 @@ async function refreshDetail(): Promise<void> {
   const generation = ++detailRequest;
   detailRefreshing = true;
   try {
-    const result = await api<SessionDetail>(`/api/sessions/${encodeURIComponent(sessionId)}?period=${encodeURIComponent(periodInput.value)}`);
+    const result = await api<SessionDetail>(scoped(`/api/sessions/${encodeURIComponent(sessionId)}?period=${encodeURIComponent(periodInput.value)}`));
     if (generation !== detailRequest || !dialog.open) return;
+    if ('accountId' in result && result.accountId !== dashboardAccountId) throw new Error('账号已变化，请重新打开当前账号的会话。');
     detail = result;
     detailLastRead = new Date().toISOString();
     detailStatus();
@@ -431,31 +513,7 @@ function renderDetail(): void {
 
 periodInput.addEventListener('change', () => {
   if (!periodInput.validity.valid || !periodInput.value) return;
-  summary = null;
-  lastRead = null;
-  sessionItems = [];
-  sessionSignature = '';
-  nextCursor = null;
-  visiblePages = 1;
-  text('primary-value', '—');
-  text('primary-unit', '');
-  text('mode', '正在读取所选月份');
-  text('mode-badge', '读取中');
-  text('usage-detail', '等待当前月份快照');
-  text('scope', '等待所选月份数据');
-  text('session-total', '');
-  text('official-state', '等待所选月份数据');
-  text('unit-state', '等待数据');
-  text('updated-at', '正在读取所选月份');
-  renderReconciliation(undefined);
-  el('account-usage').hidden = true;
-  text('period-caption', `${periodInput.value} · UTC`);
-  for (const id of ['session-count', 'known-count', 'unknown-count', 'pending-count']) text(id, '—');
-  el('progress-wrap').hidden = true;
-  el('empty-state').hidden = true;
-  el('load-more').hidden = true;
-  text('sessions', '正在读取所选月份…');
-  if (dialog.open) dialog.close();
+  clearSnapshot('正在读取所选月份');
   void loadDashboard();
 });
 
@@ -473,6 +531,8 @@ el<HTMLButtonElement>('refresh').addEventListener('click', async () => {
 budgetInput.addEventListener('input', () => { budgetDirty = true; });
 el<HTMLFormElement>('budget-form').addEventListener('submit', async event => {
   event.preventDefault();
+  if (accountChanging) return;
+  const accountId = dashboardAccountId;
   const input = budgetInput.value.trim();
   if (input && !/^\d{1,18}(?:\.\d{1,9})?$/.test(input)) {
     text('budget-feedback', '请输入非负数，整数最多 18 位，小数最多 9 位。');
@@ -485,11 +545,13 @@ el<HTMLFormElement>('budget-form').addEventListener('submit', async event => {
   el('budget-feedback').classList.remove('error');
   text('budget-feedback', '正在保存…');
   try {
-    await mutate('/api/settings', 'PATCH', { monthlyBudget: input || null });
+    await mutate(scoped('/api/settings', accountId), 'PATCH', { monthlyBudget: input || null });
+    if (accountChanging || dashboardAccountId !== accountId) return;
     budgetDirty = false;
     text('budget-feedback', input ? (BigInt(input.split('.')[0] ?? '0') === 0n && !/[1-9]/.test(input) ? '已保存 · 预算为 0，不计算百分比。' : '预算已保存。') : '已清除自定义预算。');
     await loadDashboard();
   } catch (error) {
+    if (accountChanging || dashboardAccountId !== accountId) return;
     text('budget-feedback', `保存失败：${errorMessage(error)}`);
     el('budget-feedback').classList.add('error');
   } finally { button.disabled = false; }
@@ -504,14 +566,15 @@ el<HTMLButtonElement>('load-more').addEventListener('click', async () => {
   refreshing = true;
   button.disabled = true;
   try {
-    const page = await api<SessionPage>(`/api/sessions?period=${encodeURIComponent(period)}&sort=usage&cursor=${encodeURIComponent(cursor)}`);
+    const page = await api<SessionPage>(scoped(`/api/sessions?period=${encodeURIComponent(period)}&sort=usage&cursor=${encodeURIComponent(cursor)}`));
     if (period !== periodInput.value || generation !== requestGeneration) return;
+    if ('accountId' in page && page.accountId !== dashboardAccountId) throw new Error('账号已变化，请刷新当前账号记录。');
     const existing = new Set(sessionItems.map(item => item.id));
     sessionItems = [...sessionItems, ...page.items.filter(item => !existing.has(item.id))];
     nextCursor = page.nextCursor;
     visiblePages++;
     renderSessions();
-  } catch (error) { el('page-message').hidden = false; text('page-message', `加载会话失败：${errorMessage(error)}`); }
+  } catch (error) { if (generation === requestGeneration) { el('page-message').hidden = false; text('page-message', `加载会话失败：${errorMessage(error)}`); } }
   finally { button.disabled = false; if (generation === requestGeneration) refreshing = false; }
 });
 

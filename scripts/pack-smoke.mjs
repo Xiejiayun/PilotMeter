@@ -6,8 +6,9 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { fileURLToPath } from 'node:url';
 import crossSpawn from 'cross-spawn';
 
-// This smoke test runs the published layout from a clean global prefix. It never
-// publishes, starts Copilot, opens a browser, or modifies a real user's settings.
+// This smoke test runs the published layout from a clean global prefix. Doctor
+// may query the bundled Copilot version; it never publishes, signs in, sends a
+// model request, opens a browser, or modifies a real user's settings.
 const workspace = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const manifest = JSON.parse(await readFile(join(workspace, 'package.json'), 'utf8'));
 const tempParent = resolve(tmpdir());
@@ -208,6 +209,7 @@ try {
   const doctor = JSON.parse((await cli(dataDir, ['doctor'])).stdout);
   assert.equal(doctor.platform, process.platform);
   assert.equal(doctor.node, process.version);
+  assert.match(doctor.copilot, /^GitHub Copilot CLI 1\.0\.88\./, 'The installed platform must include the pinned native Copilot runtime.');
   assert.equal(doctor.service, 'stopped');
   assert.equal(doctor.officialQuota, 'unverified');
   assert.equal(await exists(dataDir), false, 'Read-only help/doctor must not create runtime data');
