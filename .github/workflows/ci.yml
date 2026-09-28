@@ -60,6 +60,29 @@ jobs:
         run: npm run test:e2e
         timeout-minutes: 10
 
+      - name: Build Windows executable with bundled runtime
+        if: runner.os == 'Windows'
+        run: npm run build:windows
+        timeout-minutes: 10
+
+      - name: Verify EXE without Node or npm on PATH
+        if: runner.os == 'Windows'
+        run: npm run test:windows
+        timeout-minutes: 10
+
+      - name: Upload Windows executable and checksums
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pilotmeter-windows-x64
+          path: |
+            build/windows/PilotMeter-*-win-x64.exe
+            build/windows/PilotMeter-*-win-x64.exe.json
+            build/windows/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
       - name: Upload browser failure evidence
         if: failure() && (runner.os == 'Linux' || runner.os == 'Windows')
         uses: actions/upload-artifact@v4

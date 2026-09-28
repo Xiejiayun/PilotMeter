@@ -4,7 +4,7 @@
 
 ## 复现
 
-以下开发验收命令在项目源码仓库根目录运行。安装包附带兼容性记录、验证指南和本文，供安装后离线查阅。
+以下开发验收命令在项目源码仓库根目录运行。安装包附带兼容性记录、验证指南、Windows EXE 指南和本文，供安装后离线查阅。
 
 ```powershell
 npm ci
@@ -30,7 +30,7 @@ npm run test:pack
 | 演示 | `<data-dir>/demo` 独立账本，标记为虚构数据，真实账本仍为空 |
 | 隐私与清理 | 包内不含源码目录、测试、数据库、日志、环境文件；扫描 GitHub 凭据形态和私钥形态；停止本次实例后仅删除测试拥有的临时目录 |
 
-包内允许 `package.json`、`README.md`、`LICENSE`、`docs/compatibility.md`、`docs/validation-guide.md`、`docs/npm-package-contents.md`、CLI 入口、`dist` 编译产物和 `public` 静态资源。三份文档均列入打包与验收白名单，验收脚本要求它们实际存在。`dist` 中的类型声明与 source map 属于编译产物；不打包 `src` 或测试 fixtures。README 中的实施方案和分阶段进展使用仓库完整链接。
+包内允许 `package.json`、`README.md`、`LICENSE`、`docs/compatibility.md`、`docs/validation-guide.md`、`docs/npm-package-contents.md`、`docs/windows-exe.md`、CLI 入口、`dist` 编译产物和 `public` 静态资源。四份文档均列入打包与验收白名单，验收脚本要求它们实际存在。`dist` 中的类型声明与 source map 属于编译产物；不打包 `src` 或测试 fixtures。README 中的实施方案和分阶段进展使用仓库完整链接。
 
 ## Windows npm shim 的已知限制
 

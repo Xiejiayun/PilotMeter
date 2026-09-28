@@ -18,11 +18,13 @@
 
 ## 已完成的工程验证
 
+- `preview.5` 增加 Windows x64 单文件 EXE，内置 Node 24.14.0。Windows 11 实际 EXE 通过 13 组 PATH 无 Node/npm 的验收，覆盖并发解包、后台进程输出结束、持久化、原生参数/stdio/退出码、statusline 移动与恢复和缓存完整性；本机 TTY 的 `watch` 退出及无参数启动也已实测。干净 Windows 设备和真实 Copilot TUI 仍待验收，详见 [Windows EXE 指南](windows-exe.md)。
 - `preview.4` 的 122 项 Node 单元/集成测试通过，包括事件分类/去重、BigInt、UTC 月度、文件恢复、账户边界、鉴权、崩溃锁竞争、来源隔离、演示隔离、JSONC 恢复、明细清理回滚、限流恢复、对账及待分类超时与迟到证据恢复。
 - `preview.4` 的 22 项 Chromium 测试通过：21 项状态/布局测试以及实际 daemon 的页面、CSRF 编辑和会话详情联调；桌面和 320px 截图已检查。
 - Windows 的真实 npm 全局 `.tgz` 安装通过 7 组验收，生产安装无需 TypeScript/Vite/Playwright。真实 CLI shim、后台复用、静态资源、demo、停止和重启均通过。
 - 原生 Copilot 1.0.88 的实际版本和帮助命令通过；不发起模型请求。状态栏桥接脚本本身已实测中文、空格和特殊字符路径与 stdin；原生 TUI 的渲染/点击仍未验证。
 - Windows npm 11.9.0 的全局 prefix 不支持 `&`；这是生成的 npm shim 在应用启动前的问题。应用的数据目录参数可以包含 `&`。详见 [npm 安装包验收](npm-package-contents.md)。
+- `run` 使用 `.cmd` Copilot 入口时，连续反斜杠紧接双引号的复杂参数存在转义边界；直接调用生产 `cross-spawn` 已独立复现。原生 `.exe` 入口的完整特殊参数集通过，可用 `PILOTMETER_COPILOT_BIN` 指定。
 - GitHub Actions 固定 Node 24.14.0，三平台构建、测试与打包，Windows/Ubuntu 另运行 Chromium；最新结果见 [CI 记录](https://github.com/Xiejiayun/PilotMeter/actions/workflows/ci.yml)。CI 结果与真实终端点击验收分别记录。
 - 只读认证探针未发送模型请求、读取凭据或修改真实用户配置；`account.getQuota` 在未登录状态返回 `-32603`，不能作为额度数据。当前进程未配置 `PILOTMETER_GITHUB_TOKEN`。
 
