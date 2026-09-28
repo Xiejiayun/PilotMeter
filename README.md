@@ -88,6 +88,6 @@ npm run test:pack
 
 首次安装不会启动服务、下载 Copilot 或修改用户配置。测试和 demo 使用独立目录；真实状态栏修改只在显式 `init --statusline` 时进行，已有自定义状态栏需查看变更方案后用 `--replace`。
 
-[实施方案](docs/implementation-plan.md) · [分阶段进展](docs/progress.md) · [兼容性和剩余门槛](docs/compatibility.md) · [安装验收](docs/npm-package-contents.md)
+[实施方案](https://github.com/Xiejiayun/PilotMeter/blob/main/docs/implementation-plan.md) · [分阶段进展](https://github.com/Xiejiayun/PilotMeter/blob/main/docs/progress.md) · [兼容性和剩余门槛](docs/compatibility.md) · [验证指南](docs/validation-guide.md) · [安装验收](docs/npm-package-contents.md)
 
 MIT License。

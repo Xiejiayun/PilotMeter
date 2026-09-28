@@ -6,7 +6,7 @@
   "license": "MIT",
   "engines": { "node": ">=24.14.0" },
   "bin": { "pilotmeter": "bin/pilotmeter.js" },
-  "files": ["bin", "dist", "public", "README.md", "LICENSE", "docs/compatibility.md"],
+  "files": ["bin", "dist", "public", "README.md", "LICENSE", "docs/compatibility.md", "docs/validation-guide.md", "docs/npm-package-contents.md"],
   "scripts": {
     "build": "tsc && tsc --project web/tsconfig.json && vite build",
     "typecheck": "tsc --noEmit && tsc --project web/tsconfig.json",

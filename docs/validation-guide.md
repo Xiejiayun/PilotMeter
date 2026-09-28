@@ -19,7 +19,7 @@
 
 ## quota 证据导入
 
-普通安装不自动安装实验性 SDK。需要从固定版本的只读 quota 能力获得真实数据并与官方页面核对；`remainingPercentage` 单独出现不构成证据。`account import-quota file.json` 接受如下结构（占位符必须替换为真实值）：
+普通安装不自动安装实验性 SDK。需要从固定版本的只读 quota 能力获得真实数据并与官方页面核对；`remainingPercentage` 单独出现不构成证据。`raw` 是本工具的归一化输入，不能直接复制整个 SDK 响应；例如 SDK 的 `isUnlimitedEntitlement` 要显式映射为 `isUnlimited`，并核实选中的是已验证的月度池。`account import-quota file.json` 接受如下结构（占位符必须替换为真实值）：
 
 ```json
 {
