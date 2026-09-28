@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>PilotMeter · 桌面体验设计说明</title>
+  <style>
+    :root {
+      --canvas: #edf1ed;
+      --paper: #ffffff;
+      --ink: #192b29;
+      --muted: #65736e;
+      --green: #19745e;
+      --green-deep: #124d40;
+      --green-soft: #e8f2ec;
+      --amber: #956115;
+      --amber-soft: #fcf2df;
+      --line: #dce4de;
+      --danger: #ab4437;
+      --radius: 18px;
+      font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background: var(--canvas);
+      font-synthesis: none;
+      scroll-behavior: smooth;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-size: 14px; line-height: 1.75; }
+    a { color: var(--green); text-underline-offset: 4px; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    button { font: inherit; cursor: pointer; }
+    button:focus-visible, a:focus-visible, summary:focus-visible {
+      outline: 3px solid #6aa88f; outline-offset: 5px; border-radius: 4px;
+    }
+    ::selection { color: var(--ink); background: #cbe2d3; }
+    .skip { position: fixed; left: 16px; top: -80px; z-index: 9; padding: 10px 16px; background: var(--paper); }
+    .skip:focus { top: 12px; }
+    .shell { display: grid; grid-template-columns: 230px minmax(0, 1fr); max-width: 1510px; margin: auto; }
+    .sidebar { position: sticky; top: 0; height: 100vh; padding: 42px 25px 25px 35px; display: flex; flex-direction: column; }
+    .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); font-weight: 700; font-size: 19px; letter-spacing: -.5px; }
+    .brand-mark { width: 31px; height: 31px; flex: none; }
+    .side-caption { margin: 20px 0 17px; font-size: 10px; letter-spacing: 2px; color: var(--muted); font-weight: 700; }
+    .toc { display: grid; gap: 5px; }
+    .toc a { display: flex; gap: 11px; align-items: baseline; padding: 8px 11px; border-radius: 8px; text-decoration: none; color: #586760; font-size: 12px; }
+    .toc a span { font-size: 10px; color: #8a9890; font-variant-numeric: tabular-nums; }
+    .toc a:hover, .toc a[aria-current="location"] { color: var(--green); background: #dfe8df; }
+    .side-footer { margin-top: auto; padding-top: 28px; color: var(--muted); font-size: 11px; }
+    .side-footer b { color: var(--green); font-size: 10px; letter-spacing: 1.5px; }
+    main { min-width: 0; margin: 24px 28px 24px 0; background: var(--paper); border: 1px solid #dfe5dd; border-radius: 23px; box-shadow: 0 14px 40px #243e2f05; overflow: hidden; }
+    .topline { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 21px 45px; border-bottom: 1px solid var(--line); }
+    .eyebrow { color: var(--green); font-size: 10px; font-weight: 700; letter-spacing: 1.65px; text-transform: uppercase; }
+    .version { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }
+    .version::before { content: ""; height: 6px; width: 6px; border-radius: 50%; background: #b38b42; flex: none; }
+    .hero { padding: 50px 45px 36px; position: relative; background: linear-gradient(125deg, #fff 57%, #f3f7f1); }
+    .hero .edition { display: inline-flex; padding: 5px 9px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); font-size: 11px; }
+    h1 { margin: 20px 0 16px; font-size: clamp(30px, 3.6vw, 48px); line-height: 1.3; font-weight: 650; letter-spacing: -1.5px; }
+    h1 em { color: var(--green); font-style: normal; }
+    .hero-copy { max-width: 590px; margin: 0; color: var(--muted); font-size: 15px; line-height: 1.9; }
+    .hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 13px; margin-top: 26px; }
+    .action { display: inline-flex; align-items: center; justify-content: center; gap: 14px; padding: 10px 17px; border-radius: 7px; border: 1px solid var(--green); background: var(--green); color: white; font-size: 12px; font-weight: 600; text-decoration: none; }
+    .action.secondary { background: transparent; border-color: var(--line); color: #53635a; }
+    .hero-foot { display: flex; gap: 25px; flex-wrap: wrap; margin-top: 33px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; letter-spacing: .3px; }
+    .hero-foot b { color: var(--ink); margin-right: 8px; font-weight: 600; }
+    .document { padding: 0 45px 40px; }
+    section { scroll-margin-top: 24px; padding-top: 40px; }
+    section + section { margin-top: 36px; border-top: 1px solid var(--line); }
+    .section-label { margin-bottom: 10px; display: flex; align-items: center; gap: 10px; color: var(--green); font-size: 10px; font-weight: 700; letter-spacing: 1.8px; }
+    .section-label::after { content: ""; height: 1px; width: 30px; background: #b9d0be; }
+    h2 { margin: 0 0 13px; font-size: 25px; line-height: 1.45; font-weight: 650; letter-spacing: -.6px; }
+    h3 { margin: 0 0 9px; font-size: 15px; font-weight: 650; line-height: 1.5; }
+    p { margin: 0 0 15px; }
+    .lead { color: var(--muted); max-width: 720px; }
+    .note { padding: 15px 18px; border-radius: 9px; background: var(--green-soft); color: #3c6050; font-size: 12px; }
+    .note strong { color: var(--green-deep); }
+    .note.amber { background: var(--amber-soft); color: #7d5c26; }
+    .note.amber strong { color: #754c12; }
+    .note p:last-child, .card p:last-child { margin-bottom: 0; }
+    .principles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 24px 0; }
+    .principle { border-top: 2px solid #d5dfd4; padding: 17px 4px 0; }
+    .principle .num { color: #91a68f; font-size: 10px; font-weight: 700; letter-spacing: 1px; }
+    .principle h3 { margin: 8px 0 6px; font-size: 14px; }
+    .principle p { color: var(--muted); font-size: 12px; line-height: 1.85; }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .card { min-width: 0; padding: 22px; border: 1px solid var(--line); border-radius: 12px; background: white; }
+    .card p { color: var(--muted); font-size: 12px; }
+    .tiny-label { display: block; color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: 1.2px; margin-bottom: 8px; }
+    .architecture { margin: 25px 0 20px; padding: 25px; background: #f7f9f5; border: 1px solid var(--line); border-radius: 12px; }
+    .ia-source { display: flex; justify-content: space-between; align-items: center; gap: 15px; background: var(--ink); color: white; border-radius: 9px; padding: 18px 21px; }
+    .ia-source strong { font-size: 16px; font-weight: 600; }
+    .ia-source span { color: #bdcfc4; font-size: 11px; }
+    .ia-connector { height: 30px; display: grid; place-items: center; color: #8ba28e; font-size: 19px; }
+    .ia-pages { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; }
+    .ia-page { border: 1px solid var(--line); background: white; border-radius: 8px; padding: 17px 14px; }
+    .ia-page:first-child { border-color: #83b29a; box-shadow: inset 0 3px var(--green); }
+    .ia-page b { display: block; margin-bottom: 3px; font-size: 13px; }
+    .ia-page small { display: block; color: #8b998e; font-size: 9px; letter-spacing: .4px; }
+    .ia-page p { margin: 13px 0 0; color: var(--muted); font-size: 11px; }
+    .spec-list { margin: 15px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
+    .spec-list li + li { margin-top: 8px; }
+    .example-head { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin-bottom: 18px; }
+    .sample-badge { display: inline-flex; border-radius: 4px; padding: 3px 8px; background: var(--amber-soft); color: var(--amber); font-size: 10px; font-weight: 650; white-space: nowrap; }
+    .quota-example { padding: 26px; border-radius: 14px; background: var(--green-deep); color: white; margin: 23px 0 16px; }
+    .quota-example .tiny-label { color: #abcabb; }
+    .quota-example .sample-badge { background: #f2e5c7; color: #755219; }
+    .quota-title { font-size: 13px; color: #e0ece4; }
+    .quota-metrics { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 22px; margin: 22px 0 26px; }
+    .metric { min-width: 0; }
+    .metric + .metric { border-left: 1px solid #477166; padding-left: 24px; }
+    .metric-label { display: block; font-size: 11px; color: #bdcfc4; margin-bottom: 4px; }
+    .metric strong { display: block; font-size: clamp(25px, 3vw, 37px); font-variant-numeric: tabular-nums; line-height: 1.3; font-weight: 550; letter-spacing: -1px; }
+    .metric small { color: #c9ded0; font-size: 10px; }
+    .quota-bar { width: 100%; height: 8px; background: #386b5b; border-radius: 5px; overflow: hidden; }
+    .quota-bar span { display: block; width: 37.6%; height: 100%; border-radius: 5px; background: #d4ddb0; }
+    .quota-percent { display: flex; justify-content: space-between; gap: 12px; margin-top: 9px; color: #cfdfd5; font-size: 11px; }
+    .quota-percent b { color: white; font-weight: 600; }
+    .equation { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; justify-content: center; padding: 13px; margin-bottom: 18px; border-radius: 8px; background: #f4f6f2; color: var(--muted); font-size: 11px; }
+    .equation strong { color: var(--ink); font-variant-numeric: tabular-nums; font-weight: 600; }
+    .equation span { margin: 0 5px; color: #9aab9e; }
+    .table-wrap { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-top: 20px; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; line-height: 1.7; }
+    th { padding: 12px 16px; text-align: left; color: var(--muted); background: #f6f8f4; font-size: 10px; font-weight: 600; letter-spacing: .3px; }
+    td { padding: 17px 16px; vertical-align: top; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+    td p { margin: 0; font-size: 11px; color: var(--muted); }
+    td b { font-weight: 600; }
+    .pill { display: inline-flex; align-items: center; gap: 6px; border-radius: 5px; padding: 3px 7px; background: var(--green-soft); color: var(--green); font-size: 10px; font-weight: 600; white-space: nowrap; }
+    .pill::before { content: ""; width: 5px; height: 5px; flex: none; border-radius: 50%; background: currentColor; }
+    .pill.unknown { color: #8b651f; background: var(--amber-soft); }
+    .pill.disabled { color: #6a7370; background: #eef0ed; }
+    .pill.error { color: var(--danger); background: #faeeeb; }
+    .caption { margin-top: 10px; color: var(--muted); font-size: 10px; }
+    .unit-card { display: flex; flex-direction: column; gap: 15px; background: #fbfcfa; }
+    .unit-card .unit-value { font-size: 24px; font-weight: 600; line-height: 1.4; letter-spacing: -.5px; }
+    .unit-card .unit-value small { font-size: 11px; font-weight: 400; color: var(--muted); letter-spacing: 0; }
+    .unit-card .unit-value span { display: block; font-size: 12px; color: var(--muted); margin-top: 6px; font-weight: 400; letter-spacing: 0; }
+    .unit-card p { margin: 0; }
+    details { border-top: 1px solid var(--line); padding-top: 12px; margin-top: auto; }
+    summary { color: var(--green); font-size: 11px; cursor: pointer; }
+    .raw-fields { display: grid; grid-template-columns: 1fr auto; gap: 7px 12px; margin: 13px 0 9px; font-size: 11px; }
+    .raw-fields dt { overflow-wrap: anywhere; color: var(--muted); }
+    .raw-fields dd { margin: 0; font-variant-numeric: tabular-nums; }
+    .unit-card .raw-note { font-size: 10px; color: var(--amber); }
+    .state-key { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; font-size: 11px; color: var(--muted); margin-top: 17px; }
+    .widget-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 30px; margin-top: 25px; }
+    .widget-stage { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 28px 18px; min-height: 220px; border: 1px solid var(--line); border-radius: 12px; background: radial-gradient(circle at 16% 20%, #dee9db 0, transparent 47%), #edf1e9; }
+    .widget { width: min(240px, 100%); background: #fbfcf8; border: 1px solid #d1dccd; border-radius: 13px; padding: 13px 15px; box-shadow: 0 12px 25px #1e3a2517; }
+    .widget-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 9px; color: var(--muted); }
+    .widget-top b { font-size: 10px; color: var(--green); font-weight: 650; }
+    .widget-value { display: flex; align-items: baseline; gap: 5px; margin: 6px 0 7px; font-size: 10px; color: var(--muted); }
+    .widget-value strong { color: var(--ink); font-size: 24px; line-height: 1.15; letter-spacing: -.6px; font-weight: 650; }
+    .widget-value .widget-unit { margin-left: auto; font-size: 9px; color: var(--green); }
+    .widget-line { height: 4px; border-radius: 3px; background: #e1e9dd; overflow: hidden; }
+    .widget-line span { display: block; width: 37.6%; height: 100%; background: var(--green); }
+    .widget-stage .caption { margin: 17px 0 0; text-align: center; }
+    .widget-copy h3 { margin-top: 2px; }
+    .widget-copy p { color: var(--muted); font-size: 12px; }
+    .token-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 22px 0; }
+    .swatch { min-width: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    .swatch-color { height: 44px; }
+    .swatch-copy { padding: 10px 12px; font-size: 11px; }
+    .swatch-copy b { display: block; font-weight: 600; }
+    .swatch-copy small { font-size: 10px; color: var(--muted); }
+    .spec-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 15px; }
+    .spec-block { padding: 18px; background: #f6f8f4; border-radius: 9px; }
+    .spec-block h3 { font-size: 13px; }
+    .spec-block p { color: var(--muted); font-size: 11px; margin: 0; }
+    .spec-block p + p { margin-top: 10px; }
+    kbd { display: inline-block; min-width: 20px; padding: 0 5px; background: white; border: 1px solid #d8dfd7; border-bottom-width: 2px; border-radius: 4px; font-family: inherit; font-size: 10px; color: var(--ink); }
+    code { font-family: Consolas, monospace; font-size: .93em; overflow-wrap: anywhere; color: #446759; }
+    .boundary { margin-top: 22px; }
+    .boundary .card { background: #fbfcfa; }
+    .boundary h3 { font-size: 13px; }
+    .boundary ul { margin-top: 10px; }
+    .checklist { margin: 20px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; font-size: 12px; color: var(--muted); }
+    .checklist li { position: relative; padding-left: 22px; }
+    .checklist li::before { content: ""; position: absolute; left: 0; top: 7px; width: 10px; height: 10px; border: 1px solid #91ad97; border-radius: 2px; }
+    .closing { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 25px 45px; background: #f5f7f2; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+    .closing strong { color: var(--ink); font-weight: 600; }
+    @media (min-width: 1440px) { .document, .hero { padding-left: 60px; padding-right: 60px; } }
+    @media (max-width: 1100px) {
+      .shell { grid-template-columns: 190px minmax(0, 1fr); }
+      .sidebar { padding-left: 24px; padding-right: 16px; }
+      main { margin-right: 18px; }
+      .topline, .hero, .document, .closing { padding-left: 30px; padding-right: 30px; }
+      .principles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px 20px; }
+      .ia-pages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .spec-grid { grid-template-columns: 1fr; }
+      .spec-block { display: grid; grid-template-columns: 110px minmax(0, 1fr); column-gap: 18px; }
+      .spec-block h3 { grid-row: 1 / 3; }
+      .widget-grid { grid-template-columns: 1fr; gap: 20px; }
+      .widget-stage { min-height: 190px; }
+    }
+    @media (max-width: 760px) {
+      .shell { display: block; }
+      .sidebar { position: static; height: auto; padding: 22px 23px 17px; }
+      .side-caption, .side-footer { display: none; }
+      .brand { font-size: 18px; }
+      .toc { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; margin-top: 17px; }
+      .toc a { font-size: 10px; padding: 6px 4px; gap: 6px; }
+      .toc a span { display: none; }
+      main { margin: 0 14px 14px; border-radius: 16px; }
+      .topline, .hero, .document, .closing { padding-left: 25px; padding-right: 25px; }
+      .topline { flex-wrap: wrap; gap: 6px; padding-top: 16px; padding-bottom: 16px; }
+      .hero { padding-top: 33px; padding-bottom: 25px; }
+      .hero-copy { font-size: 13px; }
+      .hero-foot { gap: 8px 18px; margin-top: 25px; }
+      h1 { font-size: 34px; }
+      h2 { font-size: 23px; }
+      .quota-metrics { gap: 16px; }
+      .metric + .metric { padding-left: 16px; }
+      .metric strong { font-size: 28px; }
+      .grid-2 { grid-template-columns: 1fr; }
+      .card { padding: 20px; }
+      .token-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .closing { flex-wrap: wrap; gap: 12px; }
+      td, th { padding-left: 12px; padding-right: 12px; }
+    }
+    @media (max-width: 480px) {
+      body { font-size: 13px; }
+      .sidebar { padding: 20px 20px 14px; }
+      .toc { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .toc a { font-size: 9px; }
+      main { margin-left: 10px; margin-right: 10px; }
+      .topline, .hero, .document, .closing { padding-left: 19px; padding-right: 19px; }
+      .eyebrow { font-size: 9px; }
+      .version { font-size: 10px; }
+      h1 { font-size: 30px; letter-spacing: -1px; }
+      h2 { font-size: 21px; }
+      section { padding-top: 32px; }
+      section + section { margin-top: 30px; }
+      .principles { gap: 18px 15px; }
+      .architecture { padding: 14px; }
+      .ia-source { align-items: flex-start; flex-direction: column; gap: 3px; padding: 15px; }
+      .ia-page { padding: 14px 11px; }
+      .example-head { align-items: flex-start; flex-direction: column; gap: 8px; }
+      .quota-example { padding: 20px 17px; }
+      .quota-metrics { grid-template-columns: 1fr 1fr; gap: 20px 12px; }
+      .metric:first-child { grid-column: 1 / -1; padding-bottom: 14px; border-bottom: 1px solid #477166; }
+      .metric:nth-child(2) { border-left: 0; padding-left: 0; }
+      .metric strong { font-size: 27px; }
+      .metric:first-child strong { font-size: 38px; }
+      .quota-percent { font-size: 10px; }
+      .equation { justify-content: flex-start; font-size: 10px; }
+      .equation span { margin: 0 2px; }
+      .table-wrap.responsive-table thead { display: none; }
+      .table-wrap.responsive-table tr { display: block; padding: 12px 14px; }
+      .table-wrap.responsive-table tr + tr { border-top: 1px solid var(--line); }
+      .table-wrap.responsive-table td { display: block; padding: 4px 0; border-top: 0; }
+      .table-wrap.responsive-table td::before { content: attr(data-label); display: block; font-size: 9px; color: #8a968e; margin-bottom: 2px; }
+      .spec-block { display: block; }
+      .spec-block h3 { margin-bottom: 10px; }
+    }
+    @media (prefers-reduced-motion: reduce) { :root { scroll-behavior: auto; } }
+    @media print {
+      :root { background: white; }
+      body { font-size: 11px; }
+      .shell { display: block; }
+      .sidebar, .hero-actions, .skip { display: none; }
+      main { margin: 0; border: 0; box-shadow: none; overflow: visible; }
+      .topline, .hero, .document, .closing { padding-left: 0; padding-right: 0; }
+      .hero { padding-top: 24px; padding-bottom: 20px; }
+      section { padding-top: 25px; }
+      section + section { margin-top: 24px; }
+      h1 { font-size: 36px; }
+      h2 { font-size: 21px; }
+      .card, .quota-example, .architecture, .widget-stage, .token-grid, tr, .spec-block { break-inside: avoid; }
+      a { color: inherit; }
+      * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
+  </style>
+</head>
+<body>
+  <a href="#content" class="skip">跳到设计正文</a>
+  <div class="shell">
+    <aside class="sidebar" aria-label="设计报告导航">
+      <a class="brand" href="#top" aria-label="PilotMeter 设计报告首页">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="10" fill="#19745e"/><path d="M8 21V11h6.8c4 0 6.2 1.9 6.2 5s-2.2 5-6.2 5H12v-4h3c1.1 0 1.8-.4 1.8-1.2s-.7-1.2-1.8-1.2h-3V21Z" fill="#eff5e7"/><circle cx="24" cy="10" r="2" fill="#d4ddb0"/></svg>
+        PilotMeter
+      </a>
+      <div class="side-caption">DESKTOP DESIGN / V2</div>
+      <nav class="toc" aria-label="章节">
+        <a href="#intent"><span>01</span>设计目标</a>
+        <a href="#structure"><span>02</span>信息架构</a>
+        <a href="#quota"><span>03</span>额度展示</a>
+        <a href="#models"><span>04</span>可用模型</a>
+        <a href="#units"><span>05</span>单位与数值</a>
+        <a href="#states"><span>06</span>数据状态</a>
+        <a href="#widget"><span>07</span>桌面挂件</a>
+        <a href="#system"><span>08</span>视觉与交互</a>
+        <a href="#native"><span>09</span>原生实现映射</a>
+      </nav>
+      <div class="side-footer"><b>CLARITY AT A GLANCE</b><br>一眼看清额度，按需展开细节。<br><br>设计说明 · 2026.09.28<br>本页离线可用</div>
+    </aside>
+
+    <main id="top">
+      <header class="topline">
+        <span class="eyebrow">PilotMeter / Desktop Experience</span>
+        <span class="version">HTML 设计提案 · 原生实现尚未变更</span>
+      </header>
+      <div class="hero">
+        <span class="edition">桌面界面 V2 · 设计说明</span>
+        <h1>看清剩余额度，<br><em>知道现在能用什么。</em></h1>
+        <p class="hero-copy">让桌面挂件回答“还剩多少”，让主窗口解释“怎么用掉的、哪些模型可用”。以明确的数量、来源和状态，建立可核对的 Copilot 使用视图。</p>
+        <div class="hero-actions">
+          <a class="action" href="desktop-v2.html">打开交互设计稿 <span aria-hidden="true">↗</span></a>
+          <button class="action secondary" id="print-report" type="button">打印设计说明</button>
+        </div>
+        <div class="hero-foot"><span><b>平台</b>Windows 原生桌面</span><span><b>交付</b>视觉与交互提案</span><span><b>数据</b>全部为设计示例</span></div>
+      </div>
+
+      <div class="document" id="content">
+        <section id="intent" aria-labelledby="intent-title">
+          <div class="section-label">01 / DESIGN INTENT</div>
+          <h2 id="intent-title">先回答用户最关心的四件事</h2>
+          <p class="lead">现在的界面缺少稳定的信息层级。大比例数字不能替代实际余量，未知单位不能靠名称猜测，登录后的模型权限也需要独立呈现。</p>
+          <div class="principles">
+            <div class="principle"><span class="num">01 / 层级</span><h3>我正在看哪个账户？</h3><p>账户与数据范围固定在页首；主额度突出显示，其他类别收进详情。</p></div>
+            <div class="principle"><span class="num">02 / 数量</span><h3>总额多少，已经用了多少？</h3><p>总额、已用、剩余同时可见；比例承担比较作用，不占据整页。</p></div>
+            <div class="principle"><span class="num">03 / 单位</span><h3>这些数字到底代表什么？</h3><p>只使用返回数据中已确认的单位；不确定时保留原始数值入口。</p></div>
+            <div class="principle"><span class="num">04 / 模型</span><h3>这个账户能用哪些模型？</h3><p>将模型权限独立列出，解释可用、组织禁用和待验证的区别。</p></div>
+          </div>
+          <div class="note amber"><strong>阅读边界：</strong>这份报告定义拟实现的界面和数据规则。下方额度、模型、状态均为设计示例，不代表当前账户数据、真实订阅权限或已经完成的产品功能。</div>
+        </section>
+
+        <section id="structure" aria-labelledby="structure-title">
+          <div class="section-label">02 / INFORMATION ARCHITECTURE</div>
+          <h2 id="structure-title">轻量常驻，详情各有位置</h2>
+          <p class="lead">挂件保留一个高频摘要。打开主窗口后，使用稳定的四页导航，让额度、模型、消费记录与账户管理各自承担清晰的职责。</p>
+          <div class="architecture" aria-label="桌面挂件连接主窗口的总览、可用模型、用量记录和账户四个页面">
+            <div class="ia-source"><strong>桌面挂件</strong><span>当前账户 · 剩余额度 · 同步状态 → 点击打开总览</span></div>
+            <div class="ia-connector" aria-hidden="true">↓</div>
+            <div class="ia-pages">
+              <div class="ia-page"><b>总览</b><small>OVERVIEW</small><p>主额度池、总额与余量、同步时间、用量趋势入口。</p></div>
+              <div class="ia-page"><b>可用模型</b><small>AVAILABLE MODELS</small><p>权限状态、判断依据、最近验证时间与必要说明。</p></div>
+              <div class="ia-page"><b>用量记录</b><small>USAGE RECORDS</small><p>按时间与账户筛选，查看会话消耗及数据来源。</p></div>
+              <div class="ia-page"><b>账户</b><small>ACCOUNTS</small><p>连接、重新授权、当前账户切换和默认来源设置。</p></div>
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="card"><h3>总览的阅读顺序</h3><p>当前账户与范围 → 额度总量 → 已用与剩余 → 数据更新时间 → 次要用量分类。把排查细节放在展开区，避免占据首屏。</p></div>
+            <div class="card"><h3>切换账户后的行为</h3><p>额度、模型和记录一起切换账户上下文。加载时显示目标账户名称；没有对应数据时呈现待同步，避免短暂混入上一账户数据。</p></div>
+          </div>
+        </section>
+
+        <section id="quota" aria-labelledby="quota-title">
+          <div class="section-label">03 / SHARED QUOTA</div>
+          <h2 id="quota-title">一个额度池，三个明确的数量</h2>
+          <p class="lead">总览以当前账户选定的额度池为主。模型可能共享这一额度池，但模型列表不虚构各自的余额；计费倍率与资格只有在来源确认后才展示。</p>
+          <div class="quota-example" aria-label="设计示例：总额 20000 AI Credits，已用 7520，剩余 12480，已用百分之 37.6">
+            <div class="example-head"><div><span class="tiny-label">CURRENT ACCOUNT / SHARED POOL</span><span class="quota-title">当前账户 · 已确认单位的共享额度池</span></div><span class="sample-badge">设计示例</span></div>
+            <div class="quota-metrics">
+              <div class="metric"><span class="metric-label">剩余额度</span><strong>12,480</strong><small>AI Credits</small></div>
+              <div class="metric"><span class="metric-label">已用</span><strong>7,520</strong><small>AI Credits</small></div>
+              <div class="metric"><span class="metric-label">总额</span><strong>20,000</strong><small>AI Credits</small></div>
+            </div>
+            <div class="quota-bar" aria-hidden="true"><span></span></div>
+            <div class="quota-percent"><span>已用 <b>37.6%</b></span><span>剩余 <b>62.4%</b></span></div>
+          </div>
+          <div class="equation"><strong>20,000</strong> 总额 <span>−</span> <strong>7,520</strong> 已用 <span>=</span> <strong>12,480</strong> 剩余 <span>·</span> 同一范围、同一单位、同一额度池</div>
+          <div class="note"><strong>组织付费的范围标记：</strong>组织或企业付费，不代表当前账户的返回值就是组织总池。账户获配额度与组织／企业月度账单需分别标注主体、周期和来源；只有范围确认后，才能展示组织总额度与对账结果。</div>
+          <ul class="spec-list">
+            <li>只有单位明确、固定总额有效且属于同一额度类别时，才计算绝对剩余量；采用精确十进制运算，不由百分比反推数量。</li>
+            <li>超额时保留真实已用量，剩余显示为 0，并单独注明超出值；无限额显示“无固定上限”，不绘制误导性的百分比。</li>
+            <li>多种额度类别并存时显示明确的当前类别；没有可靠主类别时让用户选择，不把不同单位合并成一个总数。</li>
+            <li>组织／企业账单的月度预算与账户额度属于不同的数据视图；未完成真实对账前，明确标记“未对账”。</li>
+          </ul>
+        </section>
+
+        <section id="models" aria-labelledby="models-title">
+          <div class="section-label">04 / MODEL ENTITLEMENTS</div>
+          <h2 id="models-title">模型可见，权限有依据</h2>
+          <p class="lead">登录成功只说明身份验证完成。模型是否可用，必须由实际返回的模型授权或组织策略信息支持；缺少足够证据时，保留“待验证”。</p>
+          <div class="note amber"><strong>模型名称仅用于排版示意。</strong>Claude Sonnet 4.5、GPT-5 和 Gemini 2.5 Pro 不构成真实权益清单，也不代表准确的当前模型目录。下表状态同样为设计示例。</div>
+          <div class="table-wrap responsive-table">
+            <table aria-label="模型权限展示的设计示例">
+              <colgroup><col style="width:28%"><col style="width:21%"><col style="width:51%"></colgroup>
+              <thead><tr><th scope="col">示例模型</th><th scope="col">示例状态</th><th scope="col">实际产品的判断规则</th></tr></thead>
+              <tbody>
+                <tr><td data-label="示例模型"><b>Claude Sonnet 4.5</b><p>名称仅作设计示例</p></td><td data-label="示例状态"><span class="pill">可用</span></td><td data-label="判断规则">实际返回的授权或策略明确允许当前账户使用该模型；同时记录来源与验证时间。</td></tr>
+                <tr><td data-label="示例模型"><b>GPT-5</b><p>名称仅作设计示例</p></td><td data-label="示例状态"><span class="pill disabled">组织禁用</span></td><td data-label="判断规则">实际策略明确禁止；显示可理解的原因。不能把接口失败或目录缺失解释为组织禁用。</td></tr>
+                <tr><td data-label="示例模型"><b>Gemini 2.5 Pro</b><p>名称仅作设计示例</p></td><td data-label="示例状态"><span class="pill unknown">待验证</span></td><td data-label="判断规则">尚未查询、返回信息不足或验证失败；提供重新同步入口，不推断成可用。</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="caption">模型页可展示当前账户共享额度入口；不为每个模型添加虚构的独立额度卡片。模型行的使用数量标为“本月本机已用”，只统计本机记录，不能冒充该模型在全部设备的官方用量。样例中的本机明细 3,800 + 2,040 + 1,000 = 6,840 Credits，与账户已用 7,520 Credits 分别展示。同步失败时，曾经可用的缓存权限显示“上次可用”，并注明时间与过期提示。</p>
+        </section>
+
+        <section id="units" aria-labelledby="units-title">
+          <div class="section-label">05 / NUMERIC INTEGRITY</div>
+          <h2 id="units-title">数值透明，单位不猜</h2>
+          <p class="lead">数量与单位一起构成事实。确认单位时提供精确数量；未确认时保留服务端给出的有效比例，并允许查看经过筛选的原始数值字段。</p>
+          <div class="grid-2" style="margin-top:22px">
+            <div class="card unit-card">
+              <div><span class="tiny-label">A / 单位已确认</span><span class="pill">AI Credits · 示例</span></div>
+              <div class="unit-value">12,480 <small>AI Credits 剩余</small><span>已用 7,520 / 总额 20,000 AI Credits</span></div>
+              <p>数值旁始终可见单位。精确的总额、已用与剩余优先，比例提供辅助比较；长数字采用分组显示。</p>
+            </div>
+            <div class="card unit-card">
+              <div><span class="tiny-label">B / 单位未确认</span><span class="pill unknown">单位待确认 · 示例</span></div>
+              <div class="unit-value">已用 37.6%<span>剩余 62.4% · 比例来自返回数据</span></div>
+              <p>不标注 AI Credits 或“次”，不把原始数字当成已确认额度。以下展开区仅用于设计演示。</p>
+              <details>
+                <summary>查看原始数值字段（示例）</summary>
+                <dl class="raw-fields"><dt>entitlementRequests</dt><dd>20,000</dd><dt>usedRequests</dt><dd>7,520</dd><dt>remainingPercentage</dt><dd>62.4</dd></dl>
+                <p class="raw-note">字段名来自数据协议，不能据此推断单位。仅展示允许公开的数值字段；不展示完整 API 响应、令牌、账户标识或其他隐私数据。</p>
+              </details>
+            </div>
+          </div>
+          <ul class="spec-list">
+            <li>如果返回比例缺失或无效，显示“比例未知”；不在单位与数据语义不明时静默推算。</li>
+            <li>不同账户可能返回不同单位；切换时同步切换单位与来源。数量与比例不一致时保留来源事实并提示差异。</li>
+            <li>有效的未来重置时间才显示倒计时；时间缺失或已经过期时，展示“重置时间待确认”。</li>
+          </ul>
+        </section>
+
+        <section id="states" aria-labelledby="states-title">
+          <div class="section-label">06 / DATA STATES</div>
+          <h2 id="states-title">没有数据，也要说清发生了什么</h2>
+          <p class="lead">把同步状态与额度事实分开。缺失不等于零，失败不清空已知数据，旧快照也不能伪装成实时信息。</p>
+          <div class="table-wrap responsive-table">
+            <table aria-label="数据状态与界面行为">
+              <colgroup><col style="width:22%"><col style="width:41%"><col style="width:37%"></colgroup>
+              <thead><tr><th scope="col">状态</th><th scope="col">主窗口展示</th><th scope="col">用户下一步</th></tr></thead>
+              <tbody>
+                <tr><td data-label="状态"><span class="pill disabled">暂无数据</span></td><td data-label="主窗口展示">数值显示“—”，解释尚未连接、尚未同步或来源未返回此字段。</td><td data-label="用户下一步">连接账户或立即同步；不能显示“剩余 0”。</td></tr>
+                <tr><td data-label="状态"><span class="pill">同步中</span></td><td data-label="主窗口展示">保留同一账户已有快照与更新时间；首次同步显示轻量占位。</td><td data-label="用户下一步">允许继续阅读；禁用重复同步请求，不阻塞整页。</td></tr>
+                <tr><td data-label="状态"><span class="pill error">同步失败</span></td><td data-label="主窗口展示">显示失败原因和最后成功时间；旧值标为“上次成功数据”。</td><td data-label="用户下一步">重试；身份过期时重新授权，服务离线时检查服务。</td></tr>
+                <tr><td data-label="状态"><span class="pill unknown">旧快照</span></td><td data-label="主窗口展示">显示“数据可能已过期”及快照时间。拟沿用超过 5 分钟的旧快照判定。</td><td data-label="用户下一步">主动同步；确认来源恢复后才移除过期标记。</td></tr>
+                <tr><td data-label="状态"><span class="pill disabled">范围待确认</span></td><td data-label="主窗口展示">区分账户额度与组织账单；缺少范围或周期时不作跨来源比较。</td><td data-label="用户下一步">补充可验证的授权或数据来源，并完成官方页面核对。</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="state-key"><span>状态信息同时使用</span><b>文字</b><span>＋</span><b>颜色</b><span>＋</span><b>时间</b><span>，避免仅靠颜色理解。</span></div>
+        </section>
+
+        <section id="widget" aria-labelledby="widget-title">
+          <div class="section-label">07 / DESKTOP WIDGET</div>
+          <h2 id="widget-title">桌面只留一个有用的摘要</h2>
+          <p class="lead">挂件服务于短暂扫视：正在使用的账户、剩余量和数据状态。点击进入主窗口后，再获得额度构成、模型与使用记录。</p>
+          <div class="widget-grid">
+            <div class="widget-stage">
+              <div class="widget" aria-label="挂件设计示例：剩余 12480 AI Credits，已用百分之 37.6">
+                <div class="widget-top"><b>PilotMeter</b><span>示例账户 · 设计示例</span></div>
+                <div class="widget-value"><strong>12,480</strong><span>剩余</span><span class="widget-unit">AI Credits</span></div>
+                <div class="widget-line" aria-hidden="true"><span></span></div>
+              </div>
+              <p class="caption">约 310 × 100 逻辑像素 · 尺寸提案<br>示例内容，不代表当前挂件实装。</p>
+            </div>
+            <div class="widget-copy">
+              <h3>数量明确时显示余量，未知时显示比例</h3>
+              <p>已确认单位的固定额度可显示“12,480 AI Credits 剩余”。单位待确认时切换为“剩余 62.4%”，并带上“单位待确认”；没有可信比例时显示“额度待同步”。</p>
+              <h3>异常摘要保留可操作入口</h3>
+              <p>等待：“待同步 · 点击查看”；失败：“同步失败 · 点击查看”；过期：“旧快照 · 待同步”；服务中断：“服务离线 · 点击查看”。已有数据也必须带上对应状态。</p>
+              <p>主点击打开总览；拖动区域与点击行为分开处理。右键菜单提供账户切换、同步与退出挂件。退出挂件和停止后台服务保持不同的明确操作。</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="system" aria-labelledby="system-title">
+          <div class="section-label">08 / DESIGN SYSTEM</div>
+          <h2 id="system-title">安静的底色，清楚的操作</h2>
+          <p class="lead">浅灰绿画布托起白色内容区，深墨色承载信息，翡翠绿表达主操作与有效状态。暖琥珀仅用于待确认和提示。</p>
+          <div class="token-grid" aria-label="设计色彩">
+            <div class="swatch"><div class="swatch-color" style="background:#edf1ed"></div><div class="swatch-copy"><b>画布</b><small>#EDF1ED</small></div></div>
+            <div class="swatch"><div class="swatch-color" style="background:#192b29"></div><div class="swatch-copy"><b>主要文字</b><small>#192B29</small></div></div>
+            <div class="swatch"><div class="swatch-color" style="background:#19745e"></div><div class="swatch-copy"><b>强调与操作</b><small>#19745E</small></div></div>
+            <div class="swatch"><div class="swatch-color" style="background:#fcf2df"></div><div class="swatch-copy"><b>待确认提示</b><small>#FCF2DF / #956115</small></div></div>
+          </div>
+          <div class="spec-grid">
+            <div class="spec-block"><h3>尺寸与排版</h3><p>主窗口建议约 1280 × 850，最小 880 × 640；主导航约 190 宽，挂件约 310 × 100，均为逻辑像素。圆角 8 / 12 / 16，间距采用 4 / 8 / 12 / 16 / 24 / 32。</p><p>字体采用 Segoe UI Variable → Segoe UI → Microsoft YaHei。正文建议 13–14 px，次要说明 11–12 px，关键数量 40–48 px；数字等宽对齐。</p></div>
+            <div class="spec-block"><h3>键盘与焦点</h3><p><kbd>Tab</kbd> 按视觉顺序移动焦点；<kbd>Enter</kbd> 激活按钮，<kbd>Space</kbd> 切换选项和展开区；导航支持方向键。弹窗打开后进入焦点，关闭后回到触发点。</p><p>焦点始终可见。<kbd>Esc</kbd> 关闭当前弹层，不误触停止服务。主窗口关闭后保留挂件，与现有生命周期一致。</p></div>
+            <div class="spec-block"><h3>布局与缩放</h3><p>原生窗口使用弹性列宽、自动换行与必要的纵向滚动；不得截断额度单位。验证 100% / 125% / 150% / 200% DPI 和跨屏切换。</p><p>HTML 设计稿在窄屏折叠导航并堆叠内容，便于审阅。原生桌面仍遵守最小窗口尺寸；长模型名、错误说明和大数值都应换行。</p></div>
+          </div>
+        </section>
+
+        <section id="native" aria-labelledby="native-title">
+          <div class="section-label">09 / NATIVE IMPLEMENTATION</div>
+          <h2 id="native-title">把这份提案落到原生控件</h2>
+          <p class="lead">HTML 是离线审阅载体。后续界面沿用 Windows WinForms / .NET Framework 4.8，通过原生布局、绘制和辅助功能实现设计。</p>
+          <div class="table-wrap responsive-table">
+            <table aria-label="设计元素与原生实现映射">
+              <colgroup><col style="width:25%"><col style="width:34%"><col style="width:41%"></colgroup>
+              <thead><tr><th scope="col">设计元素</th><th scope="col">建议控件与层次</th><th scope="col">实现要求</th></tr></thead>
+              <tbody>
+                <tr><td data-label="设计元素"><b>主窗口与导航</b></td><td data-label="建议实现"><code>Form</code> + <code>TableLayoutPanel</code> + 导航按钮</td><td data-label="实现要求">独立页面容器；切页保留账户上下文。布局、键盘与辅助功能优先于纯装饰。</td></tr>
+                <tr><td data-label="设计元素"><b>额度与比例条</b></td><td data-label="建议实现"><code>Label</code> + 轻量自绘进度控件</td><td data-label="实现要求">数量与单位使用明确 DTO；文字可被读屏读取；绘制比例限制在有效范围内。</td></tr>
+                <tr><td data-label="设计元素"><b>模型与用量记录</b></td><td data-label="建议实现"><code>DataGridView</code> 或原生列表</td><td data-label="实现要求">模型权限与额度数据分别映射；支持键盘选择、排序、长文本和空状态。</td></tr>
+                <tr><td data-label="设计元素"><b>原始数值展开区</b></td><td data-label="建议实现">展开按钮 + 只读字段容器</td><td data-label="实现要求">只从 DTO 白名单取值；允许复制数值，不直接渲染完整服务端响应。</td></tr>
+                <tr><td data-label="设计元素"><b>挂件与同步状态</b></td><td data-label="建议实现">现有挂件窗体 + 共享状态投影</td><td data-label="实现要求">使用与总览相同的账户、单位和过期规则；工作线程更新数据，UI 线程安全刷新。</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="grid-2 boundary">
+            <div class="card"><span class="tiny-label">已有基础 / 非本次新增</span><h3>当前实现可沿用的能力</h3><ul class="spec-list"><li>WinForms 原生主窗口、桌面挂件和本地服务。</li><li>账户连接、总额／已用／剩余比例读取及部分同步状态展示。</li><li>已确认单位与未知单位的区分，以及过期数据判定。</li></ul><p class="caption">当前单位缺失时会隐藏已有数量，不代表接口没有返回数字；历史观测到的模型也不等于当前可用模型目录。</p></div>
+            <div class="card"><span class="tiny-label">本报告提案 / 后续实现</span><h3>仍需开发与验证的内容</h3><ul class="spec-list"><li>四页信息架构、明确的绝对剩余量和新版布局。</li><li>基于真实权限来源的模型清单与组织策略状态。</li><li>单位未知时的安全数值展开区、记录页和真实账单对账。</li></ul><p class="caption">真实模型资格、组织总额度与可用数据源需要单独验证。</p></div>
+          </div>
+          <div class="note amber" style="margin-top:18px"><strong>验证边界：</strong>本 HTML 的可读性与交互检查，不能代替原生窗口的点击、拖动、托盘和 DPI 验收，也不能代替真实账户、官方页面及组织／企业账单对账。</div>
+          <ul class="checklist" aria-label="后续实现验收清单，以下项目尚待完成">
+            <li>用固定示例验证总额、已用、剩余和百分比关系；覆盖未知单位、无限额和超额。</li>
+            <li>模拟缺失、同步、失败与过期状态，确认账户切换不会展示错误主体的数据。</li>
+            <li>核对模型授权与策略来源，确认登录成功不会把模型自动标为“可用”。</li>
+            <li>实际操作原生窗口、挂件和托盘，验证键盘、长文本、多屏与不同 DPI。</li>
+            <li>使用组织或企业付费账户完成官方来源核对；真实账户资料不进入代码、测试夹具或设计文档。</li>
+          </ul>
+        </section>
+      </div>
+      <footer class="closing"><span><strong>PilotMeter</strong> · 桌面体验 V2 设计说明<br>额度、模型名称与状态均为设计示例。</span><a href="desktop-v2.html">查看交互设计稿 <span aria-hidden="true">↗</span></a></footer>
+    </main>
+  </div>
+  <script>
+    document.getElementById('print-report').addEventListener('click', function () { window.print(); });
+    const links = Array.from(document.querySelectorAll('.toc a'));
+    function highlightSection(id) {
+      links.forEach(function (link) {
+        if (link.getAttribute('href') === '#' + id) link.setAttribute('aria-current', 'location');
+        else link.removeAttribute('aria-current');
+      });
+    }
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver(function (entries) {
+        const visible = entries.filter(function (entry) { return entry.isIntersecting; });
+        if (visible.length) highlightSection(visible[0].target.id);
+      }, { rootMargin: '-5% 0px -60% 0px', threshold: 0 });
+      document.querySelectorAll('section[id]').forEach(function (section) { observer.observe(section); });
+    }
+    links.forEach(function (link) {
+      link.addEventListener('click', function () { highlightSection(link.hash.slice(1)); });
+    });
+  </script>
+</body>
+</html>
