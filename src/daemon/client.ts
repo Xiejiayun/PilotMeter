@@ -2,8 +2,8 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { open } from 'node:fs/promises';
-import { APP, VERSION, readJson, prepareDirectory } from '../shared/runtime.js';
-export interface Instance { app: string; version: string; pid: number; instanceId: string; url: string; managementToken: string; collectorToken: string }
+import { APP, VERSION, readJson, prepareDirectory, sourceContextId } from '../shared/runtime.js';
+export interface Instance { app: string; version: string; pid: number; instanceId: string; url: string; managementToken: string; collectorToken: string; demo?: boolean }
 export async function instanceAt(dir: string): Promise<Instance | null> {
   let instance: Instance | null;
   try { instance = await readJson<Instance>(join(dir, 'instance.json')); } catch { return null; }
@@ -21,9 +21,14 @@ export async function request<T>(instance: Instance, path: string, method = 'GET
   if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
   return data as T;
 }
+export async function collectorForRun(instance: Instance, label = ''): Promise<Instance> {
+  const contextId = sourceContextId(label);
+  const { collectorToken } = await request<{collectorToken: string}>(instance, '/api/collector-context', 'POST', { contextId });
+  return { ...instance, collectorToken };
+}
 export async function ensureService(dir: string, demo = false): Promise<Instance> {
   const existing = await instanceAt(dir);
-  if (existing) { if (existing.version !== VERSION) throw new Error('Stop the running older PilotMeter version before upgrading.'); return existing; }
+  if (existing) { if (existing.version !== VERSION) throw new Error('Stop the running older PilotMeter version before upgrading.'); if (demo && !existing.demo) throw new Error('Demo requires a separate unused directory; this service contains real data.'); return existing; }
   await prepareDirectory(dir);
   const log = await open(join(dir, 'daemon.log'), 'a', 0o600);
   const child = spawn(process.execPath, [fileURLToPath(new URL('../../bin/pilotmeter.js', import.meta.url)), '--data-dir', dir, '__serve', ...(demo ? ['--demo'] : [])], { detached: true, windowsHide: true, stdio: ['ignore', log.fd, log.fd] });

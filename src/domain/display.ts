@@ -6,15 +6,32 @@ function quantity(value: unknown): string | null {
   try { return nonNegativeDecimal(value); } catch { return null; }
 }
 
+function text(value: unknown, maximum: number): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= maximum
+    && value.trim() === value && !/[\u0000-\u001f\u007f-\u009f]/.test(value);
+}
+
+function identity(value: unknown): value is string {
+  return text(value, 128) && /^(user|organization|enterprise):[a-z\d](?:[a-z\d-]{0,98}[a-z\d])?$/i.test(value);
+}
+
 /** A snapshot is a statement about one verified monthly account pool, never a local sum. */
 export function officialSnapshotEligible(snapshot: UsageSnapshot | null, period: string, entity?: string): boolean {
-  if (!snapshot || !['billing-rest', 'sdk-quota'].includes(snapshot.source) || snapshot.state !== 'known' || snapshot.coverage !== 'complete') return false;
-  if (!snapshot.poolId || !snapshot.billingEntity || snapshot.usageSubject !== snapshot.billingEntity || !snapshot.products.length) return false;
-  if (entity && snapshot.billingEntity.toLowerCase() !== entity.toLowerCase()) return false;
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot) || !['billing-rest', 'sdk-quota'].includes(snapshot.source) || snapshot.state !== 'known' || snapshot.coverage !== 'complete') return false;
+  if (!text(snapshot.poolId, 256) || !identity(snapshot.billingEntity) || !identity(snapshot.usageSubject)
+    || snapshot.usageSubject !== snapshot.billingEntity || typeof snapshot.stale !== 'boolean') return false;
+  if (!Array.isArray(snapshot.products) || snapshot.products.length < 1 || snapshot.products.length > 64
+    || snapshot.products.some(product => !text(product, 256))) return false;
+  if (entity !== undefined && (!identity(entity) || snapshot.billingEntity.toLowerCase() !== entity.toLowerCase())) return false;
+  if (typeof period !== 'string') return false;
   if (!isMonthlyInterval(snapshot.periodStart, snapshot.periodEnd, period)) return false;
   const verified = timestamp(snapshot.verifiedAt); const fetched = timestamp(snapshot.fetchedAt);
   const start = timestamp(snapshot.periodStart); const end = timestamp(snapshot.periodEnd);
   if (verified === null || fetched === null || start === null || end === null || verified < start || verified >= end || verified > fetched) return false;
+  if (snapshot.providerUpdatedAt !== null) {
+    const updated = timestamp(snapshot.providerUpdatedAt);
+    if (updated === null || updated < start || updated >= end || updated > fetched) return false;
+  }
   if (snapshot.billingMode === 'ai-credits' ? snapshot.unit !== 'ai-credits' : snapshot.billingMode === 'premium-requests' ? snapshot.unit !== 'premium-requests' : true) return false;
   if (quantity(snapshot.used) === null) return false;
   if (snapshot.limitKind === 'unlimited') return snapshot.limit === null;

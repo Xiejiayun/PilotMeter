@@ -181,6 +181,7 @@ export class Repository {
   }
 
   close(): void { this.#db.close(); }
+  hasUsageEvents(): boolean { return !!this.#db.prepare('SELECT 1 FROM usage_events LIMIT 1').get(); }
 
   #diagnose(code: string, message: string): void {
     this.#db.prepare(`INSERT INTO diagnostics (code, message, created_at) VALUES (?, ?, ?)
