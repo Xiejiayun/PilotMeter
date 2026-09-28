@@ -66,7 +66,7 @@ async function bundledCopilotVersion(command) {
 
 // Keep this application allowlist aligned with scripts/pack-smoke.mjs. npm's
 // files field permits whole directories, including stale compiler output.
-const applicationFile = /^(?:package\.json|README\.md|LICENSE|docs\/(?:compatibility|validation-guide|npm-package-contents|windows-exe)\.md|bin\/pilotmeter\.js|dist\/.+\.(?:js|d\.ts|js\.map)|public\/index\.html|public\/assets\/[A-Za-z0-9_.-]+\.(?:js|css))$/;
+const applicationFile = /^(?:package\.json|README\.md|LICENSE|docs\/(?:compatibility|validation-guide|npm-package-contents|windows-exe)\.md|bin\/pilotmeter\.js|dist\/.+\.(?:js|d\.ts|js\.map)|public\/index\.html|public\/assets\/[A-Za-z0-9_.-]+\.(?:js|css|svg|ico))$/;
 const privateApplicationFile = /(?:^|\/)(?:\.env(?:\.|$)|test(?:s)?|fixtures|node_modules|\.git|\.npmrc|[^/]*(?:credentials|secrets)[^/]*)(?:\/|$)|\.(?:db|sqlite|log)(?:[.-]|$)/i;
 const secretPatterns = [/\bgh[pousr]_[A-Za-z0-9]{20,}\b/, /\bgithub_pat_[A-Za-z0-9_]{40,}\b/, /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/];
 function rejectSecrets(name, bytes) {
@@ -277,7 +277,8 @@ const name = 'PilotMeter-' + packageInfo.version + '-win-x64.exe';
 const built = join(stage, name);
 await ps(['-Mode', 'Compile', '-Source', join(workspace, 'scripts', 'windows', 'Launcher.cs'), '-Destination', built,
   '-Configuration', config, '-Payload', zip, '-FileManifest', fileManifest,
-  '-ApplicationManifest', join(workspace, 'scripts', 'windows', 'app.manifest')]);
+  '-ApplicationManifest', join(workspace, 'scripts', 'windows', 'app.manifest'),
+  '-ApplicationIcon', join(workspace, 'web', 'assets', 'pilotmeter.ico')]);
 const exe = join(output, name);
 await copyFile(built, exe);
 const exeHash = hash(await readFile(exe));

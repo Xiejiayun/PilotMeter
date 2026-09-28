@@ -300,7 +300,7 @@ export async function serve(dir: string, demo = false, options: { accounts?: Pic
         const path = fileURLToPath(new URL(`../../public${route === '/' ? '/index.html' : route}`, import.meta.url));
         try {
           const bytes = await readFile(path);
-          res.writeHead(200, { 'content-type': ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' } as Record<string, string>)[extname(path)] || 'application/octet-stream' }); res.end(bytes);
+          res.writeHead(200, { 'content-type': ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' } as Record<string, string>)[extname(path)] || 'application/octet-stream' }); res.end(bytes);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
           if (route !== '/') throw new HttpError(404, 'Not found.');

@@ -6,7 +6,8 @@ param(
     [string]$Configuration,
     [string]$Payload,
     [string]$FileManifest,
-    [string]$ApplicationManifest
+    [string]$ApplicationManifest,
+    [string]$ApplicationIcon
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression
@@ -39,7 +40,7 @@ switch ($Mode) {
         $compiler = Join-Path $framework 'csc.exe'
         if (-not (Test-Path -LiteralPath $compiler)) { throw 'The Windows .NET Framework compiler was not found.' }
         $nativeChild = Join-Path ([IO.Path]::GetDirectoryName($Source)) 'NativeChild.cs'
-        & $compiler /nologo /target:exe /platform:x64 /optimize+ "/out:$Destination" "/win32manifest:$ApplicationManifest" "/reference:$framework\System.IO.Compression.dll" "/reference:$framework\System.IO.Compression.FileSystem.dll" "/resource:$Payload,PilotMeter.Payload" "/resource:$FileManifest,PilotMeter.Manifest" $Source $nativeChild $Configuration
+        & $compiler /nologo /target:exe /platform:x64 /optimize+ "/out:$Destination" "/win32manifest:$ApplicationManifest" "/win32icon:$ApplicationIcon" "/reference:$framework\System.IO.Compression.dll" "/reference:$framework\System.IO.Compression.FileSystem.dll" "/resource:$Payload,PilotMeter.Payload" "/resource:$FileManifest,PilotMeter.Manifest" $Source $nativeChild $Configuration
         if ($LASTEXITCODE -ne 0) { throw "EXE compilation failed: $LASTEXITCODE" }
     }
 }
