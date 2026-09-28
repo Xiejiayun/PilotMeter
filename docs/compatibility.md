@@ -16,12 +16,23 @@
 | 原生状态栏 / OSC 8 点击 | 真实终端行为待验证，提供普通 URL 和 open 备用入口 |
 | macOS / Linux | 尚未实机验证，不声明已支持 |
 
+## 已完成的工程验证
+
+- 68 项 Node 单元/集成测试通过，包括事件分类/去重、BigInt、UTC 月度、文件恢复、账户边界、鉴权、崩溃锁竞争、来源隔离、演示隔离和 JSONC 恢复。
+- 11 项 Chromium 测试通过：10 项状态/布局测试以及实际 daemon 的页面、CSRF 编辑和会话详情联调；桌面和 320px 截图已检查。
+- Windows 的真实 npm 全局 `.tgz` 安装通过 7 组验收，生产安装无需 TypeScript/Vite/Playwright。真实 CLI shim、后台复用、静态资源、demo、停止和重启均通过。
+- 原生 Copilot 1.0.88 的实际版本和帮助命令通过；不发起模型请求。状态栏桥接脚本本身已实测中文、空格和特殊字符路径与 stdin；原生 TUI 的渲染/点击仍未验证。
+- Windows npm 11.9.0 的全局 prefix 不支持 `&`；这是生成的 npm shim 在应用启动前的问题。应用的数据目录参数可以包含 `&`。详见 [npm 安装包验收](npm-package-contents.md)。
+- GitHub Actions 配置 Node 24.14.0 三平台构建、测试与打包；Windows/Ubuntu 另运行 Chromium。CI 结果与真实终端点击验收分别记录。
+
 ## 能力边界
 
 - 当前已核查的采集分类规则固定为 CLI `1.0.88`：`invoke_agent`，合法 server address/port，且祖先链不含其他 invoke_agent。未知版本或缺失祖先保持待分类。
 - 组织、企业付费不能通过个人 endpoint 的空列表证明零用量；端点按显式主体选择。
 - 测试 fixtures 均为人工合成，只用于验证解析、精度、幂等和边界，不冒充真实脱敏账单。
 - 首版以启用采集后的本地记录为准。SDK 历史读取属于独立后续适配，不读取或恢复活动会话。
+- JSONL 已验证格式为每行一个 OTLP traces `resourceSpans` envelope，原生 CLI file exporter 格式尚未取得真实样本。不能把本格式的合成测试算作原生文件兼容证据。
+- quota 提供显式验证证据导入边界，不自动安装实验性 SDK。组织文档中其他 SKU/单位组合暂为 unsupported；完整额度池覆盖不能从单一产品推断。
 - npm 本地包验证与公开发布分开；未获得发布账号、包名归属和公开发布授权前不发布。
 
 ## 真实验收仍需的证据
