@@ -8,11 +8,12 @@
   "bin": { "pilotmeter": "bin/pilotmeter.js" },
   "files": ["bin", "dist", "public", "README.md", "LICENSE", "docs/compatibility.md"],
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit",
+    "build": "tsc && tsc --project web/tsconfig.json && vite build",
+    "typecheck": "tsc --noEmit && tsc --project web/tsconfig.json",
     "test": "npm run build && node --test test/unit/*.test.mjs test/integration/*.test.mjs",
     "prepack": "npm run build",
-    "test:pack": "node scripts/pack-smoke.mjs"
+    "test:pack": "node scripts/pack-smoke.mjs",
+    "test:e2e": "playwright test"
   },
   "dependencies": { "commander": "^14.0.0", "cross-spawn": "^7.0.6", "jsonc-parser": "^3.3.1" },
   "devDependencies": { "@types/cross-spawn": "^6.0.6", "@types/node": "^24.0.0", "typescript": "^5.9.0", "vite": "^7.0.0", "@playwright/test": "^1.55.0" },

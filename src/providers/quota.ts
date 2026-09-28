@@ -23,21 +23,45 @@ export interface QuotaEvidence {
 export interface QuotaCapability { supported: boolean; reasons: string[] }
 export interface QuotaResult { capability: QuotaCapability; snapshot: UsageSnapshot }
 
+function object(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function text(value: unknown, maximum: number): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= maximum
+    && value.trim() === value && !/[\u0000-\u001f\u007f-\u009f]/.test(value);
+}
+
+function validEvidence(value: unknown): value is QuotaEvidence {
+  if (!object(value)) return false;
+  if (!text(value.billingEntity, 128) || !text(value.usageSubject, 128) || !text(value.poolId, 256)
+    || !text(value.period, 7) || !text(value.poolKind, 32) || !text(value.billingMode, 32)
+    || !text(value.unit, 32) || !text(value.verifiedAt, 32) || !text(value.providerUpdatedAt, 32)
+    || !text(value.evidence, 4096)) return false;
+  if (!Array.isArray(value.products) || value.products.length < 1 || value.products.length > 64
+    || value.products.some(product => !text(product, 256))) return false;
+  if (['identityVerified', 'unitVerified', 'allowanceVerified', 'coverageVerified', 'officialPageCompared', 'unlimited']
+    .some(key => typeof value[key] !== 'boolean')) return false;
+  return value.allowance === null || typeof value.allowance === 'string' && value.allowance.length <= 512;
+}
+
 function exactQuotaValue(value: unknown): string | null {
   // A number is admissible only when it is an exact, safe integer; fractions must arrive as decimal text.
   try { return nonNegativeDecimal(typeof value === 'number' && Number.isSafeInteger(value) ? String(value) : value); }
   catch { return null; }
 }
 
-export function adaptQuota(raw: QuotaData, evidence: QuotaEvidence | null, account: BillingAccount, period: string, now = new Date()): QuotaResult {
+export function adaptQuota(raw: unknown, evidence: unknown, account: BillingAccount, period: string, now = new Date()): QuotaResult {
+  if (typeof period !== 'string') throw new RangeError('Period must be YYYY-MM');
   const range = monthlyPeriod(period); const entity = billingEntity(account); const reasons: string[] = [];
   const base: UsageSnapshot = { ...unknownBillingSnapshot(account, period, now), source: 'sdk-quota', state: 'unsupported' };
   const fail = (): QuotaResult => ({
     capability: { supported: false, reasons },
     snapshot: { ...base, lastError: { code: 'QUOTA_UNVERIFIED', message: reasons.join('；') } },
   });
+  if (!object(raw)) { reasons.push('quota 数据必须是对象'); return fail(); }
   if (!evidence) { reasons.push('没有当月额度验证证据'); return fail(); }
-  if (typeof evidence.billingEntity !== 'string' || typeof evidence.usageSubject !== 'string' || typeof evidence.evidence !== 'string' || !Array.isArray(evidence.products)) {
+  if (!validEvidence(evidence)) {
     reasons.push('额度验证证据结构无法识别'); return fail();
   }
   if (account.kind === 'user' && account.directBilling !== true) reasons.push('未确认个人直接付费；公司额度不能视为个人套餐额度');
@@ -52,12 +76,13 @@ export function adaptQuota(raw: QuotaData, evidence: QuotaEvidence | null, accou
   const verified = timestamp(evidence.verifiedAt); const updated = timestamp(evidence.providerUpdatedAt);
   const start = Date.parse(range.start); const end = Date.parse(range.end);
   if (verified === null || updated === null || verified < start || verified >= end || verified > now.getTime() || updated < start || updated > verified || updated >= end) reasons.push('验证时间或数据截止时间不属于有效当月范围');
-  if (timestamp(raw?.resetDate) !== end) reasons.push('quota 重置时间未确认 UTC 月度边界');
-  const used = exactQuotaValue(raw?.usedRequests);
+  if (timestamp(raw.resetDate) !== end) reasons.push('quota 重置时间未确认 UTC 月度边界');
+  const used = exactQuotaValue(raw.usedRequests);
   if (used === null) reasons.push('缺少精确的已用量；remainingPercentage 不能单独证明月度用量');
-  const unlimited = raw?.isUnlimited === true;
+  if (typeof raw.isUnlimited !== 'boolean') reasons.push('quota 无固定上限状态必须是明确的布尔值');
+  const unlimited = raw.isUnlimited === true;
   if (unlimited !== evidence.unlimited) reasons.push('无固定上限状态与核对证据不一致');
-  const allowance = exactQuotaValue(evidence.allowance); const rawLimit = exactQuotaValue(raw?.entitlementRequests);
+  const allowance = exactQuotaValue(evidence.allowance); const rawLimit = exactQuotaValue(raw.entitlementRequests);
   if (!unlimited && (allowance === null || rawLimit === null || compareDecimals(allowance, rawLimit) !== 0)) reasons.push('当前额度与已核对额度不一致；套餐或 flex 调整后需要重新核对');
   if (unlimited && evidence.allowance !== null) reasons.push('无固定上限不能同时声明固定额度');
   if (reasons.length) return fail();

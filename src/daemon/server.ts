@@ -1,13 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { randomBytes, randomUUID, timingSafeEqual, createHash } from 'node:crypto';
-import { hostname, homedir } from 'node:os';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFile, rm } from 'node:fs/promises';
 import { Repository } from '../storage/repository.js';
 import { parseOtlp } from '../collectors/otlp.js';
 import { importJsonl } from '../collectors/jsonl.js';
-import { APP, VERSION, prepareDirectory, atomicJson, month, readJson } from '../shared/runtime.js';
+import { APP, VERSION, prepareDirectory, atomicJson, month, readJson, sourceContextId } from '../shared/runtime.js';
 import { acquireLock } from './lock.js';
 import type { Instance } from './client.js';
 import type { Settings, Summary } from '../shared/types.js';
@@ -15,10 +14,11 @@ import { buildDisplay, officialSnapshotEligible } from '../domain/display.js';
 import { BillingProvider, billingEntity } from '../providers/billing.js';
 import { RefreshScheduler } from '../providers/scheduler.js';
 import { adaptQuota, type QuotaData, type QuotaEvidence } from '../providers/quota.js';
+import { seedDemo } from './demo.js';
 
 class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 const defaultSettings: Settings = { monthlyBudget: null, unitVerification: null, account: null, demo: false };
-function equal(a: string | undefined, b: string): boolean { return !!a && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b)); }
+function equal(a: string | undefined, b: string): boolean { return !!a && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b)); }
 async function body(req: IncomingMessage): Promise<unknown> {
   if (!/^application\/json(?:;|$)/i.test(req.headers['content-type'] || '')) throw new HttpError(415, 'Only application/json is supported.');
   if (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity') throw new HttpError(415, 'Compressed payloads are not supported.');
@@ -34,7 +34,13 @@ export async function serve(dir: string, demo = false): Promise<void> {
   try { repo = new Repository(join(dir, 'usage.db')); } catch (error) { await release(); throw error; }
   const instance: Instance = { app: APP, version: VERSION, pid: process.pid, instanceId: randomUUID(), url: '', managementToken: randomBytes(32).toString('hex'), collectorToken: randomBytes(32).toString('hex') };
   const csrf = randomBytes(32).toString('hex');
-  let settings: Settings = { ...defaultSettings, ...repo.getSetting<Settings>('settings'), demo };
+  const savedSettings = repo.getSetting<Settings>('settings');
+  if (demo && savedSettings?.demo !== true && (savedSettings || repo.hasUsageEvents())) {
+    repo.close(); await release(); throw new Error('Demo requires a separate unused directory; refusing to modify real data.');
+  }
+  let settings: Settings = { ...defaultSettings, ...savedSettings, demo: demo || savedSettings?.demo === true };
+  if (settings.demo) settings = seedDemo(repo, settings);
+  instance.demo = settings.demo;
   const billing = new BillingProvider();
   const scheduler = new RefreshScheduler();
   let lastActivity = Date.now();
@@ -43,17 +49,18 @@ export async function serve(dir: string, demo = false): Promise<void> {
     const saved = repo.getSnapshot(month(), { entity: billingEntity(settings.account), source: 'billing-rest' });
     if (saved) billing.restoreSnapshot(saved);
   }
-  const source = () => createHash('sha256').update(JSON.stringify([hostname(), process.env.COPILOT_HOME || join(homedir(), '.copilot'), settings.account])).digest('hex').slice(0, 24);
+  const source = `unverified:${sourceContextId()}`;
+  const collectorContexts = new Map<string, string>([[instance.collectorToken, source]]);
   function summary(period = month()): Summary {
     const local = repo.summary(period, settings.unitVerification);
     const entity = settings.account ? billingEntity(settings.account) : null;
     const quota = entity ? repo.getSnapshot(period, { entity, source: 'sdk-quota' }) : null;
     let account = entity ? (officialSnapshotEligible(quota, period, entity) ? quota : repo.getSnapshot(period, { entity, source: 'billing-rest' }) || quota) : null;
     if (account) account = { ...account, stale: account.stale || Date.now() - Date.parse(account.fetchedAt) > 15 * 60_000 };
-    return { period, local, account, display: buildDisplay(local, account, settings), updatedAt: new Date().toISOString(), demo };
+    return { period, local, account, display: buildDisplay(local, account, settings), updatedAt: new Date().toISOString(), demo: settings.demo };
   }
   let cacheChain = Promise.resolve();
-  function updateCache(): Promise<void> { const snapshot = summary(); cacheChain = cacheChain.then(() => atomicJson(join(dir, 'status.json'), snapshot)); return cacheChain; }
+  function updateCache(): Promise<void> { const snapshot = summary(); cacheChain = cacheChain.catch(() => {}).then(() => atomicJson(join(dir, 'status.json'), snapshot)); return cacheChain; }
   async function refresh(manual = false): Promise<unknown> {
     const selected = settings.account;
     if (!selected) return { state: 'not-connected' };
@@ -79,15 +86,17 @@ export async function serve(dir: string, demo = false): Promise<void> {
       const url = new URL(req.url || '/', instance.url);
       const route = url.pathname;
       const management = equal(req.headers.authorization, `Bearer ${instance.managementToken}`);
-      const collector = equal(req.headers['x-pilotmeter-token'] as string | undefined, instance.collectorToken) || equal(req.headers.authorization, `Bearer ${instance.collectorToken}`);
+      const presentedToken = (req.headers['x-pilotmeter-token'] as string | undefined) || req.headers.authorization?.replace(/^Bearer /, '');
+      const collectorSource = typeof presentedToken === 'string' ? collectorContexts.get(presentedToken) : undefined;
       if (route.startsWith('/api/') && req.headers['sec-fetch-site'] === 'cross-site') throw new HttpError(403, 'Cross-site API access is forbidden.');
       if (route.startsWith('/v1/')) {
         if (req.method !== 'POST') throw new HttpError(405, 'POST required.');
-        if (!collector) throw new HttpError(401, 'Collector authentication required.');
+        if (!collectorSource) throw new HttpError(401, 'Collector authentication required.');
+        if (settings.demo) throw new HttpError(409, 'Demo data is isolated; use a normal data directory for live collection.');
         const payload = await body(req);
         if (route === '/v1/traces') {
           let spans;
-          try { spans = parseOtlp(payload, source()); } catch { throw new HttpError(400, 'Invalid OTLP trace structure.'); }
+          try { spans = parseOtlp(payload, collectorSource); } catch { throw new HttpError(400, 'Invalid OTLP trace structure.'); }
           const result = repo.ingest(spans);
           lastActivity = Date.now();
           await updateCache();
@@ -106,9 +115,20 @@ export async function serve(dir: string, demo = false): Promise<void> {
       if (req.method === 'GET' && route === '/api/sessions') { json(res, 200, repo.sessions(month(url.searchParams.get('period') || undefined), { cursor: url.searchParams.get('cursor') || undefined, sort: url.searchParams.get('sort') || 'usage', limit: 50 })); return; }
       if (req.method === 'GET' && route.startsWith('/api/sessions/')) { const result = repo.session(decodeURIComponent(route.slice(14))); if (!result) throw new HttpError(404, 'Session not found.'); json(res, 200, result); return; }
       if (req.method === 'GET' && route === '/api/settings') { json(res, 200, settings); return; }
+      if (req.method === 'POST' && route === '/api/collector-context') {
+        if (!management) throw new HttpError(403, 'Collector registration requires CLI authentication.');
+        if (settings.demo) throw new HttpError(409, 'Demo data is isolated; use a normal data directory for live collection.');
+        const input = await body(req) as { contextId?: string };
+        if (typeof input?.contextId !== 'string' || !/^[a-f0-9]{64}$/.test(input.contextId)) throw new HttpError(400, 'Invalid collection context.');
+        const context = `unverified:${input.contextId}`;
+        let token = [...collectorContexts].find(([, value]) => value === context)?.[0];
+        if (!token) { if (collectorContexts.size >= 1024) throw new HttpError(429, 'Too many collector contexts; restart the local service.'); token = randomBytes(32).toString('hex'); collectorContexts.set(token, context); }
+        json(res, 200, { collectorToken: token, identity: 'unverified' }); return;
+      }
       if (req.method === 'POST' && route === '/api/refresh') { json(res, 200, await trackedRefresh(true)); return; }
       if (route === '/api/account' && req.method === 'POST') {
         if (!management) throw new HttpError(403, 'Account binding requires CLI authentication.');
+        if (settings.demo) throw new HttpError(409, 'Demo cannot connect to a real account.');
         const input = await body(req) as { account?: Settings['account'] };
         const account = input?.account;
         if (account !== null) {
@@ -138,6 +158,7 @@ export async function serve(dir: string, demo = false): Promise<void> {
         if (!settings.account) throw new HttpError(400, 'Connect an explicit billing entity first.');
         const input = await body(req) as { raw: QuotaData; evidence: QuotaEvidence; period?: string };
         if (!input || typeof input !== 'object' || !input.raw) throw new HttpError(400, 'Expected quota data and evidence.');
+        if (input.period !== undefined && typeof input.period !== 'string') throw new HttpError(400, 'period must be YYYY-MM (UTC)');
         const result = adaptQuota(input.raw, input.evidence, settings.account, month(input.period));
         repo.saveSnapshot(result.snapshot); await updateCache(); json(res, 200, result); return;
       }
@@ -152,9 +173,12 @@ export async function serve(dir: string, demo = false): Promise<void> {
       if (req.method === 'GET' && route === '/api/diagnostics') { json(res, 200, { items: repo.diagnostics(), collection: 'Traces only; metrics and logs are acknowledged without storage.' }); return; }
       if (req.method === 'POST' && route === '/api/import') {
         if (!management) throw new HttpError(403, 'Import requires CLI authentication.');
-        const input = await body(req) as { path?: unknown };
+        if (settings.demo) throw new HttpError(409, 'Demo cannot import real telemetry.');
+        const input = await body(req) as { path?: unknown; collectorToken?: unknown };
         if (typeof input?.path !== 'string') throw new HttpError(400, 'File path required.');
-        const result = await importJsonl(repo, input.path, source()); await updateCache(); json(res, 200, result); return;
+        const context = input.collectorToken === undefined ? source : typeof input.collectorToken === 'string' ? collectorContexts.get(input.collectorToken) : undefined;
+        if (!context) throw new HttpError(400, 'Unknown import source context.');
+        const result = await importJsonl(repo, input.path, context); await updateCache(); json(res, 200, result); return;
       }
       if (req.method === 'POST' && route === '/api/shutdown') {
         if (!management) throw new HttpError(403, 'Shutdown requires CLI authentication.');
@@ -191,7 +215,7 @@ export async function serve(dir: string, demo = false): Promise<void> {
     if ((await readJson<Instance>(join(dir, 'instance.json')))?.instanceId === instance.instanceId) await rm(join(dir, 'instance.json'), { force: true });
     await release();
   }
-  const refreshTimer = setInterval(() => { if (!closing) void trackedRefresh().catch(() => {}); }, 60_000); refreshTimer.unref();
+  const refreshTimer = setInterval(() => { if (!closing) { void updateCache().catch(() => {}); void trackedRefresh().catch(() => {}); } }, 60_000); refreshTimer.unref();
   try {
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => resolve()); });
     instance.url = `http://127.0.0.1:${(server.address() as {port: number}).port}`;

@@ -264,6 +264,61 @@ test('quota refuses percentage-only, session/week/user budgets, wrong identity, 
   assert.equal(adaptQuota(quota({ resetDate: '2026-09-27T00:00:00.000Z' }), evidence(), org, period, now).capability.supported, false);
 });
 
+test('quota import rejects malformed runtime types, unbounded metadata and non-boolean flags without retaining them', () => {
+  for (const invalidRaw of [null, undefined, true, 'quota', [], [quota()]]) {
+    const result = adaptQuota(invalidRaw, evidence(), org, period, now);
+    assert.equal(result.capability.supported, false); assert.equal(result.snapshot.used, null);
+  }
+  for (const invalidEvidence of [null, true, 'evidence', [], [evidence()]]) {
+    assert.equal(adaptQuota(quota(), invalidEvidence, org, period, now).capability.supported, false);
+  }
+  const malformed = [
+    { poolId: 123 }, { poolId: { content: 'SYNTHETIC_SECRET' } }, { poolId: ['pool'] },
+    { poolId: ' ' }, { poolId: 'pool\n' }, { poolId: 'pool\u0085name' }, { poolId: 'p'.repeat(257) },
+    { products: 'Copilot AI Credits' }, { products: [] }, { products: [''] }, { products: [123] },
+    { products: [{ content: 'SYNTHETIC_SECRET' }] }, { products: ['a\nproduct'] }, { products: ['p'.repeat(257)] },
+    { products: Array.from({ length: 65 }, (_, index) => `product-${index}`) },
+    { billingEntity: {} }, { usageSubject: 1 }, { evidence: 'e'.repeat(4097) }, { evidence: 'text\u0000' },
+    { verifiedAt: {} }, { providerUpdatedAt: now.getTime() }, { providerUpdatedAt: '2026-09-20' },
+    { period: 202609 }, { allowance: 100 },
+  ];
+  for (const key of ['identityVerified', 'unitVerified', 'allowanceVerified', 'coverageVerified', 'officialPageCompared', 'unlimited']) {
+    malformed.push({ [key]: 'true' }, { [key]: 1 }, { [key]: {} }, { [key]: undefined });
+  }
+  for (const override of malformed) {
+    const result = adaptQuota(quota(), evidence(override), org, period, now);
+    assert.equal(result.capability.supported, false, JSON.stringify(override));
+    assert.equal(result.snapshot.used, null); assert.equal(result.snapshot.poolId, null);
+    assert.equal(JSON.stringify(result).includes('SYNTHETIC_SECRET'), false);
+  }
+  for (const isUnlimited of ['true', 'false', 0, 1, {}, [], null, undefined]) {
+    assert.equal(adaptQuota(quota({ isUnlimited }), evidence(), org, period, now).capability.supported, false);
+  }
+  for (const malformedPeriod of [null, undefined, 202609, [], {}, '2026-13', '2026-9']) {
+    assert.throws(() => adaptQuota(quota(), evidence(), org, malformedPeriod, now), { name: 'RangeError', message: /Period must be YYYY-MM/ });
+  }
+});
+
+test('official display independently rejects malformed persisted metadata and identities', () => {
+  const valid = official();
+  const malformed = [
+    { poolId: 123 }, { poolId: {} }, { poolId: ['pool'] }, { poolId: ' ' }, { poolId: 'pool\n' }, { poolId: 'p'.repeat(257) },
+    { billingEntity: 123 }, { usageSubject: {} }, { billingEntity: 'bad-identity', usageSubject: 'bad-identity' },
+    { source: {} }, { source: 'unknown' }, { products: 'Copilot AI Credits' }, { products: null }, { products: [null] },
+    { products: ['p'.repeat(257)] }, { products: ['a\nproduct'] }, { products: Array(65).fill('Copilot AI Credits') },
+    { stale: 'false' }, { fetchedAt: {} }, { verifiedAt: {} },
+    { providerUpdatedAt: {} }, { providerUpdatedAt: '2026-08-31T23:59:59.000Z' }, { providerUpdatedAt: '2026-09-21T00:00:00.000Z' },
+  ];
+  for (const override of malformed) {
+    const snapshot = { ...valid, ...override };
+    assert.equal(officialSnapshotEligible(snapshot, period, 'organization:test-org'), false, JSON.stringify(override));
+    assert.equal(buildDisplay(local(), snapshot, settings()).mode, 'usage');
+  }
+  for (const snapshot of [null, true, 'snapshot', [], {}]) assert.equal(officialSnapshotEligible(snapshot, period), false);
+  for (const entity of [null, 123, {}, [], 'wrong-identity']) assert.equal(officialSnapshotEligible(valid, period, entity), false);
+  assert.equal(officialSnapshotEligible(valid, null), false);
+});
+
 test('reconciliation checks matching identity/pool/product/time and does not attribute residuals to devices', () => {
   const account = official(); const observation = { ...account, source: 'local-otel', used: '100' };
   const proof = { identityVerified: true, poolVerified: true, productsVerified: true, timeCoverageVerified: true };
