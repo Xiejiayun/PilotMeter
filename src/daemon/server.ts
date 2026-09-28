@@ -268,11 +268,14 @@ export async function serve(dir: string, demo = false): Promise<void> {
     if (!closing) {
       try { repo.applyRetention(settings.retentionDays); }
       catch { console.error('PilotMeter: retention cleanup failed; the cleanup transaction was not applied.'); }
+      try { repo.refreshPendingClassifications(); }
+      catch { console.error('PilotMeter: pending classification maintenance failed; its transaction was not applied.'); }
       void updateCache().catch(() => {}); void trackedRefresh().catch(() => {});
     }
   }, 60_000); refreshTimer.unref();
   try {
     repo.applyRetention(settings.retentionDays);
+    repo.refreshPendingClassifications();
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => resolve()); });
     instance.url = `http://127.0.0.1:${(server.address() as {port: number}).port}`;
     await updateCache(); await atomicJson(join(dir, 'instance.json'), instance);

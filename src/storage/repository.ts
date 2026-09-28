@@ -14,6 +14,8 @@ type StoredSpan = SpanRecord & { classification: Classification; conflicted: boo
 interface Totals { nanoAiu: string | null; knownCalls: number; unknownCalls: number; pendingCalls: number }
 const SCHEMA_VERSION = 2;
 const ROOT_CLI_VERSIONS = new Set(['1.0.88']);
+export const PENDING_CLASSIFICATION_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+const PENDING_TIMEOUT_PREFIX = 'pending-timeout:';
 const now = (): string => new Date().toISOString();
 const key = (span: Pick<SpanRecord, 'traceId' | 'spanId'>): string => `${span.traceId}/${span.spanId}`;
 const sessionKey = (source: string, session: string): string => createHash('sha256').update(`${source}\0${session}`).digest('hex');
@@ -327,9 +329,18 @@ export class Repository {
     }));
   }
 
-  #classify(): void {
+  /** Mark unresolved calls after their first observation without treating them as billable roots. */
+  refreshPendingClassifications(at = new Date()): number {
+    if (!(at instanceof Date) || !Number.isFinite(at.getTime()) || !validTime(at.toISOString())) throw new Error('Invalid classification refresh time');
+    return this.#transaction(() => this.#classify(at));
+  }
+
+  #classify(at = new Date()): number {
     const spans = this.#spans();
     const byId = new Map(spans.map(span => [key(span), span]));
+    const observedAt = new Map(this.#db.prepare('SELECT trace_id, span_id, observed_at FROM usage_events').all()
+      .map(row => [`${row.trace_id}/${row.span_id}`, Date.parse(String(row.observed_at))]));
+    let newlyTimedOut = 0;
     for (const span of spans) {
       let classification: Classification;
       let reason: string | null = null;
@@ -360,14 +371,23 @@ export class Repository {
           else if (!span.sessionId) { classification = 'invalid'; reason = 'missing-session-id'; }
         }
       }
+      const wasTimedOut = span.classification === 'pending' && Boolean(span.reason?.startsWith(PENDING_TIMEOUT_PREFIX));
+      const timedOut = classification === 'pending' && (wasTimedOut
+        || at.getTime() - (observedAt.get(key(span)) ?? NaN) >= PENDING_CLASSIFICATION_TIMEOUT_MS);
+      // Keep the timeout through reason changes and clock rollback; late evidence can still resolve it.
+      if (timedOut) reason = `${PENDING_TIMEOUT_PREFIX}${reason ?? 'pending-classification'}`;
       if (classification !== span.classification || reason !== span.reason) {
         if (span.classification === 'root' && classification !== 'root') this.#diagnose('classification-corrected', 'Previously counted usage was removed after conflicting span or ancestor evidence arrived.');
-        if (classification === 'pending') this.#diagnose(reason ?? 'pending-classification', 'A possible agent call is awaiting verified root evidence and is excluded from known usage.');
+        if (timedOut && !wasTimedOut) {
+          this.#diagnose('pending-classification-timeout', 'An agent call is still awaiting verified root evidence 24 hours after first observation; its usage remains excluded until sufficient evidence arrives.');
+          newlyTimedOut++;
+        } else if (classification === 'pending' && !timedOut) this.#diagnose(reason ?? 'pending-classification', 'A possible agent call is awaiting verified root evidence and is excluded from known usage.');
         if (classification === 'invalid') this.#diagnose(reason ?? 'invalid-classification', 'An agent call cannot be safely classified and is excluded from known usage.');
         if (classification === 'root' && span.nanoAiu === null) this.#diagnose('unknown-metering', 'A verified root call has no valid nano AIU amount; its usage remains unknown.');
         this.#db.prepare('UPDATE span_classification SET classification = ?, reason = ?, updated_at = ? WHERE trace_id = ? AND span_id = ?').run(classification, reason, now(), span.traceId, span.spanId);
       }
     }
+    return newlyTimedOut;
   }
 
   #month(period: string): StoredSpan[] {
