@@ -29,11 +29,38 @@ internal sealed class DesktopNativeApi : IDisposable
     internal static bool Allowed(string path, string method)
     {
         if (path == null || method == null) return false;
-        if (method == "GET") return path == "/api/auth/accounts" || Regex.IsMatch(path, @"^/api/desktop(?:\?quotaKey=[a-zA-Z][a-zA-Z0-9_-]{0,63})?$")
+        if (method == "GET") return path == "/api/auth/accounts" || AllowedDesktopRead(path)
             || Regex.IsMatch(path, @"^/api/auth/login/[a-f0-9-]{36}$");
         if (method == "POST") return path == "/api/auth/login" || path == "/api/auth/select" || path == "/api/auth/refresh"
             || Regex.IsMatch(path, @"^/api/auth/login/[a-f0-9-]{36}/cancel$");
         return method == "DELETE" && Regex.IsMatch(path, @"^/api/auth/accounts/[a-f0-9-]{36}$");
+    }
+
+    private static bool AllowedDesktopRead(string path)
+    {
+        if (path.Length > 4096) return false;
+        var parts = path.Split('?');
+        var records = parts[0] == "/api/desktop/records";
+        if (parts[0] != "/api/desktop" && !records || parts.Length > 2) return false;
+        if (parts.Length == 1) return !records;
+        var seen = new HashSet<string>();
+        foreach (var pair in parts[1].Split('&'))
+        {
+            var parameter = pair.Split('=');
+            if (parameter.Length != 2 || !seen.Add(parameter[0])) return false;
+            string value;
+            try { value = Uri.UnescapeDataString(parameter[1]); } catch { return false; }
+            switch (parameter[0])
+            {
+                case "accountId": if (!Regex.IsMatch(value, @"^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$")) return false; break;
+                case "quotaKey": if (records || !Regex.IsMatch(value, @"^[A-Za-z][A-Za-z0-9_-]{0,63}$")) return false; break;
+                case "period": if (!records || !Regex.IsMatch(value, @"^[0-9]{4}-(?:0[1-9]|1[0-2])$")) return false; break;
+                case "sort": if (!records || value != "recent" && value != "usage") return false; break;
+                case "cursor": if (!records || !Regex.IsMatch(value, @"^[A-Za-z0-9_-]{1,2048}$")) return false; break;
+                default: return false;
+            }
+        }
+        return !records || seen.Contains("period");
     }
 
     internal async Task<Dictionary<string, object>> RequestAsync(string path, string method = "GET", Dictionary<string, object> payload = null)
@@ -82,7 +109,7 @@ internal sealed class DesktopNativeApi : IDisposable
             using (cancellation.Register(response.Dispose))
             {
                 if ((int)response.StatusCode >= 300 && (int)response.StatusCode < 400) throw new InvalidDataException("本机服务返回了不支持的重定向。");
-                if (response.Content.Headers.ContentLength.HasValue && response.Content.Headers.ContentLength.Value > DesktopJson.MaxLength)
+                if (response.Content.Headers.ContentLength.HasValue && response.Content.Headers.ContentLength.Value > DesktopJson.ApiMaxLength)
                     throw new InvalidDataException("本机服务响应过大。");
                 using (var input = await response.Content.ReadAsStreamAsync())
                 using (var output = new MemoryStream())
@@ -91,10 +118,10 @@ internal sealed class DesktopNativeApi : IDisposable
                     int count;
                     while ((count = await input.ReadAsync(buffer, 0, buffer.Length, cancellation)) > 0)
                     {
-                        if (output.Length + count > DesktopJson.MaxLength) throw new InvalidDataException("本机服务响应过大。");
+                        if (output.Length + count > DesktopJson.ApiMaxLength) throw new InvalidDataException("本机服务响应过大。");
                         output.Write(buffer, 0, count);
                     }
-                    var result = DesktopJson.Parse(Encoding.UTF8.GetString(output.ToArray()));
+                    var result = DesktopJson.Parse(Encoding.UTF8.GetString(output.ToArray()), DesktopJson.ApiMaxLength);
                     if (!response.IsSuccessStatusCode)
                     {
                         object message;

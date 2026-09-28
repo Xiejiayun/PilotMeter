@@ -145,6 +145,7 @@ internal static class DesktopContractTests
             Reject(delegate { DesktopJson.String(values, "missingValue", 20); }, "Required fields cannot be null.");
             assertions += DesktopApiTests.Run(args[2]).GetAwaiter().GetResult();
             assertions += NativeViewTests.Run();
+            assertions += DesktopPetTests.Run(args[0]);
             Console.WriteLine("Desktop contracts passed: " + assertions);
             return 0;
         }

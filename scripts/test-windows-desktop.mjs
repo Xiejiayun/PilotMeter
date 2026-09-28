@@ -52,10 +52,12 @@ const fixture = createServer(async (req, res) => {
     scenario = JSON.parse(body).accountId;
     send({ result: 'authorized' }); return;
   }
-  if (req.url === '/api/desktop') { send({ result: 'read' }); return; }
+  const pathname = new URL(req.url, 'http://127.0.0.1').pathname;
+  if (pathname === '/api/desktop' || pathname === '/api/desktop/records') { send({ result: 'read' }); return; }
   if (req.url === '/api/auth/accounts') {
+    if (scenario === 'medium') { send({ result: 'read', content: 'x'.repeat(70000) }); return; }
     if (scenario === 'redirect') { res.writeHead(302, { location: 'https://example.invalid/' }); res.end(); return; }
-    if (scenario === 'oversized') { send({ content: 'x'.repeat(70000) }); return; }
+    if (scenario === 'oversized') { send({ content: 'x'.repeat(1024 * 1024 + 1) }); return; }
     if (scenario === 'error') { send({ error: 'synthetic error' }, 409); return; }
     if (scenario === 'pending') { res.writeHead(200, { 'content-type': 'application/json' }); res.write('{"result":'); return; }
     if (scenario === 'foreign') foreign = true;
@@ -76,14 +78,21 @@ try {
   await run(compiler, [
     '/nologo', '/target:exe', '/platform:x64', '/langversion:5', '/main:DesktopContractTests', '/out:' + executable,
     '/reference:System.Windows.Forms.dll', '/reference:System.Drawing.dll', '/reference:System.Net.Http.dll', '/reference:System.Web.Extensions.dll',
+    ...['pilot', 'cat', 'shiba', 'penguin', 'slime', 'robot', 'cloud', 'sprout', 'jellyfish', 'dragon'].map((name, index) => {
+      const id = String(index + 1).padStart(2, '0');
+      return '/resource:' + join(workspace, 'docs', 'design', 'pets', `pet-${id}-${name}.png`) + ',PilotMeter.Pets.' + id;
+    }),
     join(workspace, 'scripts', 'windows', 'DesktopApp.cs'),
     join(workspace, 'scripts', 'windows', 'DesktopWidget.cs'),
     join(workspace, 'scripts', 'windows', 'DesktopBrand.cs'),
     join(workspace, 'scripts', 'windows', 'DesktopMainWindow.cs'),
     join(workspace, 'scripts', 'windows', 'DesktopNativeApi.cs'),
+    join(workspace, 'scripts', 'windows', 'DesktopDashboardViews.cs'),
+    join(workspace, 'scripts', 'windows', 'DesktopPets.cs'),
     join(workspace, 'test', 'windows', 'desktop-api.cs'),
     join(workspace, 'test', 'windows', 'native-view.cs'),
     join(workspace, 'test', 'windows', 'desktop-contracts.cs'),
+    join(workspace, 'test', 'windows', 'desktop-pets.cs'),
   ]);
   console.log(await run(executable, [physical, alias, fixtureOrigin]));
   passed = true;
