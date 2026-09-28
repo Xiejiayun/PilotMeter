@@ -1,0 +1,480 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.Globalization;
+using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Web.Script.Serialization;
+using System.Windows.Forms;
+using Microsoft.Win32.SafeHandles;
+
+internal static class DesktopApp
+{
+    internal const string AppName = "pilotmeter";
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandle(SafeFileHandle file, StringBuilder path, uint length, uint flags);
+
+    internal static string AbsolutePath(string value)
+    {
+        if (String.IsNullOrWhiteSpace(value) || !Regex.IsMatch(value, @"^(?:[a-zA-Z]:[\\/]|\\\\[^\\]+\\[^\\]+)"))
+            throw new ArgumentException("PilotMeter 需要绝对路径。请从原始 EXE 启动。");
+        return Path.GetFullPath(value);
+    }
+
+    // Resolve junctions and short names before deriving the per-directory instance key.
+    internal static string CanonicalDirectory(string value)
+    {
+        var absolute = AbsolutePath(value);
+        Directory.CreateDirectory(absolute);
+        using (var handle = CreateFile(absolute, 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero))
+        {
+            if (handle.IsInvalid) throw new IOException("无法打开 PilotMeter 数据目录。");
+            var buffer = new StringBuilder(32768);
+            var length = GetFinalPathNameByHandle(handle, buffer, (uint)buffer.Capacity, 0);
+            if (length == 0 || length >= buffer.Capacity) throw new IOException("无法确认 PilotMeter 数据目录。");
+            var canonical = buffer.ToString();
+            if (canonical.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) canonical = @"\\" + canonical.Substring(8);
+            else if (canonical.StartsWith(@"\\?\", StringComparison.Ordinal)) canonical = canonical.Substring(4);
+            var root = Path.GetPathRoot(canonical);
+            return canonical.Length > root.Length ? canonical.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) : canonical;
+        }
+    }
+
+    internal static string DirectoryKey(string directory)
+    {
+        using (var sha = SHA256.Create())
+            return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(directory.ToUpperInvariant()))).Replace("-", "");
+    }
+
+    internal static string Quote(string value)
+    {
+        var output = new StringBuilder("\"");
+        var slashes = 0;
+        foreach (var character in value)
+        {
+            if (character == '\\') { slashes++; continue; }
+            output.Append('\\', character == '"' ? slashes * 2 + 1 : slashes);
+            slashes = 0;
+            output.Append(character);
+        }
+        output.Append('\\', slashes * 2).Append('"');
+        return output.ToString();
+    }
+
+    private static void WakeExisting(string eventName)
+    {
+        var timer = Stopwatch.StartNew();
+        while (timer.ElapsedMilliseconds < 2000)
+        {
+            try { using (var signal = EventWaitHandle.OpenExisting(eventName)) { signal.Set(); return; } }
+            catch (WaitHandleCannotBeOpenedException) { Thread.Sleep(50); }
+        }
+    }
+
+    [STAThread]
+    public static int Main(string[] args)
+    {
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        try
+        {
+            var options = DesktopOptions.Parse(args);
+            var runtimeRoot = options.RuntimeRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var expectedDesktop = Path.Combine(runtimeRoot, "desktop", "PilotMeter.Desktop.exe");
+            if (!String.Equals(Path.GetFullPath(Assembly.GetExecutingAssembly().Location), expectedDesktop, StringComparison.OrdinalIgnoreCase)
+                || !File.Exists(Path.Combine(runtimeRoot, "runtime", "node.exe"))
+                || !File.Exists(Path.Combine(runtimeRoot, "app", "bin", "pilotmeter.js"))
+                || !File.Exists(options.Launcher))
+                throw new InvalidDataException("桌面运行文件不完整。请重新打开原始 PilotMeter EXE。");
+            var package = DesktopJson.ReadFile(Path.Combine(runtimeRoot, "app", "package.json"));
+            var version = DesktopJson.String(package, "version", 80);
+            if (DesktopJson.String(package, "name", 80) != AppName || !Regex.IsMatch(version, @"^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$"))
+                throw new InvalidDataException("PilotMeter 版本信息无效。");
+            var directory = CanonicalDirectory(options.DataDirectory);
+            var key = DirectoryKey(directory);
+            var eventName = "Local\\PilotMeter.Desktop.Wake." + key;
+            var openEventName = "Local\\PilotMeter.Desktop.Open." + key;
+            using (var mutex = new Mutex(false, "Local\\PilotMeter.Desktop." + key))
+            {
+                bool owned;
+                try { owned = mutex.WaitOne(0); }
+                catch (AbandonedMutexException) { owned = true; }
+                if (!owned) { WakeExisting(options.OpenMain ? openEventName : eventName); return 0; }
+                try
+                {
+                    using (var signal = new EventWaitHandle(false, EventResetMode.AutoReset, eventName))
+                    using (var openSignal = new EventWaitHandle(false, EventResetMode.AutoReset, openEventName))
+                    using (var context = new DesktopContext(runtimeRoot, options.Launcher, directory, version, signal, openSignal, options.OpenMain))
+                        Application.Run(context);
+                }
+                finally { mutex.ReleaseMutex(); }
+            }
+            return 0;
+        }
+        catch (Exception error)
+        {
+            MessageBox.Show(error.Message, "PilotMeter 无法启动", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return 1;
+        }
+    }
+}
+
+internal sealed class DesktopOptions
+{
+    internal string RuntimeRoot;
+    internal string Launcher;
+    internal string DataDirectory;
+    internal bool OpenMain;
+
+    internal static DesktopOptions Parse(string[] args)
+    {
+        if (args == null) throw new ArgumentException("桌面启动参数无效。");
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        var openMain = false;
+        for (var index = 0; index < args.Length; index += 2)
+        {
+            var name = args[index];
+            if (name == "--open-main" && index == args.Length - 1) { openMain = true; break; }
+            if ((name != "--runtime-root" && name != "--launcher" && name != "--data-dir") || index + 1 >= args.Length || values.ContainsKey(name))
+                throw new ArgumentException("桌面启动参数无效。请直接打开 PilotMeter EXE。");
+            values.Add(name, DesktopApp.AbsolutePath(args[index + 1]));
+        }
+        if (values.Count != 3) throw new ArgumentException("请从 PilotMeter EXE 打开桌面挂件。");
+        return new DesktopOptions {
+            RuntimeRoot = values["--runtime-root"], Launcher = values["--launcher"], DataDirectory = values["--data-dir"], OpenMain = openMain
+        };
+    }
+}
+
+internal static class DesktopJson
+{
+    internal const int MaxLength = 65536;
+
+    internal static Dictionary<string, object> Parse(string content)
+    {
+        if (content.Length > MaxLength) throw new InvalidDataException("本地服务响应过大。");
+        var serializer = new JavaScriptSerializer { MaxJsonLength = MaxLength, RecursionLimit = 16 };
+        var result = serializer.DeserializeObject(content) as Dictionary<string, object>;
+        if (result == null) throw new InvalidDataException("本地服务响应无效。");
+        return result;
+    }
+
+    internal static Dictionary<string, object> ReadFile(string path)
+    {
+        using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+        {
+            if (stream.Length > MaxLength) throw new InvalidDataException("本地状态文件过大。");
+            using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+            {
+                var buffer = new char[MaxLength + 1];
+                var count = reader.ReadBlock(buffer, 0, buffer.Length);
+                if (count > MaxLength) throw new InvalidDataException("本地状态文件过大。");
+                return Parse(new string(buffer, 0, count));
+            }
+        }
+    }
+
+    internal static string String(Dictionary<string, object> value, string key, int limit)
+    {
+        object item;
+        if (!value.TryGetValue(key, out item) || !(item is string) || ((string)item).Length > limit)
+            throw new InvalidDataException("本地服务字段无效。");
+        return (string)item;
+    }
+
+    internal static string OptionalString(Dictionary<string, object> value, string key, int limit)
+    {
+        object item;
+        if (!value.TryGetValue(key, out item) || item == null) return null;
+        return String(value, key, limit);
+    }
+}
+
+internal sealed class DesktopInstance
+{
+    internal string Version;
+    internal string InstanceId;
+    internal Uri Origin;
+
+    internal static DesktopInstance FromDescriptor(Dictionary<string, object> value)
+    {
+        if (DesktopJson.String(value, "app", 80) != DesktopApp.AppName) throw new InvalidDataException("服务类型不符。");
+        var url = DesktopJson.String(value, "url", 256);
+        Uri origin;
+        if (!Regex.IsMatch(url, @"^http://127\.0\.0\.1:[0-9]{1,5}/?$") || !Uri.TryCreate(url, UriKind.Absolute, out origin)
+            || origin.Port < 1 || origin.Port > 65535)
+            throw new InvalidDataException("服务地址不是受支持的本机地址。");
+        var instance = new DesktopInstance {
+            Version = DesktopJson.String(value, "version", 80),
+            InstanceId = DesktopJson.String(value, "instanceId", 80),
+            Origin = new Uri(origin.GetLeftPart(UriPartial.Authority) + "/")
+        };
+        Guid id;
+        if (!Guid.TryParse(instance.InstanceId, out id)) throw new InvalidDataException("本地服务标识无效。");
+        return instance;
+    }
+
+    internal bool Matches(Dictionary<string, object> value)
+    {
+        return DesktopJson.String(value, "app", 80) == DesktopApp.AppName
+            && DesktopJson.String(value, "version", 80) == Version
+            && DesktopJson.String(value, "instanceId", 80) == InstanceId;
+    }
+
+    internal bool SameAs(DesktopInstance other)
+    {
+        return other != null && other.Version == Version && other.InstanceId == InstanceId && other.Origin == Origin;
+    }
+}
+
+internal sealed class DesktopContext : ApplicationContext
+{
+    private readonly string runtimeRoot;
+    private readonly string launcher;
+    private readonly string directory;
+    private readonly string version;
+    private readonly DesktopWidget widget;
+    private readonly System.Windows.Forms.Timer timer;
+    private readonly CancellationTokenSource lifetime = new CancellationTokenSource();
+    private readonly HttpClient http;
+    private readonly RegisteredWaitHandle wake;
+    private readonly RegisteredWaitHandle openWake;
+    private DesktopInstance instance;
+    private DashboardWindow dashboard;
+    private bool refreshing;
+    private bool exiting;
+    private string unavailable = "正在连接本机服务…";
+
+    internal DesktopContext(string runtimeRoot, string launcher, string directory, string version, EventWaitHandle signal, EventWaitHandle openSignal, bool openMain)
+    {
+        this.runtimeRoot = runtimeRoot;
+        this.launcher = launcher;
+        this.directory = directory;
+        this.version = version;
+        http = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false, UseCookies = false, UseDefaultCredentials = false });
+        http.Timeout = TimeSpan.FromSeconds(3);
+        widget = new DesktopWidget(directory, OpenMain, ExitDesktop);
+        SetSnapshot("loading", "PilotMeter", "连接中", unavailable);
+        widget.ShowWidget();
+        wake = ThreadPool.RegisterWaitForSingleObject(signal, delegate {
+            if (exiting || widget.IsDisposed) return;
+            try { widget.BeginInvoke(new Action(delegate { if (!exiting) widget.ShowWidget(); })); }
+            catch (InvalidOperationException) { }
+        }, null, Timeout.Infinite, false);
+        openWake = ThreadPool.RegisterWaitForSingleObject(openSignal, delegate {
+            if (exiting || widget.IsDisposed) return;
+            try { widget.BeginInvoke(new Action(delegate { if (!exiting) OpenMain(); })); }
+            catch (InvalidOperationException) { }
+        }, null, Timeout.Infinite, false);
+        timer = new System.Windows.Forms.Timer { Interval = 5000 };
+        timer.Tick += async delegate { await RefreshAsync(false); };
+        timer.Start();
+        widget.BeginInvoke(new Action(async delegate {
+            await RefreshAsync(true);
+            if (openMain && !exiting) OpenMain();
+        }));
+    }
+
+    private void SetSnapshot(string state, string title, string value, string detail)
+    {
+        widget.ApplySnapshot(new WidgetSnapshot { State = state, Title = title, Value = value, Detail = detail, Percentage = null });
+    }
+
+    private async Task<Dictionary<string, object>> GetJsonAsync(Uri uri)
+    {
+        using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token))
+        {
+            timeout.CancelAfter(3000);
+            using (var response = await http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, timeout.Token))
+            using (timeout.Token.Register(response.Dispose))
+            {
+                if (response.StatusCode != HttpStatusCode.OK || (response.Content.Headers.ContentLength.HasValue && response.Content.Headers.ContentLength.Value > DesktopJson.MaxLength))
+                    throw new InvalidDataException("本机服务暂不可用。");
+                using (var input = await response.Content.ReadAsStreamAsync())
+                using (var output = new MemoryStream())
+                {
+                    var buffer = new byte[4096];
+                    int count;
+                    while ((count = await input.ReadAsync(buffer, 0, buffer.Length, timeout.Token)) > 0)
+                    {
+                        if (output.Length + count > DesktopJson.MaxLength) throw new InvalidDataException("本机服务响应过大。");
+                        output.Write(buffer, 0, count);
+                    }
+                    return DesktopJson.Parse(Encoding.UTF8.GetString(output.ToArray()));
+                }
+            }
+        }
+    }
+
+    private async Task<DesktopInstance> ProbeAsync()
+    {
+        try
+        {
+            // The file also contains CLI credentials. Only these three identity
+            // fields and the loopback URL leave this method; none enter the native account controls.
+            var candidate = DesktopInstance.FromDescriptor(DesktopJson.ReadFile(Path.Combine(directory, "instance.json")));
+            var health = await GetJsonAsync(new Uri(candidate.Origin, "health"));
+            return candidate.Matches(health) ? candidate : null;
+        }
+        catch (Exception error)
+        {
+            if (error is OutOfMemoryException || error is StackOverflowException) throw;
+            return null;
+        }
+    }
+
+    private async Task StartServiceAsync()
+    {
+        await Task.Run(delegate {
+            lifetime.Token.ThrowIfCancellationRequested();
+            var executable = Path.Combine(runtimeRoot, "runtime", "node.exe");
+            var start = new ProcessStartInfo {
+                FileName = executable,
+                Arguments = DesktopApp.Quote(Path.Combine(runtimeRoot, "app", "bin", "pilotmeter.js")) + " --data-dir " + DesktopApp.Quote(directory) + " start --background",
+                WorkingDirectory = directory,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            start.EnvironmentVariables["PILOTMETER_LAUNCHER_PATH"] = launcher;
+            // No redirected pipes are inherited by the detached daemon.
+            using (var child = Process.Start(start))
+            {
+                if (child == null) throw new IOException("本机服务未能启动。");
+                var elapsed = Stopwatch.StartNew();
+                while (!child.WaitForExit(100))
+                {
+                    if (lifetime.IsCancellationRequested || elapsed.ElapsedMilliseconds > 15000)
+                    {
+                        try { child.Kill(); } catch (InvalidOperationException) { }
+                        lifetime.Token.ThrowIfCancellationRequested();
+                        throw new IOException("本机服务启动超时。");
+                    }
+                }
+                if (child.ExitCode != 0) throw new IOException("本机服务启动失败。");
+            }
+        }, lifetime.Token);
+    }
+
+    private void Disconnect(string state, string message)
+    {
+        instance = null;
+        unavailable = message;
+        SetSnapshot(state, "PilotMeter", state == "loading" ? "连接中" : "未连接", message);
+        if (dashboard != null && !dashboard.IsDisposed) dashboard.SetService(null, message);
+    }
+
+    private async Task RefreshAsync(bool allowStart)
+    {
+        if (refreshing || exiting) return;
+        refreshing = true;
+        try
+        {
+            var candidate = await ProbeAsync();
+            if (exiting) return;
+            if (candidate == null && allowStart)
+            {
+                Disconnect("loading", "正在启动本机服务…");
+                await StartServiceAsync();
+                candidate = await ProbeAsync();
+            }
+            if (exiting) return;
+            if (candidate == null) { Disconnect("offline", "本机服务已断开。点击挂件打开主程序后重试。"); return; }
+            if (candidate.Version != version)
+            {
+                Disconnect("error", "其他版本的 PilotMeter 正在使用此数据目录。请先退出该版本的后台服务，再重试。");
+                return;
+            }
+            if (!candidate.SameAs(instance))
+            {
+                Disconnect("loading", "正在重新读取当前账号…");
+                instance = candidate;
+            }
+            var snapshot = await GetJsonAsync(new Uri(candidate.Origin, "api/widget"));
+            if (exiting) return;
+            if (!candidate.Matches(snapshot)) throw new InvalidDataException("本机服务已更换。");
+            var state = DesktopJson.String(snapshot, "state", 40);
+            if (!new HashSet<string>(new[] { "loading", "ready", "offline", "empty", "needs-login", "reauth", "stale", "waiting", "error" }).Contains(state))
+                throw new InvalidDataException("挂件状态无效。");
+            double? percentage = null;
+            object raw;
+            if (state == "ready" && snapshot.TryGetValue("percentage", out raw) && raw != null)
+            {
+                if (!(raw is decimal) && !(raw is double) && !(raw is int) && !(raw is long)) throw new InvalidDataException("额度比例无效。");
+                var number = Convert.ToDouble(raw, CultureInfo.InvariantCulture);
+                if (Double.IsNaN(number) || Double.IsInfinity(number) || number < 0 || number > 100) throw new InvalidDataException("额度比例无效。");
+                percentage = number;
+            }
+            widget.ApplySnapshot(new WidgetSnapshot {
+                State = state, Title = DesktopJson.String(snapshot, "title", 200),
+                Value = DesktopJson.String(snapshot, "value", 200), Detail = DesktopJson.String(snapshot, "detail", 1000),
+                AccountLogin = DesktopJson.OptionalString(snapshot, "accountLogin", 200),
+                UpdatedAt = DesktopJson.OptionalString(snapshot, "updatedAt", 80), Percentage = percentage
+            });
+            if (dashboard != null && !dashboard.IsDisposed) dashboard.SetService(candidate, null);
+        }
+        catch (OperationCanceledException) { if (!exiting) Disconnect("offline", "本机服务响应超时。点击挂件重试。"); }
+        catch (Exception error)
+        {
+            if (error is OutOfMemoryException || error is StackOverflowException) throw;
+            if (!exiting) Disconnect("offline", "无法读取本机服务。点击挂件打开主程序后重试。");
+        }
+        finally { refreshing = false; }
+    }
+
+    private void OpenMain()
+    {
+        if (exiting) return;
+        if (dashboard == null || dashboard.IsDisposed)
+        {
+            dashboard = new DashboardWindow(directory, async delegate { await RefreshAsync(true); });
+            Icon dashboardIcon = DesktopBrand.CreateIcon();
+            dashboard.Icon = dashboardIcon;
+            dashboard.Disposed += delegate { dashboardIcon.Dispose(); };
+            dashboard.SetService(instance, unavailable);
+        }
+        dashboard.Show();
+        if (dashboard.WindowState == FormWindowState.Minimized) dashboard.WindowState = FormWindowState.Normal;
+        dashboard.Activate();
+    }
+
+    private void ExitDesktop()
+    {
+        if (exiting) return;
+        exiting = true;
+        timer.Stop();
+        lifetime.Cancel();
+        if (dashboard != null) { dashboard.Dispose(); dashboard = null; }
+        widget.Dispose();
+        ExitThread();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            exiting = true;
+            lifetime.Cancel();
+            timer.Dispose();
+            wake.Unregister(null);
+            openWake.Unregister(null);
+            if (dashboard != null) dashboard.Dispose();
+            widget.Dispose();
+            http.Dispose();
+            // A pending startup worker may still inspect this cancellation token.
+            // Its source has no unmanaged wait handle and expires with the process.
+        }
+        base.Dispose(disposing);
+    }
+}

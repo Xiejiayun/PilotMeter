@@ -7,7 +7,8 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { fileURLToPath } from 'node:url';
 
 // Run with an existing EXE. All application state and fake Copilot files belong
-// to one temporary directory; neither npm nor the source checkout runs the app.
+// to one temporary directory; application behavior comes from the EXE. A
+// separate windowless contract check compiles the desktop boundary helpers.
 // On any failure, retain that directory and never kill a service by its name.
 const workspace = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const manifest = JSON.parse(await readFile(join(workspace, 'package.json'), 'utf8'));
@@ -25,6 +26,8 @@ assert.equal(process.platform, 'win32', 'The EXE smoke test must run on Windows.
 assert.ok((await stat(executable)).isFile(), `Build the Windows EXE first: ${executable}`);
 const artifact = await readFile(executable);
 assert.equal(artifact.subarray(0, 2).toString('ascii'), 'MZ', 'The artifact must be a Windows executable.');
+const peHeader = artifact.readUInt32LE(0x3c);
+assert.equal(artifact.readUInt16LE(peHeader + 24 + 68), 2, 'Double-click must use the Windows GUI subsystem, without allocating a console.');
 const artifactHash = createHash('sha256').update(artifact).digest('hex');
 const tempParent = await realpath(resolve(tmpdir()));
 const ownedRoot = await mkdtemp(join(tempParent, 'pilotmeter-exe-'));
@@ -85,9 +88,9 @@ function processAlive(pid) {
   catch (error) { if (error.code === 'ESRCH') return false; if (error.code === 'EPERM') return true; throw error; }
 }
 
-function run(command, args, { env = environment, input = '', expectedExit = 0, timeout = 60_000, cwd = exeDirectory } = {}) {
+function run(command, args, { env = environment, input = '', expectedExit = 0, timeout = 60_000, cwd = exeDirectory, detached = false } = {}) {
   return new Promise((resolveResult, reject) => {
-    const child = spawn(command, args, { cwd, env, windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(command, args, { cwd, env, detached, windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
     directChildren.add(child);
     const stdout = [], stderr = [];
     let outputBytes = 0, settled = false;
@@ -281,15 +284,36 @@ try {
   const notices = await readFile(join(cacheDirectory, 'THIRD-PARTY-NOTICES.txt'), 'utf8');
   assert.match(notices, /GitHub Copilot CLI 1\.0\.88/);
   assert.match(notices, /MIT license does not apply to the bundled Copilot CLI/);
+  const desktopRoot = join(cacheDirectory, 'desktop');
+  for (const name of ['PilotMeter.Desktop.exe', 'PilotMeter.Desktop.exe.config'])
+    assert.ok((await stat(join(desktopRoot, name))).isFile(), `Missing standalone desktop component: ${name}`);
+  assert.equal((await readdir(desktopRoot)).some(name => /webview/i.test(name)), false, 'The native main window must not package a WebView.');
   for (const dependency of Object.keys(cachedManifest.dependencies ?? {})) await access(join(appRoot, 'node_modules', dependency, 'package.json'));
   for (const dependency of Object.keys(cachedManifest.devDependencies ?? {})) assert.equal(await exists(join(appRoot, 'node_modules', dependency)), false, `Development dependency in production payload: ${dependency}`);
   const runtime = JSON.parse((await run(bundledNode, ['-p', 'JSON.stringify({version:process.version,arch:process.arch})'])).stdout);
   assert.deepEqual(runtime, { version: 'v24.14.0', arch: 'x64' });
   record('Concurrent first launches share one complete cache with x64 Node and production dependencies');
 
+  const desktopContracts = await run(process.execPath, [join(workspace, 'scripts', 'test-windows-desktop.mjs')], { env: process.env, cwd: workspace });
+  assert.match(desktopContracts.stdout, /Desktop contracts passed: \d+/);
+  record('Windowless native contracts verify Windows quoting, canonical paths, instance identity, and CSRF transport boundaries');
+
   beginStart(dataDir);
   const started = (await cli(dataDir, ['start', '--background'], { env: { ...environment, PILOTMETER_DATA_DIR: decoyData } })).stdout;
   const instance = await verifiedInstance(dataDir);
+  const widget = await jsonAt(instance, '/api/widget');
+  assert.equal(widget.app, 'pilotmeter');
+  assert.equal(widget.version, manifest.version);
+  assert.equal(widget.instanceId, instance.instanceId);
+  assert.equal(widget.state, 'needs-login');
+  assert.equal(widget.percentage, null);
+  assert.equal(widget.accountLogin, null);
+  const desktop = await jsonAt(instance, '/api/desktop');
+  assert.equal(desktop.instanceId, instance.instanceId);
+  assert.equal(desktop.presentation.primary, null);
+  assert.deepEqual(desktop.presentation.buckets, []);
+  assert.equal('runCommand' in desktop, false);
+  record('GUI launcher packages a native main window; widget and desktop APIs bind unknown login state to the verified daemon');
   assert.ok(started.includes(instance.url));
   assert.equal(await exists(decoyData), false);
   await cli(dataDir, ['start', '--background']);
@@ -430,11 +454,30 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 internal static class NativeCopilot {
+  [DllImport("kernel32.dll", SetLastError = true)] private static extern bool AttachConsole(uint processId);
+  [DllImport("kernel32.dll")] private static extern bool FreeConsole();
+  [DllImport("kernel32.dll")] private static extern IntPtr GetConsoleWindow();
+  [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
   private static string Encode(string value) { return Convert.ToBase64String(Encoding.UTF8.GetBytes(value ?? "")); }
   public static int Main(string[] args) {
+    if (args.Length == 3 && args[0] == "--probe-console-of") {
+      // CREATE_NO_WINDOW can retain a console association without a window.
+      // Inspect the target's window, after detaching the probe's own console.
+      FreeConsole();
+      var attached = AttachConsole(UInt32.Parse(args[1], CultureInfo.InvariantCulture));
+      var consoleError = attached ? 0 : Marshal.GetLastWin32Error();
+      var window = attached ? GetConsoleWindow() : IntPtr.Zero;
+      var result = attached
+        ? (window == IntPtr.Zero ? "console:no-window" : (IsWindowVisible(window) ? "console:visible-window" : "console:hidden-window"))
+        : "no-console:" + consoleError.ToString(CultureInfo.InvariantCulture);
+      if (attached) FreeConsole();
+      File.WriteAllText(args[2], result);
+      return 0;
+    }
     Console.InputEncoding = new UTF8Encoding(false);
     Console.OutputEncoding = new UTF8Encoding(false);
     if (args.Length == 1 && args[0] == "--version") { Console.WriteLine("1.0.88"); return 0; }
@@ -458,6 +501,25 @@ internal static class NativeCopilot {
 `);
   const compiler = join(systemRoot, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
   await run(compiler, ['/nologo', '/target:exe', '/platform:x64', '/optimize+', '/codepage:65001', `/out:${nativeFake}`, nativeSource]);
+  const consoleCapture = join(fakeDir, 'node-console.txt');
+  await writeFile(join(fakeDir, 'probe-console.cjs'), `const { spawnSync } = require('node:child_process');
+for (const [kind, pid] of [['launcher', process.ppid], ['node', process.pid]]) {
+  const probe = spawnSync(process.env.PILOTMETER_TEST_CONSOLE_RECEIVER,
+    ['--probe-console-of', String(pid), process.env.PILOTMETER_TEST_CONSOLE_CAPTURE + '.' + kind],
+    { windowsHide: true, stdio: 'ignore', timeout: 10000 });
+  if (probe.error || probe.status !== 0) throw new Error('Packaged Node console probe failed.');
+}
+`);
+  // On Windows DETACHED_PROCESS removes any inherited (including hidden) console.
+  // Redirecting stdout alone does not establish the no-console parent scenario.
+  const headlessVersion = await cli(null, ['--version'], { cwd: fakeDir, detached: true, env: { ...environment,
+    NODE_OPTIONS: '--require=./probe-console.cjs', PILOTMETER_TEST_CONSOLE_RECEIVER: nativeFake,
+    PILOTMETER_TEST_CONSOLE_CAPTURE: consoleCapture } });
+  assert.equal(headlessVersion.stdout.trim(), manifest.version);
+  assert.equal(await readFile(`${consoleCapture}.launcher`, 'utf8'), 'no-console:6', 'The detached fixture must give the GUI launcher no inherited console.');
+  assert.ok(['no-console:6', 'console:no-window', 'console:hidden-window'].includes(await readFile(`${consoleCapture}.node`, 'utf8')),
+    'Redirected GUI launcher must start its bundled Node without a visible console window.');
+  record('Redirected GUI launcher without an inherited console starts bundled Node without a visible console window');
   const nativeEnvironment = { ...environment, PILOTMETER_COPILOT_BIN: nativeFake, PILOTMETER_TEST_CAPTURE: nativeCapture,
     PILOTMETER_TEST_SENTINEL: 'must-stay-literal' };
   const nativeArguments = [...argumentsToForward, 'embedded\\\\"quote', '\\"', 'ends in two backslashes\\\\'];
@@ -536,13 +598,12 @@ internal static class NativeCopilot {
   await stopThroughExe(dataDir);
   record('Graceful CLI stop and restart preserve the exact ledger and settings');
 
-  // Existing remote-terminal behavior avoids a real browser launch. Actual
-  // local double-click/browser acceptance remains a separate manual check.
+  // Native desktop interaction is separately exercised in an interactive
+  // session. The headless CLI remains available without creating any windows.
   beginStart(defaultData);
-  const defaultLaunch = await cli(null, [], { env: { ...environment, SSH_CONNECTION: '127.0.0.1 12345 127.0.0.1 22' } });
+  const defaultLaunch = await cli(null, ['start', '--background']);
   const defaultInstance = await verifiedInstance(defaultData);
   assert.ok(defaultLaunch.stdout.includes(defaultInstance.url));
-  assert.match(defaultLaunch.stdout, /远程环境/);
   const defaultStatus = JSON.parse((await cli(null, ['status', '--json'])).stdout);
   assert.equal(defaultStatus.demo, false);
   assert.equal(defaultStatus.local.nanoAiu, null);
@@ -552,7 +613,7 @@ internal static class NativeCopilot {
   assert.deepEqual(await readdir(exeDirectory), [basename(copiedExe)], 'The application must not depend on neighboring extracted files.');
   assert.deepEqual((await readdir(cacheRoot, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => entry.name), cacheNames);
   assert.deepEqual(await readJson(join(copilotHome, 'settings.json')), originalSettings, 'The test-owned Copilot settings must be restored.');
-  record('No-argument launch uses isolated LOCALAPPDATA and existing remote browser behavior; extracted cache is reused');
+  record('Explicit headless start uses isolated LOCALAPPDATA; extracted cache is reused without opening desktop windows');
 
   for (const state of services.values()) assert.equal(state.stopped, true);
   const cacheVictim = join(appRoot, 'bin', 'pilotmeter.js');
@@ -586,7 +647,7 @@ internal static class NativeCopilot {
 const report = { package: `${manifest.name}@${manifest.version}`, artifact: executable, artifactSha256: artifactHash,
   artifactBytes: artifact.length, platform: process.platform, bundledNode: 'v24.14.0 / x64', bundledCopilot: '1.0.88 / win32-x64', checks,
   cmdShimLimitation,
-  browserAcceptance: 'Only the bundled Copilot version command ran; no login, model session, or browser was launched. Default arguments use the existing SSH remote path when that check is reached.',
+  browserAcceptance: 'Only the bundled Copilot version command ran; no login, model session, browser, or desktop window was launched. Widget and native window interactions require separate interactive acceptance.',
   ...(failure ? { retainedDirectory: ownedRoot, failure: String(failure.stack || failure), uncertainChildPids: [...uncertainChildren] } : { result: 'passed' }) };
 if (failure) {
   if (failure instanceof AggregateError) report.causes = failure.errors.map(error => String(error.stack || error));

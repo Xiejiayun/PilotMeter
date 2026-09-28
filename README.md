@@ -1,29 +1,33 @@
 # PilotMeter
 
-GitHub Copilot CLI 本地用量监控工具：独立终端状态提示、可选原生状态栏，以及按会话查看消耗的浏览器页面。Node.js + SQLite，无独立云服务，无 Electron。
+GitHub Copilot CLI 本地用量监控工具：Windows 桌面挂件与独立主窗口、终端状态提示和可选原生状态栏。Node.js + SQLite，无独立云服务，无 Electron。
 
-**当前为 `0.1.0-preview.6` 预览版，尚未公开发布 npm。** 支持多账号登录和读取当前用户的 Copilot 额度。本机采集默认保存原始 nano AIU，组织账单对账仍需核验；真实订阅、`/usage` 和官方页面对账是独立发布门槛，合成测试不能替代。
+**当前为 `0.1.0-preview.7` 预览版，尚未公开发布 npm。** 支持多账号登录和读取当前用户的 Copilot 额度。本机采集默认保存原始 nano AIU，组织账单对账仍需核验；真实订阅、`/usage` 和官方页面对账是独立发布门槛，合成测试不能替代。
 
 ## 安装与开始使用
 
-内置官方 Copilot CLI 1.0.88；打开页面点击“登录 GitHub”，按提示在 GitHub 输入设备码并确认账号。可继续添加个人或工作账号，通过账号选择器切换。采集分类和状态栏配置当前仅验证 `1.0.88` 规则，其他版本保持待分类。
+内置官方 Copilot CLI 1.0.88；在 Windows 主窗口或可选网页点击“登录 GitHub”，按提示在 GitHub 输入设备码并确认账号。可继续添加个人或工作账号，通过账号选择器切换。采集分类和状态栏配置当前仅验证 `1.0.88` 规则，其他版本保持待分类。
 
 ### Windows 单 EXE
 
-Windows 10/11 x64 可使用 [Releases](https://github.com/Xiejiayun/PilotMeter/releases) 中的 `PilotMeter-0.1.0-preview.6-win-x64.exe`，无需安装 Node.js 或 npm。启动器使用 Windows 自带的 .NET Framework 4.x，无需安装额外 .NET，不要求管理员权限，也不修改 PATH。
+Windows 10/11 x64 使用单文件 `PilotMeter-0.1.0-preview.7-win-x64.exe`，无需安装 Node.js 或 npm；已发布产物见 [Releases](https://github.com/Xiejiayun/PilotMeter/releases)，源码构建方式见 [Windows EXE 指南](docs/windows-exe.md)。挂件和独立主窗口都使用原生 WinForms 控件，需要 .NET Framework 4.8；没有内嵌网页或 WebView 依赖。不要求管理员权限，不修改 PATH。
 
-双击 EXE 会启动后台服务并打开本地页面，等同于 `start --background --open`。在 PowerShell 中也能使用完整命令：
+双击 EXE 先显示可拖动的小挂件，不打开浏览器或命令行窗口。点击挂件打开独立主窗口，关闭主窗口后挂件仍保留；右键可隐藏到托盘、调整置顶或退出桌面界面。重复双击会唤回同一数据目录的挂件。退出桌面界面不停止采集服务，停止服务仍使用 `stop`。在 PowerShell 中也能使用完整命令：
 
 ```powershell
-.\PilotMeter-0.1.0-preview.6-win-x64.exe doctor
-.\PilotMeter-0.1.0-preview.6-win-x64.exe run -- --no-auto-update
+.\PilotMeter-0.1.0-preview.7-win-x64.exe doctor
+.\PilotMeter-0.1.0-preview.7-win-x64.exe desktop
+.\PilotMeter-0.1.0-preview.7-win-x64.exe desktop --open
+Start-Process .\PilotMeter-0.1.0-preview.7-win-x64.exe -ArgumentList 'run -- --no-auto-update' -NoNewWindow -Wait
 
 # 另一个终端或分屏
-.\PilotMeter-0.1.0-preview.6-win-x64.exe watch
-.\PilotMeter-0.1.0-preview.6-win-x64.exe stop
+Start-Process .\PilotMeter-0.1.0-preview.7-win-x64.exe -ArgumentList 'watch' -NoNewWindow -Wait
+.\PilotMeter-0.1.0-preview.7-win-x64.exe stop
 ```
 
-首次运行会将内嵌 Node、Copilot CLI 和应用解压到 `%LOCALAPPDATA%\PilotMeter\runtime\<版本>-<载荷哈希前16位>`，账本仍保存在 `%LOCALAPPDATA%\PilotMeter`。升级前先 `stop`；已配置的 statusline 引用此稳定缓存，不能随意删除。下载校验、缓存与源码构建说明见 [Windows EXE 指南](https://github.com/Xiejiayun/PilotMeter/blob/main/docs/windows-exe.md)。
+`desktop --open` 直接打开主窗口。EXE 使用 GUI 子系统，交互式 PowerShell 可能立即返回提示符；`run` 和 `watch` 使用上方 `Start-Process -NoNewWindow -Wait` 保持终端输入归属。主窗口的账号菜单提供重新登录和移除，设备码窗口支持取消与过期重试。
+
+首次运行会将内嵌 Node、Copilot CLI 和应用解压到 `%LOCALAPPDATA%\PilotMeter\runtime\<版本>-<载荷哈希前16位>`，账本仍保存在 `%LOCALAPPDATA%\PilotMeter`。升级前先在旧挂件菜单中退出，再用旧版执行 `stop`；已配置的 statusline 引用此稳定缓存，不能随意删除。下载校验、缓存与源码构建说明见 [Windows EXE 指南](https://github.com/Xiejiayun/PilotMeter/blob/main/docs/windows-exe.md)。
 
 ### npm 安装
 
@@ -33,7 +37,7 @@ npm 方式需要 Node.js **24.14+**。当前尚未公开发布 npm，可从源�
 npm ci
 npm test
 npm pack
-npm install -g ./pilotmeter-0.1.0-preview.6.tgz
+npm install -g ./pilotmeter-0.1.0-preview.7.tgz
 
 pilotmeter doctor
 pilotmeter run -- --no-auto-update
@@ -85,7 +89,7 @@ Windows npm 全局安装目录不要包含 `&`：npm 11.9.0 自身生成的 `.cm
 
 ## 官方额度与预算
 
-页面顶部显示所选 GitHub 用户的当前周期 Copilot 额度，直接读取官方 CLI 的只读账号接口。官方返回百分比时可展示比例；未明确返回计量单位时显示“单位未确认”，不根据字段名推断 AI Credits。个人额度不等于组织共享账单，不随下方历史月份选择变化。
+原生主窗口和可选网页显示所选 GitHub 用户的当前周期 Copilot 额度，直接读取官方 CLI 的只读账号接口。默认突出“高级请求”类别，聊天、代码补全等放入“其他额度”；没有高级请求时，只有唯一有限类别可以成为默认主指标，多个有限类别需明确选择，不合并数量或比例。类别名不代表计量单位：单位未确认时隐藏原始数量，只展示上游明确返回的比例或额度状态；过去的重置日期不显示为下次重置。个人额度不等于组织共享账单，也不随网页的历史月份选择变化。
 
 下方本机记录与账单核验保留三种显示模式：
 
@@ -135,7 +139,9 @@ npm run build:windows
 npm run test:windows
 ```
 
-EXE 双击会启动服务并打开页面；npm 安装后通过命令启动。两种方式都包含官方 Copilot CLI，启动页面不会自动登录。测试和 demo 使用独立目录；真实状态栏修改只在显式 `init --statusline` 时进行，已有自定义状态栏需查看变更方案后用 `--replace`。
+EXE 双击会启动服务并显示挂件，点击才打开主窗口；npm 安装后通过命令启动。两种方式都包含官方 Copilot CLI，启动不会自动登录。GitHub 设备授权链接在系统浏览器打开。测试和 demo 使用独立目录；真实状态栏修改只在显式 `init --statusline` 时进行，已有自定义状态栏需查看变更方案后用 `--replace`。
+
+已连接并读取一个真实账号的个人额度快照；官方页面比对、两个真实账号的完整切换、会话对账和原生窗口交互验收仍未完成。当前测试结果与桌面自动化受阻情况见[兼容性记录](docs/compatibility.md)。
 
 [实施方案](https://github.com/Xiejiayun/PilotMeter/blob/main/docs/implementation-plan.md) · [分阶段进展](https://github.com/Xiejiayun/PilotMeter/blob/main/docs/progress.md) · [兼容性和剩余门槛](docs/compatibility.md) · [验证指南](docs/validation-guide.md) · [安装验收](docs/npm-package-contents.md)
 

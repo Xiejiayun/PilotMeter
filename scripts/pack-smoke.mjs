@@ -177,7 +177,7 @@ try {
   assert.equal(`sha512-${createHash('sha512').update(archive).digest('base64')}`, packed.integrity);
   const packageFiles = packed.files.map(file => file.path);
   for (const file of packageFiles) {
-    assert.ok(/^(?:package\.json|README\.md|LICENSE|docs\/(?:compatibility|validation-guide|npm-package-contents|windows-exe)\.md|bin\/pilotmeter\.js|dist\/.+\.(?:js|d\.ts|js\.map)|public\/index\.html|public\/assets\/[A-Za-z0-9_.-]+\.(?:js|css))$/.test(file), `Unexpected archive member: ${file}`);
+    assert.ok(/^(?:package\.json|README\.md|LICENSE|docs\/(?:compatibility|validation-guide|npm-package-contents|windows-exe)\.md|bin\/pilotmeter\.js|dist\/.+\.(?:js|d\.ts|js\.map)|public\/index\.html|public\/assets\/[A-Za-z0-9_.-]+\.(?:js|css|svg|ico))$/.test(file), `Unexpected archive member: ${file}`);
     assert.ok(!/(?:^|\/)(?:\.env(?:\.|$)|test(?:s)?|fixtures|node_modules|\.git|\.npmrc|[^/]*(?:credentials|secrets)[^/]*)(?:\/|$)|\.(?:db|sqlite|log)(?:[.-]|$)/i.test(file), `Private/development file in archive: ${file}`);
   }
   for (const required of ['package.json', 'bin/pilotmeter.js', 'dist/cli/main.js', 'dist/daemon/server.js', 'public/index.html', 'README.md', 'LICENSE', 'docs/compatibility.md', 'docs/validation-guide.md', 'docs/npm-package-contents.md', 'docs/windows-exe.md']) assert.ok(packageFiles.includes(required), `Missing package file: ${required}`);
@@ -209,7 +209,8 @@ try {
   const doctor = JSON.parse((await cli(dataDir, ['doctor'])).stdout);
   assert.equal(doctor.platform, process.platform);
   assert.equal(doctor.node, process.version);
-  assert.match(doctor.copilot, /^GitHub Copilot CLI 1\.0\.88\./, 'The installed platform must include the pinned native Copilot runtime.');
+  assert.match(doctor.copilot, /^GitHub Copilot CLI 1\.0\.88\./,
+    `The installed platform must include the pinned native Copilot runtime. Probe: ${JSON.stringify(doctor.copilotProbe)}`);
   assert.equal(doctor.service, 'stopped');
   assert.equal(doctor.officialQuota, 'unverified');
   assert.equal(await exists(dataDir), false, 'Read-only help/doctor must not create runtime data');

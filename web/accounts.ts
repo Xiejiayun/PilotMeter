@@ -1,4 +1,5 @@
 import type { AccountLogin, AccountsOverview, GitHubProfile } from '../src/shared/accounts';
+import { projectPersonalQuota, type PersonalQuotaBucketView } from '../src/domain/personal-quota';
 
 type AccountUI = {
   api: <T>(path: string) => Promise<T>;
@@ -9,12 +10,6 @@ type AccountUI = {
 const element = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
 const text = (id: string, value: string): void => { element(id).textContent = value; };
 const message = (error: unknown): string => error instanceof Error ? error.message : '请求失败';
-function decimal(value: string | null): string {
-  if (value === null || !/^\d+(?:\.\d+)?$/.test(value)) return '—';
-  const [integer = '0', fraction = ''] = value.split('.');
-  const rest = fraction.replace(/0+$/, '');
-  return integer.replace(/^0+(?=\d)/, '').replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (rest ? `.${rest}` : '');
-}
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, content?: string): HTMLElementTagNameMap[K] {
   const result = document.createElement(tag);
   result.className = className;
@@ -41,6 +36,8 @@ export function initializeAccounts(options: AccountUI): { load: () => Promise<Ac
   let retryAccountId: string | undefined;
   let pollTimer: number | undefined;
   let removeAccount: GitHubProfile | null = null;
+  const quotaChoices = new Map<string, string>();
+  const expandedQuota = new Set<string>();
   const loginDialog = element<HTMLDialogElement>('github-login-dialog');
   const removeDialog = element<HTMLDialogElement>('github-remove-dialog');
   const select = element<HTMLSelectElement>('github-select');
@@ -54,6 +51,76 @@ export function initializeAccounts(options: AccountUI): { load: () => Promise<Ac
     select.disabled = !enabled;
     for (const id of ['github-refresh', 'github-reauth', 'github-remove']) element<HTMLButtonElement>(id).disabled = !enabled || !activeProfile();
     element('github-accounts').setAttribute('aria-busy', String(busy));
+  }
+
+  function quotaCard(bucket: PersonalQuotaBucketView, primary = false): HTMLElement {
+    const card = node('article', `quota-bucket${primary ? ' quota-primary' : ''}`);
+    card.dataset.quotaKey = bucket.key;
+    card.append(node('h4', '', bucket.label), node('p', 'quota-value', bucket.value));
+    if (bucket.value.endsWith('%')) card.append(node('p', 'quota-caption', '当前周期已用'));
+    if (bucket.percentage !== null) {
+      const progress = node('progress', 'quota-progress');
+      progress.max = 100; progress.value = bucket.percentage;
+      progress.setAttribute('aria-label', `${bucket.label}已用比例`);
+      card.append(progress);
+    }
+    if (bucket.unit !== 'unspecified') card.append(node('p', 'quota-amount', bucket.detail));
+    else if (!bucket.unlimited && !bucket.value.endsWith('%')) card.append(node('p', 'quota-amount', '数量单位未确认'));
+    if (bucket.nextResetAt) card.append(node('p', 'small muted', `下次重置 ${time(bucket.nextResetAt)}`));
+    return card;
+  }
+
+  function renderQuota(profile: GitHubProfile | undefined): void {
+    if (!overview) return;
+    element('personal-quota').hidden = !profile;
+    const container = element('quota-buckets');
+    const restoreFocus = document.activeElement?.id === 'quota-category';
+    const restoreOtherFocus = document.activeElement?.matches('.quota-other > summary');
+    container.replaceChildren();
+    if (!profile) return;
+    const quota = profile.status !== 'reauth-required' && overview.quota?.accountId === profile.id
+      && overview.quota.scope === 'signed-in-user' ? overview.quota : null;
+    const personal = projectPersonalQuota(quota, Date.now(), quotaChoices.get(profile.id));
+    const status = profile.status === 'reauth-required' ? '登录已失效，请重新登录后同步额度。'
+      : quota?.state === 'error' || quota?.error || profile.status === 'error' ? '同步失败；请重试。'
+        : overview.refreshing ? '正在同步…' : personal.stale && personal.buckets.length ? '待同步'
+          : personal.buckets.length ? '已同步' : '尚未取得此账号的 Copilot 额度；用量未知，不代表零消耗。';
+    text('quota-status', `${personal.stale && personal.buckets.length ? '旧快照 · ' : ''}${status}${personal.fetchedAt ? ` · ${time(personal.fetchedAt)}` : ''}`);
+    if (personal.selection === 'required' || personal.selection === 'explicit') {
+      const field = node('label', 'quota-choice', '查看额度类别');
+      const choice = node('select', ''); choice.id = 'quota-category';
+      const placeholder = node('option', '', '选择一个类别'); placeholder.value = '';
+      choice.append(placeholder);
+      for (const bucket of personal.buckets) {
+        const option = node('option', '', bucket.label); option.value = bucket.key; choice.append(option);
+      }
+      choice.value = personal.selection === 'explicit' ? personal.primary!.key : '';
+      choice.addEventListener('change', () => {
+        if (choice.value) quotaChoices.set(profile.id, choice.value); else quotaChoices.delete(profile.id);
+        renderQuota(profile);
+      });
+      field.append(choice); container.append(field);
+      if (personal.selection === 'required') container.append(node('p', 'small muted', '这些额度类别独立计算，请选择查看；不合并数量或比例。'));
+    }
+    if (personal.primary) container.append(quotaCard(personal.primary, true));
+    const others = personal.buckets.filter(bucket => bucket !== personal.primary);
+    if (others.length) {
+      const list = node('div', 'quota-secondary-list');
+      for (const bucket of others) list.append(quotaCard(bucket));
+      if (personal.primary || personal.selection === 'none') {
+        const details = node('details', 'quota-other');
+        details.open = expandedQuota.has(profile.id);
+        details.append(node('summary', '', '其他额度'), list);
+        details.addEventListener('toggle', () => {
+          if (!details.isConnected) return;
+          if (details.open) expandedQuota.add(profile.id); else expandedQuota.delete(profile.id);
+        });
+        if (!personal.primary) container.append(node('p', 'quota-unlimited-summary', '各类别无固定上限'));
+        container.append(details);
+      } else container.append(list);
+    }
+    if (restoreFocus) element<HTMLSelectElement>('quota-category')?.focus();
+    else if (restoreOtherFocus) container.querySelector<HTMLElement>('.quota-other > summary')?.focus();
   }
 
   function render(): void {
@@ -77,26 +144,7 @@ export function initializeAccounts(options: AccountUI): { load: () => Promise<Ac
     element<HTMLButtonElement>('copy-run-command').disabled = !overview.enabled;
     if (!overview.enabled) text('github-feedback', '演示模式使用虚构数据，账号登录已停用。请在真实服务中连接账号。');
     else if (!busy) text('github-feedback', '');
-    element('personal-quota').hidden = !profile;
-    const quota = overview.quota?.accountId === profile?.id ? overview.quota : null;
-    const buckets = element('quota-buckets');
-    buckets.replaceChildren();
-    if (profile) {
-      const status = profile.status === 'reauth-required' ? '登录已失效，请重新登录后同步额度。' : quota?.error ? `额度读取未完成：${quota.error.message}` : quota?.state === 'available' ? '已从 Copilot 读取当前账号额度。' : '尚未取得此账号的 Copilot 额度；用量未知，不代表零消耗。';
-      text('quota-status', `${quota?.stale ? '旧快照 · ' : ''}${overview.refreshing ? '正在同步… ' : ''}${status}${quota?.fetchedAt ? ` 上次同步 ${time(quota.fetchedAt)}。` : ''}`);
-      for (const bucket of quota?.buckets ?? []) {
-        const card = node('article', 'quota-bucket');
-        const unit = bucket.unit === 'ai-credits' ? 'AI Credits' : bucket.unit === 'premium-requests' ? 'Premium Requests' : '接口计量（单位未说明）';
-        card.append(node('h4', '', bucket.label));
-        const amount = bucket.unlimited ? '无固定上限' : bucket.usedPercentage !== null ? `已用 ${decimal(bucket.usedPercentage)}%` : bucket.remainingPercentage !== null ? `剩余 ${decimal(bucket.remainingPercentage)}%` : '用量未知';
-        card.append(node('p', 'quota-value', amount));
-        if (bucket.used !== null || bucket.limit !== null) card.append(node('p', 'quota-amount', `${bucket.used === null ? '已用未知' : `已用 ${decimal(bucket.used)}`}${bucket.limit === null ? '' : ` / ${decimal(bucket.limit)}`} ${unit}`));
-        else card.append(node('p', 'quota-amount', unit));
-        if (bucket.usedPercentage !== null && bucket.remainingPercentage !== null) card.append(node('p', 'small muted', `剩余 ${decimal(bucket.remainingPercentage)}%`));
-        if (bucket.resetAt) card.append(node('p', 'small muted', `重置时间 ${time(bucket.resetAt)}`));
-        buckets.append(card);
-      }
-    }
+    renderQuota(profile);
     controls();
   }
 

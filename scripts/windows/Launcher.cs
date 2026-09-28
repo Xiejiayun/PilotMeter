@@ -5,9 +5,11 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
+using System.Windows.Forms;
 
 [assembly: AssemblyTitle("PilotMeter")]
 [assembly: AssemblyDescription("Local Copilot CLI usage meter")]
@@ -174,36 +176,79 @@ internal static class Launcher
         return output.ToString();
     }
 
-    private static void KeepErrorVisible(string[] args)
+    [DllImport("kernel32.dll")] private static extern bool AttachConsole(uint processId);
+    [DllImport("kernel32.dll")] private static extern bool AllocConsole();
+    [DllImport("kernel32.dll")] private static extern IntPtr GetStdHandle(int number);
+
+    private static void PrepareConsole()
     {
-        if (args.Length == 0 && Environment.UserInteractive && !Console.IsInputRedirected)
-        {
-            Console.Error.WriteLine("Press any key to close.");
-            Console.ReadKey(true);
-        }
+        // Preserve redirected pipes. A GUI-subsystem executable only attaches a
+        // terminal when invoked as a CLI without inherited standard output.
+        var output = GetStdHandle(-11);
+        if (output == IntPtr.Zero || output == new IntPtr(-1))
+            if (!AttachConsole(0xffffffff)) AllocConsole();
     }
 
+    private static bool DesktopArguments(string[] args, out string directory, out bool openMain)
+    {
+        directory = null;
+        openMain = false;
+        var offset = 0;
+        if (args.Length >= 2 && args[0] == "--data-dir") { directory = args[1]; offset = 2; }
+        if (args.Length != offset)
+        {
+            if (args[offset] != "desktop") return false;
+            if (args.Length == offset + 2 && args[offset + 1] == "--open") openMain = true;
+            else if (args.Length != offset + 1) return false;
+        }
+        if (String.IsNullOrEmpty(directory)) directory = Environment.GetEnvironmentVariable("PILOTMETER_DATA_DIR");
+        if (String.IsNullOrEmpty(directory))
+        {
+            var local = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+            if (String.IsNullOrEmpty(local)) local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            directory = Path.Combine(local, "PilotMeter");
+        }
+        directory = Path.GetFullPath(directory);
+        return true;
+    }
+
+    [STAThread]
     public static int Main(string[] args)
     {
+        var desktop = args.Length == 0;
         try
         {
+            string directory;
+            bool openMain;
+            desktop = DesktopArguments(args, out directory, out openMain);
+            if (!desktop) PrepareConsole();
             if (!Environment.Is64BitOperatingSystem)
                 throw new PlatformNotSupportedException("This PilotMeter build requires 64-bit Windows.");
             var root = PrepareRuntime();
+            var launcher = Assembly.GetExecutingAssembly().Location;
+            if (desktop)
+            {
+                // ShellExecute starts an independent GUI process without passing
+                // the launcher's redirected standard-stream handles to it.
+                using (var child = Process.Start(new ProcessStartInfo {
+                    FileName = Path.Combine(root, "desktop", "PilotMeter.Desktop.exe"),
+                    Arguments = "--runtime-root " + Quote(root) + " --launcher " + Quote(launcher) + " --data-dir " + Quote(directory) + (openMain ? " --open-main" : ""),
+                    WorkingDirectory = Environment.CurrentDirectory, UseShellExecute = true,
+                    WindowStyle = ProcessWindowStyle.Normal
+                })) { if (child == null) throw new IOException("The desktop widget could not start."); }
+                return 0;
+            }
             var command = new StringBuilder(Quote(Path.Combine(root, "app", "bin", "pilotmeter.js")));
-            var forwarded = args.Length == 0 ? new[] { "start", "--background", "--open" } : args;
-            foreach (var argument in forwarded) command.Append(" ").Append(Quote(argument));
+            foreach (var argument in args) command.Append(" ").Append(Quote(argument));
             var executable = Path.Combine(root, "runtime", "node.exe");
-            Environment.SetEnvironmentVariable("PILOTMETER_LAUNCHER_PATH", Assembly.GetExecutingAssembly().Location);
+            Environment.SetEnvironmentVariable("PILOTMETER_LAUNCHER_PATH", launcher);
             Console.CancelKeyPress += delegate(object sender, ConsoleCancelEventArgs e) { e.Cancel = true; };
-            var exitCode = NativeChild.Run(executable, Quote(executable) + " " + command, Environment.CurrentDirectory);
-            if (exitCode != 0) KeepErrorVisible(args);
-            return exitCode;
+            return NativeChild.Run(executable, Quote(executable) + " " + command, Environment.CurrentDirectory);
         }
         catch (Exception error)
         {
-            Console.Error.WriteLine("PilotMeter: " + error.Message);
-            KeepErrorVisible(args);
+            if (desktop) MessageBox.Show(error.Message, "PilotMeter 无法启动", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            else Console.Error.WriteLine("PilotMeter: " + error.Message);
             return 1;
         }
     }

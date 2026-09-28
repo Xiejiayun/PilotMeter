@@ -18,6 +18,9 @@ import { seedDemo } from './demo.js';
 import { inspectReconciliation, reconciliationReport, verifyReconciliationEvidence } from '../domain/reconciliation-evidence.js';
 import { AccountsManager, AccountError, type AccountsOptions } from '../providers/accounts.js';
 import { CopilotClientError } from '../providers/copilot-client.js';
+import { buildWidget } from '../domain/widget.js';
+import { projectPersonalQuota } from '../domain/personal-quota.js';
+import type { WidgetResponse } from '../shared/widget.js';
 
 class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 const defaultSettings: Settings = { monthlyBudget: null, unitVerification: null, account: null, retentionDays: null, demo: false };
@@ -116,6 +119,7 @@ export async function serve(dir: string, demo = false, options: { accounts?: Pic
       if (closing) throw new HttpError(503, 'Service is stopping.');
       if (req.headers.host !== new URL(instance.url).host) throw new HttpError(403, 'Invalid Host.');
       if (req.headers.origin && req.headers.origin !== instance.url) throw new HttpError(403, 'Cross-origin access is forbidden.');
+      if (req.headers['x-pilotmeter-instance'] !== undefined && !equal(req.headers['x-pilotmeter-instance'] as string, instance.instanceId)) throw new HttpError(409, '本机服务已更换，请重新连接。');
       const url = new URL(req.url || '/', instance.url);
       const route = url.pathname;
       const requestProfile = accounts.active();
@@ -184,6 +188,22 @@ export async function serve(dir: string, demo = false, options: { accounts?: Pic
         throw new HttpError(404, '账号接口不存在。');
       }
       if (req.method === 'GET' && route === '/api/summary') { json(res, 200, summary(month(url.searchParams.get('period') || undefined))); return; }
+      if (req.method === 'GET' && route === '/api/desktop') {
+        const overview = accounts.overview(!settings.demo);
+        const profile = overview.accounts.find(item => item.id === overview.activeAccountId);
+        const quota = profile && profile.status !== 'reauth-required' && overview.quota?.accountId === profile.id ? overview.quota : null;
+        json(res, 200, { app: APP, version: VERSION, instanceId: instance.instanceId,
+          accounts: overview.accounts, activeAccountId: overview.activeAccountId, login: overview.login,
+          enabled: overview.enabled, refreshing: overview.refreshing,
+          quota: quota ? { accountId: quota.accountId, state: quota.state, fetchedAt: quota.fetchedAt, stale: quota.stale, error: quota.error } : null,
+          presentation: projectPersonalQuota(quota, Date.now(), url.searchParams.get('quotaKey')) });
+        return;
+      }
+      if (req.method === 'GET' && route === '/api/widget') {
+        const widget: WidgetResponse = { app: APP, version: VERSION, instanceId: instance.instanceId,
+          ...buildWidget(summary(), accounts.overview(!settings.demo)) };
+        json(res, 200, widget); return;
+      }
       if (req.method === 'GET' && route === '/api/sessions') { json(res, 200, { ...repo.sessions(month(url.searchParams.get('period') || undefined), { cursor: url.searchParams.get('cursor') || undefined, sort: url.searchParams.get('sort') || 'usage', limit: 50, scope: scope() }), accountId: accounts.active()?.id ?? null }); return; }
       if (req.method === 'GET' && route.startsWith('/api/sessions/')) { const result = repo.session(decodeURIComponent(route.slice(14)), settings.unitVerification, scope()); if (!result) throw new HttpError(404, 'Session not found.'); json(res, 200, { ...result, accountId: accounts.active()?.id ?? null }); return; }
       if (req.method === 'GET' && route === '/api/settings') { json(res, 200, scopedSettings()); return; }
@@ -300,7 +320,7 @@ export async function serve(dir: string, demo = false, options: { accounts?: Pic
         const path = fileURLToPath(new URL(`../../public${route === '/' ? '/index.html' : route}`, import.meta.url));
         try {
           const bytes = await readFile(path);
-          res.writeHead(200, { 'content-type': ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' } as Record<string, string>)[extname(path)] || 'application/octet-stream' }); res.end(bytes);
+          res.writeHead(200, { 'content-type': ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' } as Record<string, string>)[extname(path)] || 'application/octet-stream' }); res.end(bytes);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
           if (route !== '/') throw new HttpError(404, 'Not found.');
