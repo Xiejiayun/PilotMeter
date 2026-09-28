@@ -9,7 +9,7 @@
 | 操作系统 | Windows，PowerShell，工作区 `C:\workspace\PilotMeter` |
 | Node / npm | 24.14.0 / 11.9.0 |
 | GitHub 仓库 | `Xiejiayun/PilotMeter`，系统 Git 凭据有管理权限 |
-| Copilot CLI | 开始实现时 PATH 未检测到；尚无真实会话对账 |
+| Copilot CLI | 隔离安装 `@github/copilot@1.0.88`，实际 `--version`、`--help`、monitoring/config/billing 帮助通过；尚无真实会话对账 |
 | 计费主体 | 用户确认组织或企业付费；具体主体和只读账单权限待连接 |
 | 单位换算 | 官方文档有 nano AIU 换算说明；实际订阅未验证，默认显示原始 nano AIU |
 | 官方月度比例 | 未验证额度池、单位、完整覆盖和分母；保持不可用 |

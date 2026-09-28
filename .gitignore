@@ -22,3 +22,11 @@ lerna-debug.log*
 # temp directory
 .temp
 .tmp
+/public
+*.tgz
+.tmp-*.md
+/playwright-report
+/test-results
+*.db
+*.db-shm
+*.db-wal
