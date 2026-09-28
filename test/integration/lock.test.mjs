@@ -54,26 +54,43 @@ test('multiple real processes recovering one dead owner still produce exactly on
     const {acquireLock}=await import(${JSON.stringify(lockModule)});
     try {
       const release=await acquireLock(process.argv[1]);
-      process.send({acquired:true});
       process.once('message',async()=>{await release();process.exit(0);});
-    } catch(error) { process.send({acquired:false,message:error.message}); process.exit(0); }
+      process.send({acquired:true});
+    } catch(error) { process.send({acquired:false,message:error.message},()=>process.exit(0)); }
   `;
   try {
     const results = await Promise.all(Array.from({ length: 8 }, () => {
       const child = spawn(process.execPath, ['--input-type=module', '-e', code, dir], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
-      children.push(child);
-      return new Promise((resolve, reject) => { child.once('message', resolve); child.once('error', reject); });
+      // Register immediately: a losing process can exit before all peers report.
+      // Unlike events.once(), this completion promise does not reject when an
+      // IPC send races with a process that is already shutting down.
+      const exited = new Promise(resolve => { child.once('exit', resolve); child.once('error', resolve); });
+      const record = { child, exited, acquired: false };
+      children.push(record);
+      return new Promise((resolve, reject) => {
+        child.once('message', result => { record.acquired = result.acquired === true; resolve(result); });
+        child.once('error', reject);
+        child.once('exit', (code, signal) => reject(new Error(`Lock contender exited before reporting: ${code ?? signal}`)));
+      });
     }));
     assert.equal(results.filter(result => result.acquired).length, 1);
     const owner = JSON.parse(await fs.promises.readFile(join(dir, 'writer.lock', 'owner.json'), 'utf8'));
-    assert.ok(children.some(child => child.pid === owner.pid));
+    assert.ok(children.some(({ child, acquired }) => acquired && child.pid === owner.pid));
   } finally {
-    await Promise.all(children.map(async child => {
-      if (child.exitCode !== null) return;
-      const exited = once(child, 'exit');
-      if (child.connected) child.send('release');
-      else child.kill();
-      await exited;
+    await Promise.all(children.map(async ({ child, exited, acquired }) => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      const killIfRunning = () => { if (child.exitCode === null && child.signalCode === null) child.kill(); };
+      const deadline = setTimeout(killIfRunning, 5000); deadline.unref();
+      // Losers have already started exiting and need no message. connected can
+      // be stale even for the winner, so capture asynchronous EPIPE in the send
+      // callback and await the exit listener installed when it was spawned.
+      if (acquired) {
+        if (child.connected) {
+          try { child.send('release', error => { if (error) killIfRunning(); }); }
+          catch { killIfRunning(); }
+        } else killIfRunning();
+      }
+      try { await exited; } finally { clearTimeout(deadline); }
     }));
     await fs.promises.rm(dir, { recursive: true, force: true });
   }

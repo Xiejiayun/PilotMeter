@@ -10,7 +10,9 @@ import { parse } from 'jsonc-parser';
 import { installStatusline, inspectStatusline, restoreStatusline } from '../../dist/cli/statusline-config.js';
 
 function setup(t, suffix = '') {
-  const directory = fs.mkdtempSync(join(tmpdir(), 'pilotmeter-statusline-test-'));
+  // macOS exposes its temp directory through /var -> /private/var. Match the
+  // canonical paths used by cwd and the settings writer before deriving fixtures.
+  const directory = fs.realpathSync(fs.mkdtempSync(join(tmpdir(), 'pilotmeter-statusline-test-')));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const root = suffix ? join(directory, suffix) : directory;
   const copilotHome = join(root, 'copilot');
@@ -192,11 +194,12 @@ test('unsupported versions, temporary npx paths and ambiguous JSONC leave settin
 test('compare-and-swap rejects an intervening settings edit before atomic replacement', t => {
   const { options, settingsPath } = setup(t);
   fs.writeFileSync(settingsPath, '{"theme":"original"}');
+  const targetPath = fs.realpathSync(settingsPath);
   const originalWrite = fs.writeFileSync;
   let injected = false;
   fs.writeFileSync = function (path, ...args) {
     const result = originalWrite.call(fs, path, ...args);
-    if (!injected && typeof path === 'string' && path.startsWith(`${settingsPath}.`) && path.endsWith('.tmp')) {
+    if (!injected && typeof path === 'string' && path.startsWith(`${targetPath}.`) && path.endsWith('.tmp')) {
       injected = true;
       originalWrite.call(fs, settingsPath, '{"theme":"concurrently-edited","userAdded":true}');
     }
