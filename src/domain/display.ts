@@ -16,7 +16,7 @@ function identity(value: unknown): value is string {
 }
 
 /** A snapshot is a statement about one verified monthly account pool, never a local sum. */
-export function officialSnapshotEligible(snapshot: UsageSnapshot | null, period: string, entity?: string): boolean {
+export function officialSnapshotEligible(snapshot: UsageSnapshot | null, period: string, entity?: string, now = new Date()): boolean {
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot) || !['billing-rest', 'sdk-quota'].includes(snapshot.source) || snapshot.state !== 'known' || snapshot.coverage !== 'complete') return false;
   if (!text(snapshot.poolId, 256) || !identity(snapshot.billingEntity) || !identity(snapshot.usageSubject)
     || snapshot.usageSubject !== snapshot.billingEntity || typeof snapshot.stale !== 'boolean') return false;
@@ -27,10 +27,10 @@ export function officialSnapshotEligible(snapshot: UsageSnapshot | null, period:
   if (!isMonthlyInterval(snapshot.periodStart, snapshot.periodEnd, period)) return false;
   const verified = timestamp(snapshot.verifiedAt); const fetched = timestamp(snapshot.fetchedAt);
   const start = timestamp(snapshot.periodStart); const end = timestamp(snapshot.periodEnd);
-  if (verified === null || fetched === null || start === null || end === null || verified < start || verified >= end || verified > fetched) return false;
+  if (!(now instanceof Date) || !Number.isFinite(now.getTime()) || verified === null || fetched === null || start === null || end === null || verified < start || verified > fetched || fetched > now.getTime()) return false;
   if (snapshot.providerUpdatedAt !== null) {
     const updated = timestamp(snapshot.providerUpdatedAt);
-    if (updated === null || updated < start || updated >= end || updated > fetched) return false;
+    if (updated === null || updated < start || updated > end || updated > verified || updated > fetched) return false;
   }
   if (snapshot.billingMode === 'ai-credits' ? snapshot.unit !== 'ai-credits' : snapshot.billingMode === 'premium-requests' ? snapshot.unit !== 'premium-requests' : true) return false;
   if (quantity(snapshot.used) === null) return false;

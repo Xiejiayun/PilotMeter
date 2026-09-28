@@ -19,6 +19,7 @@ function fixture(overrides = {}) {
     display: { mode: 'usage', label: '计量单位待确认', used: session.nanoAiu, limit: null, percentage: null, unit: 'nano-aiu', scope: '本机已记录会话', reason: 'nano AIU 与 AI Credits 的换算尚未验证；官方额度未确认' },
     updatedAt: time, demo: false,
     retention: { days: null, lastRunAt: null, cutoff: null, prunedTraces: 0, prunedSpans: 0 },
+    reconciliation: { state: 'unknown', difference: null, label: '无法对账', reason: '身份、额度池、产品或时间覆盖尚未验证', timeLimited: true, period, cutoff: null, sourceContexts: [], localUsed: null, accountUsed: null, unit: null, ledgerHash: null, accountHash: null, evidencePresent: false, verifiedAt: null, expiresAt: null, blockers: ['尚无已接受的对账证据'] },
   };
   return {
     summary, settings, sessions: { items: [session], nextCursor: null }, diagnostics: [],
@@ -30,6 +31,21 @@ function fixture(overrides = {}) {
     ] },
     ...overrides,
   };
+}
+
+function comparableFixture(difference = '2.000000001', label = '暂未归属') {
+  const state = fixture();
+  state.summary.account = { source: 'billing-rest', billingEntity: 'organization:example', usageSubject: 'organization:example', poolId: 'verified-pool', products: ['copilot'], periodStart: `${period}-01T00:00:00Z`, periodEnd: time, billingMode: 'ai-credits', unit: 'ai-credits', used: '12.12345679', coverage: 'complete', state: 'known', limit: null, limitKind: 'unknown', verifiedAt: time, fetchedAt: time, providerUpdatedAt: time, stale: false, lastError: null };
+  state.summary.reconciliation = {
+    ...state.summary.reconciliation, state: 'comparable', difference, label,
+    reason: '身份、额度池、单位、产品和共同截止时间已核验', timeLimited: false,
+    cutoff: time, sourceContexts: ['synthetic-source-1', 'synthetic-source-2'], localUsed: '10.123456789', accountUsed: '12.12345679', unit: 'ai-credits',
+    ledgerHash: 'synthetic-ledger-hash', accountHash: 'synthetic-account-hash', evidencePresent: true,
+    verifiedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(), blockers: [],
+  };
+  if (difference === '0') state.summary.reconciliation.localUsed = state.summary.reconciliation.accountUsed;
+  else if (difference.startsWith('-')) state.summary.reconciliation.localUsed = '123456789123456801.246913579';
+  return state;
 }
 
 async function mockApi(page, state) {
@@ -294,6 +310,87 @@ test('retention stays explicit after cleanup is disabled and in session detail',
   await expect(page.locator('#retention-policy')).toHaveText('自动清理已关闭');
   await expect(page.locator('#retention-notice')).toContainText('关闭清理也无法恢复已删除记录');
   await expect(page.locator('#detail-body')).toContainText('自动清理现已关闭');
+});
+
+test('reconciliation explains unknown scope and exposes no browser verification controls', async ({ page }) => {
+  const state = fixture();
+  state.summary.reconciliation.reason = '没有官方更新截止时间，无法对账';
+  state.summary.reconciliation.blockers = ['单位换算尚未验证', '<img src=x onerror=alert(1)>'];
+  const requests = await mockApi(page, state);
+  await page.goto('/');
+  await expect(page.locator('#reconciliation-state')).toHaveText('无法对账');
+  await expect(page.locator('#reconciliation-reason')).toContainText('没有官方更新截止时间');
+  await expect(page.locator('#reconciliation-reason')).toContainText('单位换算尚未验证');
+  await expect(page.locator('#reconciliation-difference')).toHaveText('—');
+  await expect(page.locator('#reconciliation-cutoff')).toContainText('尚未确认');
+  await expect(page.locator('#reconciliation img')).toHaveCount(0);
+  await expect(page.locator('#reconciliation button, #reconciliation input')).toHaveCount(0);
+  expect(requests.filter(request => request.method !== 'GET')).toHaveLength(0);
+});
+
+for (const [difference, label, formatted] of [
+  ['2.000000001', '暂未归属', '+2.000000001'],
+  ['-123456789123456789.123456789', '尚未对齐', '-123,456,789,123,456,789.123456789'],
+  ['0', '已对齐', '0'],
+]) {
+  test(`reconciliation renders ${label} with exact signed credits and common UTC cutoff`, async ({ page }) => {
+    const state = comparableFixture(difference, label);
+    if (difference.startsWith('-')) await page.setViewportSize({ width: 320, height: 1000 });
+    if (difference === '2.000000001') {
+      state.summary.account.stale = true;
+      state.summary.reconciliation.timeLimited = true;
+      state.summary.reconciliation.reason = '账户快照已陈旧，仅作共同截止时间的有限参考';
+    }
+    await mockApi(page, state);
+    await page.goto('/');
+    await expect(page.locator('#reconciliation-state')).toHaveText(label);
+    await expect(page.locator('#reconciliation-difference')).toHaveText(`${formatted} AI Credits`);
+    await expect(page.locator('#reconciliation-account')).toHaveText('12.12345679 AI Credits');
+    await expect(page.locator('#reconciliation-local')).toHaveText(`${difference.startsWith('-') ? '123,456,789,123,456,801.246913579' : difference === '0' ? '12.12345679' : '10.123456789'} AI Credits`);
+    await expect(page.locator('#reconciliation-account-source')).toContainText('GitHub 账单快照 · organization:example');
+    await expect(page.locator('#reconciliation-local-source')).toHaveText('最近核验涉及 2 个采集来源');
+    await expect(page.locator('#reconciliation-cutoff')).toContainText(`${period}-15 09:30:00 UTC`);
+    await expect(page.locator('#reconciliation')).not.toContainText('synthetic-ledger-hash');
+    await expect(page.locator('#reconciliation')).toContainText('不会回写会话用量');
+    if (difference === '2.000000001') {
+      await expect(page.locator('#reconciliation-reason')).toContainText('账户快照已陈旧');
+      await expect(page.locator('#reconciliation-timing')).toContainText('时间限制');
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
+}
+
+test('reconciliation retains offline inputs but hides the difference until reconnected', async ({ page }) => {
+  const state = comparableFixture();
+  await mockApi(page, state);
+  await page.clock.install();
+  await page.goto('/');
+  await expect(page.locator('#reconciliation-difference')).toHaveText('+2.000000001 AI Credits');
+  state.offline = true;
+  await page.clock.runFor(5_100);
+  await expect(page.locator('#reconciliation-state')).toHaveText('无法对账');
+  await expect(page.locator('#reconciliation-reason')).toContainText('离线旧快照不可继续比较');
+  await expect(page.locator('#reconciliation-difference')).toHaveText('—');
+  await expect(page.locator('#reconciliation-local')).toHaveText('10.123456789 AI Credits');
+  await expect(page.locator('#reconciliation-account-source')).toContainText('离线旧值');
+  state.offline = false;
+  await page.clock.runFor(5_100);
+  await expect(page.locator('#reconciliation-difference')).toHaveText('+2.000000001 AI Credits');
+});
+
+test('reconciliation proof expiry hides the difference even before the next snapshot poll', async ({ page }) => {
+  const state = comparableFixture();
+  const now = new Date();
+  state.summary.reconciliation.expiresAt = new Date(now.getTime() + 3_000).toISOString();
+  await mockApi(page, state);
+  await page.clock.install({ time: now });
+  await page.goto('/');
+  await expect(page.locator('#reconciliation-difference')).toHaveText('+2.000000001 AI Credits');
+  await page.clock.runFor(3_100);
+  await expect(page.locator('#reconciliation-state')).toHaveText('无法对账');
+  await expect(page.locator('#reconciliation-reason')).toContainText('对账证据已过期');
+  await expect(page.locator('#reconciliation-difference')).toHaveText('—');
+  await expect(page.locator('#reconciliation-evidence')).toContainText('已过期');
 });
 
 test('320px layout and very large exact amounts stay within viewport', async ({ page }) => {

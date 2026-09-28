@@ -9,12 +9,13 @@ import { importJsonl } from '../collectors/jsonl.js';
 import { APP, VERSION, prepareDirectory, atomicJson, month, readJson, sourceContextId } from '../shared/runtime.js';
 import { acquireLock } from './lock.js';
 import type { Instance } from './client.js';
-import type { Settings, Summary } from '../shared/types.js';
+import type { Settings, Summary, UsageSnapshot } from '../shared/types.js';
 import { buildDisplay, officialSnapshotEligible } from '../domain/display.js';
 import { BillingProvider, billingEntity } from '../providers/billing.js';
 import { RefreshScheduler } from '../providers/scheduler.js';
 import { adaptQuota, type QuotaData, type QuotaEvidence } from '../providers/quota.js';
 import { seedDemo } from './demo.js';
+import { inspectReconciliation, reconciliationReport, verifyReconciliationEvidence } from '../domain/reconciliation-evidence.js';
 
 class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 const defaultSettings: Settings = { monthlyBudget: null, unitVerification: null, account: null, retentionDays: null, demo: false };
@@ -51,19 +52,28 @@ export async function serve(dir: string, demo = false): Promise<void> {
   }
   const source = `unverified:${sourceContextId()}`;
   const collectorContexts = new Map<string, string>([[instance.collectorToken, source]]);
-  function summary(period = month()): Summary {
-    const local = repo.summary(period, settings.unitVerification);
+  function accountSnapshot(period: string): UsageSnapshot | null {
     const entity = settings.account ? billingEntity(settings.account) : null;
     const quota = entity ? repo.getSnapshot(period, { entity, source: 'sdk-quota' }) : null;
     let account = entity ? (officialSnapshotEligible(quota, period, entity) ? quota : repo.getSnapshot(period, { entity, source: 'billing-rest' }) || quota) : null;
     if (account) account = { ...account, stale: account.stale || Date.now() - Date.parse(account.fetchedAt) > 15 * 60_000 };
+    return account;
+  }
+  function reconciliation(period: string) {
+    const account = accountSnapshot(period);
+    const basis = repo.reconciliationBasis(period, account?.providerUpdatedAt ?? null, settings.unitVerification);
+    return { account, basis, report: reconciliationReport(basis, account, repo.getSetting(`reconciliation:${period}`)) };
+  }
+  function summary(period = month()): Summary {
+    const local = repo.summary(period, settings.unitVerification);
+    const { account, report } = reconciliation(period);
     const retention = { days: settings.retentionDays, ...repo.getRetentionStatus() };
     const display = buildDisplay(local, account, settings);
     if (retention.prunedSpans > 0 && display.mode !== 'official') {
       display.scope = '本机仍保留的会话记录';
       display.reason = `${display.reason ? `${display.reason}；` : ''}部分历史明细已清理，当前小计不代表清理前的完整用量`;
     }
-    return { period, local, account, display, retention, updatedAt: new Date().toISOString(), demo: settings.demo };
+    return { period, local, account, display, retention, reconciliation: report, updatedAt: new Date().toISOString(), demo: settings.demo };
   }
   let cacheChain = Promise.resolve();
   function updateCache(): Promise<void> { const snapshot = summary(); cacheChain = cacheChain.catch(() => {}).then(() => atomicJson(join(dir, 'status.json'), snapshot)); return cacheChain; }
@@ -121,6 +131,31 @@ export async function serve(dir: string, demo = false): Promise<void> {
       if (req.method === 'GET' && route === '/api/sessions') { json(res, 200, repo.sessions(month(url.searchParams.get('period') || undefined), { cursor: url.searchParams.get('cursor') || undefined, sort: url.searchParams.get('sort') || 'usage', limit: 50 })); return; }
       if (req.method === 'GET' && route.startsWith('/api/sessions/')) { const result = repo.session(decodeURIComponent(route.slice(14)), settings.unitVerification); if (!result) throw new HttpError(404, 'Session not found.'); json(res, 200, result); return; }
       if (req.method === 'GET' && route === '/api/settings') { json(res, 200, settings); return; }
+      if (req.method === 'GET' && route === '/api/reconciliation') {
+        json(res, 200, reconciliation(month(url.searchParams.get('period') || undefined)).report); return;
+      }
+      if (req.method === 'GET' && route === '/api/reconciliation/inspect') {
+        if (!management) throw new HttpError(403, 'Reconciliation inspection requires CLI authentication.');
+        const { basis, account } = reconciliation(month(url.searchParams.get('period') || undefined));
+        json(res, 200, inspectReconciliation(basis, account)); return;
+      }
+      if (route === '/api/reconciliation' && (req.method === 'POST' || req.method === 'DELETE')) {
+        if (!management) throw new HttpError(403, 'Reconciliation evidence changes require CLI authentication.');
+        if (settings.demo) throw new HttpError(409, 'Demo cannot verify real reconciliation evidence.');
+        if (req.method === 'DELETE') {
+          const period = month(url.searchParams.get('period') || undefined);
+          repo.setSetting(`reconciliation:${period}`, null);
+          await updateCache(); json(res, 200, reconciliation(period).report); return;
+        }
+        const input = await body(req) as { period?: unknown } | null;
+        if (!input || typeof input !== 'object' || typeof input.period !== 'string') throw new HttpError(400, 'Expected a reconciliation evidence file with a UTC period.');
+        const period = month(input.period);
+        const { basis, account } = reconciliation(period);
+        const result = verifyReconciliationEvidence(input, basis, account);
+        if (!result.accepted) { json(res, 422, { error: result.report.reason, report: result.report }); return; }
+        repo.setSetting(`reconciliation:${period}`, result.evidence);
+        await updateCache(); json(res, 200, result.report); return;
+      }
       if (req.method === 'POST' && route === '/api/collector-context') {
         if (!management) throw new HttpError(403, 'Collector registration requires CLI authentication.');
         if (settings.demo) throw new HttpError(409, 'Demo data is isolated; use a normal data directory for live collection.');

@@ -75,7 +75,7 @@ export function adaptQuota(raw: unknown, evidence: unknown, account: BillingAcco
 
   const verified = timestamp(evidence.verifiedAt); const updated = timestamp(evidence.providerUpdatedAt);
   const start = Date.parse(range.start); const end = Date.parse(range.end);
-  if (verified === null || updated === null || verified < start || verified >= end || verified > now.getTime() || updated < start || updated > verified || updated >= end) reasons.push('验证时间或数据截止时间不属于有效当月范围');
+  if (verified === null || updated === null || verified < start || verified > now.getTime() || updated < start || updated > verified || updated > end) reasons.push('核实时间或月度数据截止时间无效');
   if (timestamp(raw.resetDate) !== end) reasons.push('quota 重置时间未确认 UTC 月度边界');
   const used = exactQuotaValue(raw.usedRequests);
   if (used === null) reasons.push('缺少精确的已用量；remainingPercentage 不能单独证明月度用量');

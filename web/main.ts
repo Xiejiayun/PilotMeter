@@ -1,5 +1,6 @@
 import './style.css';
 import type { Diagnostic, SessionSummary, Settings, SpanRecord, Summary } from '../src/shared/types';
+import type { ReconciliationReport } from '../src/domain/reconciliation-evidence';
 
 type SessionPage = { items: SessionSummary[]; nextCursor: string | null };
 type Totals = Pick<SessionSummary, 'nanoAiu' | 'knownCalls' | 'unknownCalls' | 'pendingCalls'>;
@@ -64,6 +65,8 @@ let selectedSession: string | null = null;
 let detailLastRead: string | null = null;
 let detailRefreshing = false;
 let lastRead: string | null = null;
+let serviceConnected = false;
+let reconciliationExpiry: number | undefined;
 
 const periodInput = el<HTMLInputElement>('period');
 const budgetInput = el<HTMLInputElement>('budget');
@@ -92,12 +95,14 @@ async function mutate<T>(path: string, method: string, body?: object): Promise<T
 }
 
 function connection(connected: boolean, error?: string): void {
+  serviceConnected = connected;
   el('connection-dot').className = `status-dot${connected ? '' : ' offline'}`;
   text('connection', connected ? '本地服务已连接' : '本地服务离线');
   if (!connected) {
     el('page-message').hidden = false;
     text('page-message', `${lastRead ? `连接中断，保留上次读取的记录（${dateTime(lastRead)}）。` : '暂时无法连接本地服务。请运行 pilotmeter start。'}${error ? ` ${error}` : ''}`);
     text('updated-at', lastRead ? `离线 · 上次读取 ${dateTime(lastRead)}` : '离线 · 尚未获取数据');
+    renderReconciliation(summary?.reconciliation);
   } else {
     el('page-message').hidden = true;
   }
@@ -147,9 +152,53 @@ function renderSummary(value: Summary): void {
   }
   text('updated-at', timeParts.join(' · '));
   renderRetention(value.retention);
+  renderReconciliation(value.reconciliation);
   if (account?.stale || account?.lastError) {
     el('page-message').hidden = false;
     text('page-message', `${account.stale ? '账户快照已陈旧，保留上次已知值。' : `账户同步失败，${account.used === null ? '尚未取得有效账单快照' : '显示当前已有值'}。`}${account.lastError ? ` ${account.lastError.code}：${account.lastError.message}` : ''} 本机记录仍可持续更新。`);
+  }
+}
+
+function utcTime(value: string | null): string {
+  return value && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString().replace('T', ' ').replace(/\.000Z$/, ' UTC').replace(/Z$/, ' UTC') : '尚未确认';
+}
+
+function signedDecimal(value: string | null): string {
+  if (value === null) return '—';
+  const negative = value.startsWith('-');
+  const amount = formatDecimal(negative ? value.slice(1) : value);
+  if (amount === '—' || /^0(?:\.0+)?$/.test(value)) return amount;
+  return `${negative ? '-' : '+'}${amount}`;
+}
+
+function renderReconciliation(report: ReconciliationReport | undefined): void {
+  window.clearTimeout(reconciliationExpiry);
+  const expiration = report?.expiresAt ? Date.parse(report.expiresAt) : NaN;
+  const expired = Number.isFinite(expiration) && expiration <= Date.now();
+  const comparable = serviceConnected && report?.state === 'comparable' && !expired;
+  const retained = !serviceConnected && !!report;
+  el('reconciliation').dataset.state = comparable ? 'comparable' : 'unknown';
+  text('reconciliation-state', comparable ? report.label : '无法对账');
+  const reasons = report ? [report.reason, ...report.blockers.filter(reason => !report.reason.includes(reason))].filter(Boolean).join('；') : '当前快照未包含对账信息，请先核实账户与本机范围。';
+  text('reconciliation-reason', retained
+    ? `离线旧快照不可继续比较，保留上次读取的双方数值。${lastRead ? ` 上次读取 ${dateTime(lastRead)}。` : ''}`
+    : expired ? '对账证据已过期，旧快照不可继续比较。请重新检查并核验当前范围。'
+    : !serviceConnected ? '等待本地服务快照，暂不可比较。' : reasons);
+  const unit = report?.unit === 'ai-credits' ? ' AI Credits' : '';
+  text('reconciliation-account', report?.accountUsed !== null && report?.accountUsed !== undefined && unit ? `${formatDecimal(report.accountUsed)}${unit}` : '—');
+  text('reconciliation-local', report?.localUsed !== null && report?.localUsed !== undefined && unit ? `${formatDecimal(report.localUsed)}${unit}` : '—');
+  text('reconciliation-difference', comparable && report.difference !== null ? `${signedDecimal(report.difference)}${unit}` : '—');
+  const account = summary?.account;
+  const source = account?.source === 'billing-rest' ? 'GitHub 账单快照' : account?.source === 'sdk-quota' ? 'Copilot 额度快照' : '账户来源未确认';
+  text('reconciliation-account-source', `${source}${account ? ` · ${account.billingEntity}` : ''}${retained ? ' · 离线旧值' : ''}`);
+  text('reconciliation-local-source', report?.sourceContexts.length ? `${report.evidencePresent ? '最近核验涉及' : '待核验'} ${report.sourceContexts.length} 个采集来源${retained ? ' · 离线旧值' : ''}` : '范围尚未核验');
+  text('reconciliation-cutoff', `共同截止时间（UTC）：${utcTime(report?.cutoff ?? null)}`);
+  text('reconciliation-evidence', report?.evidencePresent
+    ? `最近核验 ${utcTime(report.verifiedAt)} · ${expired ? '已过期' : '有效至'} ${utcTime(report.expiresAt)}`
+    : '尚无已接受的对账证据');
+  text('reconciliation-timing', report?.timeLimited ? '时间限制：仅作有限时点的快照参考；当前全账户用量可能已变化。' : '比较结果仅适用于已核验的范围和共同截止时间。');
+  if (serviceConnected && report?.state === 'comparable' && Number.isFinite(expiration) && !expired) {
+    reconciliationExpiry = window.setTimeout(() => { renderReconciliation(summary?.reconciliation); }, Math.min(expiration - Date.now() + 1, 2_147_483_647));
   }
 }
 
@@ -394,6 +443,7 @@ periodInput.addEventListener('change', () => {
   text('official-state', '等待所选月份数据');
   text('unit-state', '等待数据');
   text('updated-at', '正在读取所选月份');
+  renderReconciliation(undefined);
   el('account-usage').hidden = true;
   text('period-caption', `${periodInput.value} · UTC`);
   for (const id of ['session-count', 'known-count', 'unknown-count', 'pending-count']) text(id, '—');

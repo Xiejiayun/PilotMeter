@@ -1,13 +1,14 @@
 import { Command } from 'commander';
 import { join, resolve } from 'node:path';
 import crossSpawn from 'cross-spawn';
-import { readFile } from 'node:fs/promises';
-import { dataDirectory, VERSION } from '../shared/runtime.js';
+import { open, readFile, writeFile } from 'node:fs/promises';
+import { dataDirectory, month, VERSION } from '../shared/runtime.js';
 import { ensureService, instanceAt, request, collectorForRun } from '../daemon/client.js';
 import { statusText, cachedStatus, watch, openBrowser, terminalLink } from './terminal.js';
 import { runCopilot } from './run.js';
 import type { Summary } from '../shared/types.js';
 import { installStatusline, restoreStatusline, inspectStatusline } from './statusline-config.js';
+import type { ReconciliationInspection, ReconciliationReport } from '../domain/reconciliation-evidence.js';
 
 const program = new Command().name('pilotmeter').description('Local Copilot CLI usage meter; official quota stays unknown until verified.').version(VERSION).option('--data-dir <directory>', 'isolated application data directory').enablePositionalOptions();
 const dir = () => dataDirectory(program.opts().dataDir);
@@ -68,4 +69,40 @@ account.command('import-quota <file>').description('Import read-only quota with 
 const unit = program.command('unit').description('Record or remove evidence that nano AIU matches Credits for the tested CLI');
 unit.command('verify').requiredOption('--cli-version <version>').requiredOption('--evidence <description>', 'actual same-session /usage comparison').action(async options => { await request(await ensureService(dir()), '/api/unit-verification', 'POST', { cliVersion: options.cliVersion, evidence: options.evidence }); console.log('已保存单位核验证据；仅应用于相同 CLI 版本。'); });
 unit.command('clear').action(async () => { await request(await ensureService(dir()), '/api/unit-verification', 'POST', { clear: true }); console.log('已撤销单位验证。'); });
+const reconcile = program.command('reconcile').description('Compare a verified finite local range with its official account snapshot');
+const reconciliationPath = (period?: string) => `/api/reconciliation?period=${month(period)}`;
+reconcile.command('status').option('--period <YYYY-MM>', 'UTC month').option('--json').action(async options => {
+  const report = await request<ReconciliationReport>(await ensureService(dir()), reconciliationPath(options.period));
+  console.log(options.json ? JSON.stringify(report, null, 2) : `${report.label}${report.difference === null ? '' : ` · ${report.difference} AI Credits（账户减本机）`}\n${report.reason}`);
+});
+reconcile.command('inspect').option('--period <YYYY-MM>', 'UTC month').option('--output <file>', 'write a new unverified evidence template without overwriting an existing file').action(async options => {
+  const result = await request<ReconciliationInspection>(await ensureService(dir()), `/api/reconciliation/inspect?period=${month(options.period)}`);
+  if (options.output) {
+    if (!result.template) throw new Error(result.report.reason);
+    await writeFile(resolve(options.output), `${JSON.stringify(result.template, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+    console.log(`已写入待核验模板：${resolve(options.output)}。完成实际来源、额度池、产品和时间覆盖核对后再填写；不要把未知事实标为 true。`);
+  } else console.log(JSON.stringify(result, null, 2));
+});
+reconcile.command('verify <file>').description('Validate explicit evidence against current ledger and account hashes; never imports amounts').action(async file => {
+  const handle = await open(resolve(file), 'r');
+  let input: unknown;
+  try {
+    const maximum = 256 * 1024;
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > maximum) throw new Error('Evidence must be a regular JSON file no larger than 256 KiB.');
+    const buffer = Buffer.alloc(maximum + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    if (length > maximum) throw new Error('Evidence exceeds 256 KiB.');
+    input = JSON.parse(buffer.toString('utf8', 0, length).replace(/^\uFEFF/, ''));
+  } finally { await handle.close(); }
+  console.log(JSON.stringify(await request(await ensureService(dir()), '/api/reconciliation', 'POST', input), null, 2));
+});
+reconcile.command('clear').option('--period <YYYY-MM>', 'UTC month').action(async options => {
+  await request(await ensureService(dir()), reconciliationPath(options.period), 'DELETE'); console.log('已撤销所选月份的对账证据；本地调用与账户快照保留。');
+});
 void program.parseAsync().catch(error => { console.error(`PilotMeter: ${(error as Error).message}`); process.exitCode = 1; });

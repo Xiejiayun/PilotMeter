@@ -2,7 +2,7 @@
 
 GitHub Copilot CLI 本地用量监控工具：独立终端状态提示、可选原生状态栏，以及按会话查看消耗的浏览器页面。Node.js + SQLite，无独立云服务，无 Electron。
 
-**当前为 `0.1.0-preview.2` 本地预览版，尚未公开发布 npm。** 默认保存原始 nano AIU，官方月度额度保持“未确认”；真实订阅、`/usage` 和官方页面对账是独立发布门槛，合成测试不能替代。
+**当前为 `0.1.0-preview.3` 本地预览版，尚未公开发布 npm。** 默认保存原始 nano AIU，官方月度额度保持“未确认”；真实订阅、`/usage` 和官方页面对账是独立发布门槛，合成测试不能替代。
 
 ## 安装与开始使用
 
@@ -12,7 +12,7 @@ GitHub Copilot CLI 本地用量监控工具：独立终端状态提示、可选�
 npm ci
 npm test
 npm pack
-npm install -g ./pilotmeter-0.1.0-preview.2.tgz
+npm install -g ./pilotmeter-0.1.0-preview.3.tgz
 
 pilotmeter doctor
 pilotmeter run -- --no-auto-update
@@ -48,6 +48,9 @@ Windows npm 全局安装目录不要包含 `&`：npm 11.9.0 自身生成的 `.cm
 | `account import-quota <file>` | 导入只读 quota 数据及完整核验证据；未验证不会开启官方比例 |
 | `unit verify --cli-version 1.0.88 --evidence "实际核对说明"` | 在真实 `/usage` 对账后记录单位换算证据 |
 | `unit clear` | 撤销单位验证，恢复原始单位展示 |
+| `reconcile status [--period YYYY-MM] [--json]` | 查看所选 UTC 月的对账结果及无法比较的原因 |
+| `reconcile inspect [--period YYYY-MM] [--output file.json]` | 检查当前范围并生成待核验模板；不覆盖已有文件 |
+| `reconcile verify <file>` / `reconcile clear [--period YYYY-MM]` | 校验证据 / 撤销该月证据；不修改调用金额 |
 
 所有命令均可在命令名前使用 `--data-dir <目录>`。可以用 `PILOTMETER_COPILOT_BIN` 指定独立安装的 Copilot 入口。已有 exporter 时默认报告冲突；只有 `--replace-telemetry` 才覆盖本次子进程的 exporter 设置，不修改 shell profile 或组织配置。
 
@@ -66,6 +69,10 @@ Windows npm 全局安装目录不要包含 `&`：npm 11.9.0 自身生成的 `.cm
 个人、组织、企业使用各自端点与权限。当前仅识别明确的 `Copilot AI Credits / AI Credit / ai-credits` 组合，并标为产品部分覆盖；其他 SKU/单位保持 unsupported。空的个人报告不能代表组织或企业使用了 0。
 
 quota 目前提供实验性证据导入适配边界，普通安装不包含 SDK，也不自动声称其字段属于 AI Credits。格式与真实验收步骤见[验证指南](docs/validation-guide.md)。
+
+对账另需显式核验该数据目录内的全部采集来源、额度池、产品范围与时间覆盖。`reconcile inspect` 从实际账本和已验证账户快照生成模板；本地金额由服务端按月初至官方数据截止时间计算，模板不能提供或改写金额。无法证明覆盖时保持“无法对账”；只含部分产品的 Billing 报告、没有官方截止时间或 legacy Premium Requests 均不与本地 nano AIU 比较。
+
+核验证据只对应当时的快照，有效期 15 分钟。账本、来源、分类、单位证据或账户快照变化后需重新核对，重复导入相同事件不影响。正差额显示“暂未归属”，负差额显示“尚未对齐”，不会自动归因其他设备或补入会话。具体步骤见[有限范围对账](docs/validation-guide.md#有限范围对账)。
 
 ## 数据与隐私
 

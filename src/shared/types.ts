@@ -1,3 +1,5 @@
+import type { ReconciliationReport } from '../domain/reconciliation-evidence.js';
+
 export type Classification = 'root' | 'child' | 'pending' | 'conflict' | 'invalid';
 export interface SpanRecord {
   traceId: string; spanId: string; parentSpanId: string | null;
@@ -47,4 +49,5 @@ export interface Summary {
   period: string; local: LocalUsage; account: UsageSnapshot | null; display: DisplayMode;
   updatedAt: string; demo: boolean;
   retention: RetentionStatus & { days: number | null };
+  reconciliation: ReconciliationReport;
 }

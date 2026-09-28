@@ -3,6 +3,8 @@ import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { identifier, integer, metadata, serverAddress } from '../collectors/otlp.js';
+import { timestamp } from '../domain/period.js';
+import type { ReconciliationBasis } from '../domain/reconciliation-evidence.js';
 import type { Classification, Diagnostic, ImportResult, LocalUsage, RetentionStatus, SessionSummary, Settings, SpanRecord, UsageSnapshot } from '../shared/types.js';
 
 export interface ImportCursor {
@@ -385,6 +387,90 @@ export class Repository {
       coverage: spans.length ? 'partial' : 'empty', unitVerified,
       credits: unitVerified && aggregate.nanoAiu !== null ? credits(aggregate.nanoAiu) : null,
     };
+  }
+
+  /** A finite local basis; neither its known subtotal nor its source IDs establish account identity or complete collection. */
+  reconciliationBasis(period: string, cutoff: string | null, unitVerification: Settings['unitVerification'] = null): ReconciliationBasis {
+    const [start, monthEnd] = periodBounds(period);
+    const cutoffTime = timestamp(cutoff);
+    const normalizedCutoff = cutoffTime === null ? null : new Date(cutoffTime).toISOString();
+    const validCutoff = normalizedCutoff !== null && normalizedCutoff > start && normalizedCutoff <= monthEnd;
+    return this.#transaction(() => {
+      const blockers = new Set<string>();
+      if (cutoff === null) blockers.add('cutoff-missing');
+      else if (!validCutoff) blockers.add('cutoff-invalid');
+      const eventRows = this.#db.prepare(`SELECT e.trace_id, e.span_id, e.source_context, e.payload, e.fingerprint, e.conflicted,
+        c.parent_span_id, c.classification, c.reason FROM usage_events e LEFT JOIN span_classification c USING (trace_id, span_id)
+        ORDER BY e.trace_id, e.span_id`).all();
+      const quarantineRows = this.#db.prepare('SELECT trace_id, span_id, fingerprint, payload FROM quarantine_events ORDER BY trace_id, span_id, fingerprint').all();
+      const sourceRows = this.#db.prepare('SELECT id FROM source_contexts ORDER BY id').all();
+      const retiredRows = this.#db.prepare('SELECT trace_id, retired_at, cutoff_at, span_count FROM retired_traces ORDER BY trace_id').all();
+      // Rejected rows have no retained event time. Their absence cannot be declared harmless to a selected month.
+      const rejectionRows = this.#db.prepare(`SELECT code, message, count FROM diagnostics
+        WHERE code IN ('invalid-identity', 'invalid-import-line', 'retired-trace') ORDER BY code, message`).all();
+      const spans: StoredSpan[] = eventRows.map(row => ({
+        ...JSON.parse(String(row.payload)) as SpanRecord,
+        conflicted: row.conflicted === 1,
+        classification: row.classification === null ? 'pending' : String(row.classification) as Classification,
+        reason: row.reason === null ? null : String(row.reason),
+      }));
+      const quarantined = quarantineRows.map(row => JSON.parse(String(row.payload)) as SpanRecord);
+      const sourceContexts = [...new Set([
+        ...sourceRows.map(row => String(row.id)), ...spans.map(span => span.sourceContext), ...quarantined.map(span => span.sourceContext),
+      ])].sort();
+      const within = (span: SpanRecord): boolean => Boolean(validCutoff && span.endTime && span.endTime >= start && span.endTime < normalizedCutoff!);
+      const scoped = spans.filter(within);
+      const aggregate = totals(scoped);
+      const known = scoped.filter(span => span.classification === 'root' && span.nanoAiu !== null);
+      const unitVerified = Boolean(unitVerification && metadata(unitVerification.evidence, 4096)
+        && timestamp(unitVerification.verifiedAt) !== null && known.length
+        && known.every(span => span.serviceVersion === unitVerification.cliVersion));
+      if (validCutoff && known.length === 0) blockers.add('no-known-root-usage');
+      if (scoped.some(span => span.classification === 'root' && span.nanoAiu === null)) blockers.add('unknown-root-metering');
+      if (!unitVerified) blockers.add('unit-unverified');
+      if (spans.some(span => validTime(span.endTime) === null) || quarantined.some(span => validTime(span.endTime) === null)) blockers.add('unlocated-events');
+      if (rejectionRows.length) blockers.add('unlocated-rejections');
+      if (retiredRows.some(row => String(row.cutoff_at) > start)) blockers.add('retention-overlap');
+
+      const byId = new Map(spans.map(span => [key(span), span]));
+      const involved = new Set(scoped.map(key));
+      // A conflicting copy may move an originally out-of-window event into this interval.
+      for (const span of quarantined) {
+        if (!within(span) && validTime(span.endTime) !== null) continue;
+        blockers.add('conflicting-events');
+        if (byId.has(key(span))) involved.add(key(span));
+      }
+      for (const spanKey of [...involved]) {
+        let current = byId.get(spanKey)!;
+        const seen = new Set<string>([spanKey]);
+        while (current.parentSpanId) {
+          const parentKey = `${current.traceId}/${current.parentSpanId}`;
+          if (seen.has(parentKey)) { blockers.add('unresolved-ancestry'); break; }
+          seen.add(parentKey);
+          const parent = byId.get(parentKey);
+          if (!parent) { blockers.add('unresolved-ancestry'); break; }
+          involved.add(parentKey);
+          current = parent;
+        }
+      }
+      for (const spanKey of involved) {
+        const span = byId.get(spanKey)!;
+        if (span.conflicted || span.classification === 'conflict') blockers.add('conflicting-events');
+        if (span.classification === 'pending') blockers.add('pending-classification');
+        if (span.classification === 'invalid') blockers.add('invalid-classification');
+        if (!span.operation) blockers.add('missing-operation');
+      }
+
+      const hash = createHash('sha256');
+      // Include the entire ledger, including other months and ancestry. Ignore maintenance/observation timestamps and import cursors.
+      for (const part of [
+        ['basis-v1', period, normalizedCutoff, [...ROOT_CLI_VERSIONS].sort()],
+        ['unit-verification', unitVerification === null ? null : [unitVerification.cliVersion, unitVerification.verifiedAt, unitVerification.evidence]],
+        ['events', eventRows], ['quarantine', quarantineRows], ['sources', sourceRows], ['retired', retiredRows], ['rejections', rejectionRows],
+      ]) hash.update(JSON.stringify(part));
+      return { period, cutoff: normalizedCutoff, sourceContexts, knownNanoAiu: aggregate.nanoAiu, knownCalls: aggregate.knownCalls,
+        unknownCalls: aggregate.unknownCalls, pendingCalls: aggregate.pendingCalls, unitVerified, blockers: [...blockers].sort(), ledgerHash: hash.digest('hex') };
+    });
   }
 
   #sessionSummary(spans: StoredSpan[]): SessionSummary {
