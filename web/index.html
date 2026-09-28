@@ -37,6 +37,16 @@
           <p class="sync-time"><span aria-hidden="true">◷</span> <span id="updated-at">尚未获取数据</span></p>
         </div>
       </section>
+      <section id="reconciliation" class="panel reconciliation-panel" aria-labelledby="reconciliation-title" data-state="unknown">
+        <div class="panel-heading"><div><p class="eyebrow">ACCOUNT / LOCAL</p><h2 id="reconciliation-title">账户与本机对账</h2></div><span id="reconciliation-state" class="reconciliation-state">等待快照</span></div>
+        <p id="reconciliation-reason" class="panel-description" role="status">核实账户、额度池、产品和共同截止时间后，才能比较。</p>
+        <dl class="reconciliation-values">
+          <div><dt>账户快照</dt><dd><span id="reconciliation-account">—</span><p id="reconciliation-account-source" class="small muted">等待账户来源</p></dd></div>
+          <div><dt>本机已核验范围</dt><dd><span id="reconciliation-local">—</span><p id="reconciliation-local-source" class="small muted">等待范围核验</p></dd></div>
+          <div><dt>差额 · 账户减本机</dt><dd><span id="reconciliation-difference">—</span><p class="small muted">仅限核验范围和共同截止时间</p></dd></div>
+        </dl>
+        <div class="reconciliation-footer"><p id="reconciliation-cutoff">共同截止时间尚未确认</p><p id="reconciliation-evidence">尚未读取核验状态</p><p id="reconciliation-timing"></p><p>差额不会归因于其他设备，也不会回写会话用量。</p></div>
+      </section>
       <section class="metrics" aria-label="本机采集统计">
         <div><span class="metric-label">已记录会话</span><strong id="session-count">—</strong><span class="metric-note">所选月份</span></div>
         <div><span class="metric-label">已知用量调用</span><strong id="known-count">—</strong><span class="metric-note">已判定的顶层调用</span></div>

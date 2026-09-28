@@ -57,6 +57,30 @@
 
 所有 true 都代表已经实际完成的核对。未知事实不能填写 true。新月份、套餐或 flex 额度变化后必须重新核对；导入快照会标陈旧，不自动滚入新月份。无限额要求 `raw.isUnlimited`、`evidence.unlimited` 为 true 且 `evidence.allowance` 为 null。legacy Premium Requests 必须用对应的 billingMode/unit，不可改称 AI Credits。
 
+## 有限范围对账
+
+该入口核对一个有限时点的本机记录与官方账户快照，不会补齐历史，也不会更改任何调用金额。先完成上述真实会话单位、quota 与官方页面核对。当前只支持已验证 AI Credits 的完整账户快照；仅有部分产品的 Billing 报告、未知官方水位或 Premium Requests 会明确显示无法对账。
+
+```powershell
+pilotmeter reconcile status --period 2026-09
+pilotmeter reconcile inspect --period 2026-09 --output review.json
+# 实际核对模板中的来源、池、产品和覆盖范围，填写证据后：
+pilotmeter reconcile verify review.json
+pilotmeter reconcile status --period 2026-09 --json
+# 撤销当月核验，不删除账本或账户快照：
+pilotmeter reconcile clear --period 2026-09
+```
+
+月份替换成需要验证的 UTC 月。`inspect` 返回阻断原因及待核验模板；`--output` 只写新文件。模板的四个验证标记均为 false，`verifiedAt` 和 `evidence` 为空。只有实际核对通过后，才把相应标记改为 true，填写当前核验时间和不含敏感内容的证据说明；其余由服务生成的身份、池、产品、来源、时间范围与摘要字段保持原样。不能添加用量、额度或其他字段来替换计算结果。
+
+必须逐一证明 `sourceContexts` 中的来源属于同一计费主体和额度池，并证明从 `coverageStart` 到 `coverageEnd` 的本机相关产品记录完整。范围是月初包含、官方截止时间不包含的半开区间，不使用抓取时间冒充官方水位。新启用采集或存在历史缺口时不能勾选完整覆盖。数据目录包含不同付款主体时，不能笼统绑定为一个账户；按账户使用独立 `--data-dir` 并保留来源标记。
+
+已结束月份可以用下月月初作为不包含的官方截止时间，核对完整自然月；实际核验时间可在该月结束后。必须取得对应历史月份的官方快照，不能自行把月内水位改成月末，或把当前月用量当作旧月结账结果。
+
+证据有效期为核验后 15 分钟。任何新账本事件、来源、冲突、重新分类、单位证据或账户快照变化都会使旧证据失效；相同事件重放不失效。重启保留证据及原始数据，但不会延长时效。正差额仅表示“暂未归属”，负差额为“尚未对齐”；账户快照陈旧时明确标有限时点参考，页面离线或证据过期不继续展示可用差额。
+
+无法归月的异常、缺失/待分类计量、可能影响该月的明细清理，以及无法定位时间的拒绝数据都会阻止完整范围声明。未知不计零。后续恢复必须取得完整可靠来源后重新导入并核验；无法定位的拒绝记录不能凭手工证据抹除，必要时在独立数据目录导入已核实的完整记录，保留原账本用于审计。
+
 ## 终端与配置
 
 - 独立测试 Windows Terminal 的 OSC 8 / Ctrl+点击、普通 URL、watch 的 `o`/`q`、Ctrl+C 和窗口缩放。

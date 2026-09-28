@@ -226,6 +226,10 @@ try {
   assert.equal(status.local.nanoAiu, null);
   assert.equal(status.display.percentage, null);
   assert.notEqual(status.display.mode, 'official');
+  const reconciliation = JSON.parse((await cli(dataDir, ['reconcile', 'status', '--json'])).stdout);
+  assert.equal(reconciliation.state, 'unknown');
+  assert.equal(reconciliation.difference, null);
+  assert.equal(status.reconciliation.state, 'unknown');
   record('Installed background service, loopback health, reuse, and unknown empty usage');
 
   const htmlResponse = await http(instance.url, '/');
