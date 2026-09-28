@@ -5,12 +5,13 @@ import { atomicJson, readJson } from '../shared/runtime.js';
 import { compareDecimals, nonNegativeDecimal, percentageOf, subtractDecimals } from '../domain/decimal.js';
 import { quotaBucketLabel } from '../domain/personal-quota.js';
 import type { AccountLogin, AccountsOverview, GitHubProfile, PersonalQuota } from '../shared/accounts.js';
-import { CopilotClient, CopilotClientError, copilotHost, type CopilotQuota } from './copilot-client.js';
+import type { AccountModels } from '../shared/models.js';
+import { CopilotClient, CopilotClientError, copilotHost, type CopilotModels, type CopilotQuota } from './copilot-client.js';
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 interface StoredProfile extends GitHubProfile { homeId: string }
 interface Registry { version: 1; activeAccountId: string | null; profiles: StoredProfile[] }
-type Backend = Pick<CopilotClient, 'listAccounts' | 'getQuota' | 'startLogin' | 'getLogin' | 'cancelLogin' | 'close'>;
+type Backend = Pick<CopilotClient, 'listAccounts' | 'getQuota' | 'listModels' | 'startLogin' | 'getLogin' | 'cancelLogin' | 'close'>;
 interface Attempt { view: AccountLogin; client: Backend; providerId: string; homeId: string; expected: StoredProfile | null; finalizing: Promise<void> | null; committing: boolean }
 export class AccountError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
@@ -47,6 +48,14 @@ export function personalQuota(accountId: string, result: CopilotQuota): Personal
   };
 }
 
+function personalModels(accountId: string, result: CopilotModels): AccountModels {
+  return { accountId, state: result.items.length ? 'available' : 'unavailable', source: 'copilot-cli-models.list',
+    fetchedAt: result.fetchedAt, stale: false, refreshing: false, error: null,
+    items: result.items.map(({ id, name, status, reason, policyState, vision, reasoningEffort, contextWindowTokens, multiplier }) =>
+      ({ id, name, status, reason, policyState, vision, reasoningEffort, contextWindowTokens, multiplier })),
+  };
+}
+
 export interface AccountsOptions {
   runCommand?: string;
   clientFactory?: (home: string) => Backend;
@@ -62,6 +71,7 @@ export class AccountsManager {
   #registry: Registry = { version: 1, activeAccountId: null, profiles: [] };
   readonly #clients = new Map<string, Backend>();
   readonly #quotas = new Map<string, PersonalQuota>();
+  readonly #models = new Map<string, AccountModels>();
   readonly #refreshes = new Map<string, Promise<void>>();
   readonly #nextRefresh = new Map<string, number>();
   #attempt: Attempt | null = null;
@@ -114,9 +124,12 @@ export class AccountsManager {
   }
   overview(enabled = true): AccountsOverview {
     const id = this.#registry.activeAccountId; const cached = id ? this.#quotas.get(id) : null;
+    const models = id ? this.#models.get(id) : null;
     return {
       accounts: this.#registry.profiles.map(profileView), activeAccountId: id,
       quota: cached ? structuredClone({ ...cached, stale: cached.stale || !cached.fetchedAt || this.#now() - Date.parse(cached.fetchedAt) > 5 * 60_000 }) : null,
+      models: models ? structuredClone({ ...models, refreshing: !!id && this.#refreshes.has(id),
+        stale: models.stale || !models.fetchedAt || this.#now() - Date.parse(models.fetchedAt) > 5 * 60_000 }) : null,
       login: this.#attempt ? structuredClone(this.#attempt.view) : null, refreshing: !!id && this.#refreshes.has(id), enabled,
       runCommand: this.#options.runCommand ?? 'pilotmeter run --',
     };
@@ -138,7 +151,7 @@ export class AccountsManager {
         activeAccountId: this.#registry.activeAccountId === id ? null : this.#registry.activeAccountId };
       await this.#persist(next); this.#registry = next;
       const client = this.#clients.get(id); this.#clients.delete(id);
-      this.#quotas.delete(id); this.#nextRefresh.delete(id);
+      this.#quotas.delete(id); this.#models.delete(id); this.#nextRefresh.delete(id);
       await client?.close(); this.#changed(); return this.overview();
     });
   }
@@ -192,7 +205,7 @@ export class AccountsManager {
       attempt.committing = true;
       await this.#persist(next);
       this.#registry = next;
-      this.#clients.set(profile.id, attempt.client); this.#quotas.delete(profile.id); this.#nextRefresh.delete(profile.id);
+      this.#clients.set(profile.id, attempt.client); this.#quotas.delete(profile.id); this.#models.delete(profile.id); this.#nextRefresh.delete(profile.id);
       attempt.view = { ...attempt.view, status: 'complete', accountId: profile.id, error: null };
       if (oldClient && oldClient !== attempt.client) await oldClient.close().catch(() => {});
       this.#changed(); void this.refresh(profile.id).catch(() => {});
@@ -222,24 +235,43 @@ export class AccountsManager {
     this.#nextRefresh.set(id, this.#now() + 60_000);
     const client = this.#client(profile);
     const task = (async () => {
-      let quota: PersonalQuota; let status: GitHubProfile['status']; let checkedAt = profile.checkedAt;
+      let quota: PersonalQuota; let models: AccountModels; let status: GitHubProfile['status']; let checkedAt = profile.checkedAt;
+      const failedQuota = (error: unknown): PersonalQuota => {
+        const old = this.#quotas.get(id);
+        return { accountId: id, scope: 'signed-in-user', state: 'error', fetchedAt: old?.fetchedAt ?? null,
+          stale: true, buckets: old?.buckets ?? [], error: safeError(error) };
+      };
+      const failedModels = (error: unknown): AccountModels => {
+        const old = this.#models.get(id);
+        return { accountId: id, source: 'copilot-cli-models.list', state: 'error', fetchedAt: old?.fetchedAt ?? null,
+          stale: true, refreshing: false, items: old?.items ?? [], error: safeError(error) };
+      };
+      const requiresLogin = (error: unknown) => ['AUTH_REQUIRED', 'AUTHENTICATION_FAILED', 'ACCOUNT_NOT_FOUND'].includes(safeError(error).code);
       try {
         const accounts = await client.listAccounts();
         const matches = accounts.filter(a => a.host === profile.host && a.login.toLowerCase() === profile.login.toLowerCase());
         if (matches.length !== 1) throw new CopilotClientError('AUTH_REQUIRED', '该账号的授权已失效，请重新登录。');
-        const data = await client.getQuota(matches[0]!.selectionId);
-        status = 'connected'; checkedAt = new Date(this.#now()).toISOString(); quota = personalQuota(id, data);
+        // Both read-only RPCs bind to the same selection in the same verified runtime.
+        // A catalog outage must not discard a successful quota (or vice versa).
+        const selection = matches[0]!.selectionId;
+        const [quotaResult, modelsResult] = await Promise.allSettled([
+          Promise.resolve().then(() => client.getQuota(selection)), Promise.resolve().then(() => client.listModels(selection)),
+        ]);
+        status = 'connected'; checkedAt = new Date(this.#now()).toISOString();
+        quota = quotaResult.status === 'fulfilled' ? personalQuota(id, quotaResult.value) : failedQuota(quotaResult.reason);
+        models = modelsResult.status === 'fulfilled' ? personalModels(id, modelsResult.value) : failedModels(modelsResult.reason);
+        if (quotaResult.status === 'rejected') status = requiresLogin(quotaResult.reason) ? 'reauth-required' : 'error';
+        if (modelsResult.status === 'rejected' && requiresLogin(modelsResult.reason)) status = 'reauth-required';
       } catch (error) {
-        const safe = safeError(error); const old = this.#quotas.get(id);
-        status = ['AUTH_REQUIRED', 'AUTHENTICATION_FAILED', 'ACCOUNT_NOT_FOUND'].includes(safe.code) ? 'reauth-required' : 'error';
-        quota = { accountId: id, scope: 'signed-in-user', state: 'error', fetchedAt: old?.fetchedAt ?? null, stale: true, buckets: old?.buckets ?? [], error: safe };
+        status = requiresLogin(error) ? 'reauth-required' : 'error';
+        quota = failedQuota(error); models = failedModels(error);
       }
       if (this.#closed) return;
       await this.#serialize(async () => {
         if (!this.#registry.profiles.includes(profile) || this.#closed) return;
         const updated = { ...profile, status, checkedAt };
         await this.#persist({ ...this.#registry, profiles: this.#registry.profiles.map(p => p === profile ? updated : p) });
-        Object.assign(profile, updated); this.#quotas.set(id, quota); this.#changed();
+        Object.assign(profile, updated); this.#quotas.set(id, quota); this.#models.set(id, models); this.#changed();
       });
     })().finally(() => { this.#refreshes.delete(id); });
     this.#refreshes.set(id, task); return task;

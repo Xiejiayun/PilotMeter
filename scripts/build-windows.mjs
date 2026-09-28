@@ -66,7 +66,7 @@ async function bundledCopilotVersion(command) {
 
 // Keep this application allowlist aligned with scripts/pack-smoke.mjs. npm's
 // files field permits whole directories, including stale compiler output.
-const applicationFile = /^(?:package\.json|README\.md|LICENSE|docs\/(?:compatibility|validation-guide|npm-package-contents|windows-exe)\.md|bin\/pilotmeter\.js|dist\/.+\.(?:js|d\.ts|js\.map)|public\/index\.html|public\/assets\/[A-Za-z0-9_.-]+\.(?:js|css|svg|ico))$/;
+const applicationFile = /^(?:package\.json|README\.md|LICENSE|docs\/(?:compatibility|validation-guide|npm-package-contents|windows-exe|releasing)\.md|bin\/pilotmeter\.js|dist\/.+\.(?:js|d\.ts|js\.map)|public\/index\.html|public\/assets\/[A-Za-z0-9_.-]+\.(?:js|css|svg|ico))$/;
 const privateApplicationFile = /(?:^|\/)(?:\.env(?:\.|$)|test(?:s)?|fixtures|node_modules|\.git|\.npmrc|[^/]*(?:credentials|secrets)[^/]*)(?:\/|$)|\.(?:db|sqlite|log)(?:[.-]|$)/i;
 const secretPatterns = [/\bgh[pousr]_[A-Za-z0-9]{20,}\b/, /\bgithub_pat_[A-Za-z0-9_]{40,}\b/, /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/];
 function rejectSecrets(name, bytes) {
@@ -175,7 +175,7 @@ for (const file of pack.files) {
   if (typeof file.path !== 'string' || /[\t\r\n\\:]/.test(file.path) || file.path.split('/').some(part => !part || part === '.' || part === '..') || !applicationFile.test(file.path) || privateApplicationFile.test(file.path) || packageFiles.has(file.path)) throw new Error('Unexpected application archive member: ' + file.path);
   packageFiles.add(file.path);
 }
-for (const required of ['package.json', 'bin/pilotmeter.js', 'dist/cli/main.js', 'dist/daemon/server.js', 'public/index.html', 'README.md', 'LICENSE', 'docs/compatibility.md', 'docs/validation-guide.md', 'docs/npm-package-contents.md', 'docs/windows-exe.md']) {
+for (const required of ['package.json', 'bin/pilotmeter.js', 'dist/cli/main.js', 'dist/daemon/server.js', 'public/index.html', 'README.md', 'LICENSE', 'docs/compatibility.md', 'docs/validation-guide.md', 'docs/npm-package-contents.md', 'docs/windows-exe.md', 'docs/releasing.md']) {
   if (!packageFiles.has(required)) throw new Error('Missing application file: ' + required);
 }
 for (const extension of ['js', 'css']) if (![...packageFiles].some(name => name.startsWith('public/assets/') && name.endsWith('.' + extension))) throw new Error('Missing built browser ' + extension + ' asset.');
@@ -202,6 +202,7 @@ const copilotOutput = await bundledCopilotVersion(copilotExecutable);
 if (!copilotOutput.startsWith('GitHub Copilot CLI ' + copilotVersion + '.')) throw new Error('Unexpected bundled Copilot version.');
 await writeFile(join(payload, 'WINDOWS-README.md'), (await readFile(join(workspace, 'docs', 'windows-exe.md'), 'utf8'))
   .replaceAll('](validation-guide.md)', '](app/docs/validation-guide.md)')
+  .replaceAll('](releasing.md)', '](app/docs/releasing.md)')
   .replaceAll('](../README.md#', '](app/README.md#'));
 await mkdir(join(payload, 'licenses'), { recursive: true });
 await copyFile(join(workspace, 'node_modules', 'vite', 'LICENSE.md'), join(payload, 'licenses', 'VITE-LICENSE.md'));
@@ -292,12 +293,34 @@ await ps(['-Mode', 'Compile', '-Source', join(workspace, 'scripts', 'windows', '
 const exe = join(output, name);
 await copyFile(built, exe);
 const exeHash = hash(await readFile(exe));
-await writeFile(join(output, 'SHA256SUMS'), exeHash + '  ' + name + '\n');
 await writeFile(join(output, name + '.json'), JSON.stringify({
   version: packageInfo.version, platform: 'win32', arch: 'x64', nodeVersion, copilotVersion, copilotExecutableSha256,
-  desktop: { defaultEntry: 'widget', mainWindow: 'native-winforms', webView: false },
+  desktop: { defaultEntry: 'pet', mainWindow: 'native-winforms', webView: false, pets: 10 },
   filename: name, sha256: exeHash, bytes: (await stat(exe)).size, unpackedBytes, payloadHash, files: members.length,
   signed: false, nodeArchiveSha256: archiveSha256, nodeExecutableSha256: nodeSha256,
 }, null, 2) + '\n');
+// Keep a convenient portable bundle alongside the directly runnable EXE.
+// Its checksum file validates the EXE; the external list also covers the bundle.
+const portable = join(stage, 'portable');
+await mkdir(portable);
+await copyFile(exe, join(portable, name));
+await copyFile(join(output, name + '.json'), join(portable, name + '.json'));
+await writeFile(join(portable, 'README.md'), '# PilotMeter ' + packageInfo.version + '\n\n' +
+  '双击 ' + name + ' 显示桌面宠物，点击宠物打开主窗口。无需安装 Node/npm/WebView。\n\n' +
+  '支持 Windows 10/11 x64 和系统 .NET Framework 4.8。十个宠物可在账户页或右键菜单切换。\n\n' +
+  '升级前从旧宠物菜单退出桌面界面，再用旧版 EXE 执行 stop，之后启动新版；账户和账本保留。\n\n' +
+  'SHA256SUMS 包含本包 EXE 校验值；版本清单记录运行时与未签名状态。\n\n' +
+  '[完整使用指南](https://github.com/Xiejiayun/PilotMeter/blob/v' + packageInfo.version + '/docs/windows-exe.md)\n');
+await writeFile(join(portable, 'SHA256SUMS'), exeHash + '  ' + name + '\n');
+const portableName = name.replace(/\.exe$/, '.zip');
+const portableArchive = join(stage, portableName);
+await ps(['-Mode', 'Zip', '-Source', portable, '-Destination', portableArchive]);
+await copyFile(portableArchive, join(output, portableName));
+const checksums = [];
+for (const asset of [name, name + '.json', portableName]) {
+  const result = await inspectFile(join(output, asset), asset, false);
+  checksums.push(result.sha256 + '  ' + asset);
+}
+await writeFile(join(output, 'SHA256SUMS'), checksums.join('\n') + '\n');
 step('Ready: ' + exe + ' (' + (await stat(exe)).size + ' bytes)');
 step('SHA-256: ' + exeHash);

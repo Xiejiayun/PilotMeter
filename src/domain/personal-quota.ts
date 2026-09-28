@@ -1,5 +1,5 @@
 import type { AccountQuotaBucket, PersonalQuota } from '../shared/accounts.js';
-import { compareDecimals, nonNegativeDecimal, normalizeDecimal, percentageOf } from './decimal.js';
+import { compareDecimals, nonNegativeDecimal, normalizeDecimal, percentageOf, subtractDecimals } from './decimal.js';
 import { timestamp } from './period.js';
 
 // Fixed SDK v1.0.14 generated rpc.ts distinguishes Chat, Completions and
@@ -27,6 +27,13 @@ export interface PersonalQuotaBucketView {
   /** Raw quantities are displayable only when their unit was explicitly returned. */
   used: string | null;
   limit: string | null;
+  remaining: string | null;
+  remainingSource: 'calculated' | null;
+  remainingPercentage: string | null;
+  /** Amount above the fixed allowance, not a claim about billed overage charges. */
+  overage: string | null;
+  /** Explicitly unverified source quantities for a separate, read-only details panel. */
+  raw: { used: string | null; limit: string | null; remainingPercentage: string | null };
   unlimited: boolean;
   nextResetAt: string | null;
 }
@@ -77,6 +84,10 @@ function projectBucket(bucket: AccountQuotaBucket, fetchedAt: number, now: numbe
   const used = unit === 'unspecified' ? null : rawUsed;
   const limit = unit === 'unspecified' || unlimited ? null : rawLimit;
   const overage = !unlimited && rawUsed !== null && rawLimit !== null && compareDecimals(rawUsed, rawLimit) > 0;
+  const remaining = used !== null && limit !== null ? overage ? '0' : subtractDecimals(limit, used) : null;
+  const exceeded = used !== null && limit !== null && overage ? subtractDecimals(used, limit) : null;
+  const rawRemainingPercentage = ratio(bucket.remainingPercentage) ? quantity(bucket.remainingPercentage) : null;
+  const remainingPercentage = unlimited || rawLimit === '0' || overage ? null : rawRemainingPercentage;
   const percent = unlimited || rawLimit === '0' || overage ? null : ratio(bucket.usedPercentage);
   const numeric = used === null ? '已用未知' : `${amount(used)}${limit === null ? '' : ` / ${amount(limit)}`}`;
   const value = unlimited ? '无固定上限' : percent?.text ?? numeric;
@@ -87,7 +98,8 @@ function projectBucket(bucket: AccountQuotaBucket, fetchedAt: number, now: numbe
   const reset = timestamp(bucket.resetAt);
   return {
     key: bucket.key, label: quotaBucketLabel(bucket.key), unit, unitLabel, value, detail,
-    percentage: percent?.percentage ?? null, used, limit, unlimited,
+    percentage: percent?.percentage ?? null, used, limit, remaining, remainingSource: remaining === null ? null : 'calculated',
+    remainingPercentage, overage: exceeded, raw: { used: rawUsed, limit: unlimited ? null : rawLimit, remainingPercentage: rawRemainingPercentage }, unlimited,
     nextResetAt: reset !== null && reset > now && reset > fetchedAt ? new Date(reset).toISOString() : null,
   };
 }

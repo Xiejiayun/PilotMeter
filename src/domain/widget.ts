@@ -38,16 +38,18 @@ function ratio(value: unknown): { number: number; text: string } | null {
 }
 
 /** A pure projection: use only selected identity and bounded quantities, never upstream free-form text. */
-export function buildWidget(summary: Summary, overview: AccountsOverview): WidgetSnapshot {
+export function buildWidget(summary: Summary, overview: AccountsOverview, selectedKey?: string | null): WidgetSnapshot {
   const summaryAt = date(summary.updatedAt);
   let accountLogin: string | null = null;
+  let unitLabel: WidgetSnapshot['unitLabel'] = null;
+  let unitUnspecified = false;
   function result(state: WidgetSnapshot['state'], title: string, value: string, detail: string,
     percentage: number | null = null, updatedAt = summaryAt): WidgetSnapshot {
     return {
       state, title: title.slice(0, WIDGET_TEXT_LIMITS.title), value: value.slice(0, WIDGET_TEXT_LIMITS.value),
       detail: detail.slice(0, WIDGET_TEXT_LIMITS.detail),
       percentage: percentage !== null && Number.isFinite(percentage) && percentage >= 0 && percentage <= 100 ? percentage : null,
-      accountLogin, updatedAt,
+      accountLogin, updatedAt, unitLabel, unitUnspecified,
     };
   }
   if (summary.demo || !overview.enabled) return result('waiting', 'PilotMeter 演示', '演示模式', '当前是合成示例；打开普通主窗口登录 GitHub。');
@@ -61,14 +63,18 @@ export function buildWidget(summary: Summary, overview: AccountsOverview): Widge
 
   const quota = overview.quota?.accountId === profile.id && overview.quota.scope === 'signed-in-user' ? overview.quota : null;
   const error = profile.status === 'error' || quota?.state === 'error' || !!quota?.error;
-  const personal = projectPersonalQuota(quota, summaryAt);
+  const personal = projectPersonalQuota(quota, summaryAt, selectedKey);
   if (personal.fetchedAt && personal.buckets.length) {
     const state = error ? 'error' : personal.stale || overview.refreshing ? 'waiting' : 'ready';
     const status = error ? '同步失败，显示旧快照；' : personal.stale ? '旧快照，等待同步；' : overview.refreshing ? '正在同步；' : '';
     if (personal.primary) {
       const bucket = personal.primary;
-      return result(bucket.value === '已用未知' && !error ? 'waiting' : state, `个人${bucket.label} · 当前周期`, bucket.value,
-        `${status}${bucket.detail}；个人额度不代表组织总池。`, state === 'ready' ? bucket.percentage : null, personal.fetchedAt);
+      unitLabel = bucket.unit === 'ai-credits' ? 'AI Credits' : bucket.unit === 'premium-requests' ? 'Premium Requests' : null;
+      unitUnspecified = bucket.unit === 'unspecified';
+      const left = ratio(bucket.remainingPercentage);
+      const value = bucket.remaining !== null ? `${amount(bucket.remaining)} 剩余` : left ? `剩余 ${left.text}` : bucket.value;
+      return result(bucket.value === '已用未知' && value === bucket.value && !error ? 'waiting' : state, `个人${bucket.label} · 当前周期`, value,
+        `${status}${bucket.remaining !== null ? `剩余 ${amount(bucket.remaining)} ${bucket.unitLabel}（总额减已用）；` : bucket.unit === 'unspecified' ? '单位未确认；' : ''}${bucket.detail}；个人额度不代表组织总池。`, state === 'ready' ? bucket.percentage : null, personal.fetchedAt);
     }
     if (personal.selection === 'required') {
       return result(error ? 'error' : 'waiting', '个人当前周期额度', '选择额度类别',
@@ -87,6 +93,8 @@ export function buildWidget(summary: Summary, overview: AccountsOverview): Widge
     const raw = typeof local.nanoAiu === 'string' && /^\d{1,256}$/.test(local.nanoAiu) ? quantity(local.nanoAiu) : null;
     const used = credits ?? raw;
     if (used !== null) {
+      unitLabel = credits === null ? null : 'AI Credits';
+      unitUnspecified = credits === null;
       const retained = summary.retention.prunedSpans > 0 ? '仍保留的已知小计' : '已记录的已知小计';
       const incomplete = local.unknownCalls > 0 || local.pendingCalls > 0 ? '，另有待定调用' : '';
       const detail = `${reason}${period}（UTC）本机${retained}${incomplete}；${credits === null ? 'nano AIU，换算未确认' : 'AI Credits'}。`;

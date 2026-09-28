@@ -68,7 +68,19 @@ if (isLogin) {
         ...(mode === 'quota-unit' ? { unit: 'ai-credits', billingMode: 'ai-credits' } : {}),
         ...(mode === 'quota-invalid' ? { usedRequests: -1 } : {}),
       } } });
-      else send(request.id, { code: -32601, message: 'Unexpected method' }, true);
+      else if (request.method === 'models.list') {
+        const enabled = { id: 'synthetic-model', name: 'Synthetic Model', policy: { state: 'enabled', terms: secret },
+          capabilities: { supports: { vision: true, reasoningEffort: false }, limits: { max_context_window_tokens: 128000 } },
+          billing: { multiplier: 'exact-fraction', token: secret }, token: secret, metadata: secret };
+        if (mode === 'models-unsupported' || mode === 'models-error') send(request.id,
+          { code: mode === 'models-unsupported' ? -32601 : -32603, message: secret, data: { token: secret } }, true);
+        else send(request.id, { models: mode === 'models-invalid' ? [{ ...enabled, id: 'unsafe\nmodel' }]
+          : mode === 'models-duplicate' ? [enabled, enabled]
+          : mode === 'models-many' ? Array.from({ length: 513 }, (_, index) => ({ ...enabled, id: `model-${index}` }))
+          : [enabled, { id: 'disabled-model', name: 'Disabled Model', policy: { state: 'disabled', terms: secret } },
+            { id: 'unconfigured-model', name: 'Unconfigured Model', policy: { state: 'unconfigured' } },
+            { id: 'no-policy-model', name: 'No Policy Model', capabilities: { supports: { vision: 'true' }, limits: { max_context_window_tokens: -1 } }, billing: { multiplier: -2 } }] });
+      } else send(request.id, { code: -32601, message: 'Unexpected method' }, true);
     }
   });
   process.stdin.on('end', () => process.exit(0));

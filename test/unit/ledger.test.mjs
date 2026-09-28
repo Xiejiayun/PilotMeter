@@ -189,6 +189,43 @@ test('session pagination sorts arbitrary precision usage and binds cursors to mo
   assert.equal(repository.session('missing-id'), null);
 });
 
+test('desktop records whitelist metadata, paginate fifty rows and bind cursors to account, period and sort', t => {
+  const repository = memory(t);
+  const a = { sourceContextPrefix: 'profile:11111111-1111-4111-8111-111111111111:' };
+  const b = { sourceContextPrefix: 'profile:22222222-2222-4222-8222-222222222222:' };
+  const items = Array.from({ length: 55 }, (_, index) => span(index + 1, { session: `synthetic-session-${index}`, cost: String(index + 1),
+    attributes: [attr('gen_ai.input.messages', 'PRIVATE_CONTENT')], events: [{ name: 'PRIVATE_EVENT' }] }));
+  repository.ingest(parseOtlp(envelope(items), `${a.sourceContextPrefix}private-source-label`));
+  repository.ingest(parseOtlp(envelope([span(100, { session: 'other-account', cost: '999999' })]), `${b.sourceContextPrefix}private-source-label`));
+  const first = repository.desktopRecords('2026-09', { sort: 'usage', scope: a }, verify);
+  assert.equal(first.items.length, 50); assert.ok(first.nextCursor);
+  assert.equal(first.items[0].nanoAiu, '55'); assert.equal(first.items[0].credits, '0.000000055');
+  assert.equal(first.items[0].unitVerified, true);
+  assert.deepEqual(Object.keys(first.items[0]).sort(), ['id', 'sessionId', 'firstSeen', 'lastSeen', 'nanoAiu', 'knownCalls', 'unknownCalls', 'pendingCalls', 'models', 'unitVerified', 'credits'].sort());
+  assert.doesNotMatch(JSON.stringify(first), /PRIVATE|private-source-label|sourceContext|inputTokens|outputTokens|events|999999/);
+  const second = repository.desktopRecords('2026-09', { sort: 'usage', scope: a, cursor: first.nextCursor }, verify);
+  assert.equal(second.items.length, 5); assert.equal(second.nextCursor, null); assert.equal(second.items.at(-1).nanoAiu, '1');
+  assert.equal(new Set([...first.items, ...second.items].map(item => item.id)).size, 55);
+  for (const [period, options] of [['2026-10', { sort: 'usage', scope: a }], ['2026-09', { sort: 'recent', scope: a }], ['2026-09', { sort: 'usage', scope: b }]])
+    assert.throws(() => repository.desktopRecords(period, { ...options, cursor: first.nextCursor }, verify), /cursor/);
+  assert.equal(repository.desktopRecords('2026-09', { scope: b }).items.length, 1);
+});
+
+test('desktop record credits are verified independently from each monthly contributing root', t => {
+  const repository = memory(t);
+  repository.ingest(records([span(1, { session: 'known', cost: '9007199254740993' }), span(2, { session: 'missing-cost', cost: null })]));
+  repository.ingest(records([span(3, { session: 'future-version', cost: '5' })], '1.0.89'));
+  // Neither a child nor another month's span can invalidate a known monthly root's unit evidence.
+  repository.ingest(records([span(4, { session: 'known', parentSpanId: id(1), operation: 'chat', cost: '4' }),
+    span(5, { session: 'known', cost: '8', startTimeUnixNano: nanos('2026-08-15T12:00:00.000Z'), endTimeUnixNano: nanos('2026-08-15T12:00:01.000Z') })], '1.0.89'));
+  const page = repository.desktopRecords('2026-09', {}, verify);
+  const known = page.items.find(item => item.sessionId === 'known');
+  assert.equal(known.unitVerified, true); assert.equal(known.nanoAiu, '9007199254740993'); assert.equal(known.credits, '9007199.254740993');
+  for (const item of page.items.filter(item => item.sessionId !== 'known')) { assert.equal(item.unitVerified, false); assert.equal(item.credits, null); }
+  for (const evidence of [null, { ...verify, cliVersion: '1.0.89' }, { ...verify, evidence: '' }])
+    assert.ok(repository.desktopRecords('2026-09', {}, evidence).items.every(item => !item.unitVerified && item.credits === null));
+});
+
 test('database persistence and diagnostics never retain rejected content or extra object properties', t => {
   const directory = mkdtempSync(join(tmpdir(), 'pilotmeter-privacy-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));

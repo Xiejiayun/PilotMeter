@@ -51,7 +51,17 @@ switch ($Mode) {
         $brand = Join-Path ([IO.Path]::GetDirectoryName($Source)) 'DesktopBrand.cs'
         $nativeWindow = Join-Path ([IO.Path]::GetDirectoryName($Source)) 'DesktopMainWindow.cs'
         $nativeApi = Join-Path ([IO.Path]::GetDirectoryName($Source)) 'DesktopNativeApi.cs'
-        & $compiler /nologo /target:winexe /platform:x64 /optimize+ "/out:$Destination" "/win32manifest:$ApplicationManifest" "/win32icon:$ApplicationIcon" "/resource:$ApplicationIcon,PilotMeter.Icon" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll $Source $widget $brand $nativeWindow $nativeApi $Configuration
+        $dashboardViews = Join-Path ([IO.Path]::GetDirectoryName($Source)) 'DesktopDashboardViews.cs'
+        $pets = Join-Path ([IO.Path]::GetDirectoryName($Source)) 'DesktopPets.cs'
+        $petDirectory = Join-Path ([IO.Path]::GetDirectoryName($Source)) '../../docs/design/pets'
+        $petNames = @('pilot', 'cat', 'shiba', 'penguin', 'slime', 'robot', 'cloud', 'sprout', 'jellyfish', 'dragon')
+        $petResources = for ($index = 0; $index -lt $petNames.Count; $index++) {
+            $petId = '{0:D2}' -f ($index + 1)
+            $petFile = [IO.Path]::GetFullPath((Join-Path $petDirectory ("pet-$petId-" + $petNames[$index] + '.png')))
+            if (-not (Test-Path -LiteralPath $petFile -PathType Leaf)) { throw "Missing pet image: $petId" }
+            "/resource:$petFile,PilotMeter.Pets.$petId"
+        }
+        & $compiler /nologo /target:winexe /platform:x64 /optimize+ "/out:$Destination" "/win32manifest:$ApplicationManifest" "/win32icon:$ApplicationIcon" "/resource:$ApplicationIcon,PilotMeter.Icon" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll @petResources $Source $widget $brand $nativeWindow $nativeApi $dashboardViews $pets $Configuration
         if ($LASTEXITCODE -ne 0) { throw "Desktop compilation failed: $LASTEXITCODE" }
     }
 }

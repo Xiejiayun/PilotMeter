@@ -1,3 +1,5 @@
+import type { AccountModels } from './models.js';
+
 /** Browser DTOs never contain OAuth credentials, SDK selection IDs, or credential paths. */
 export interface GitHubProfile {
   id: string;
@@ -45,6 +47,7 @@ export interface AccountsOverview {
   accounts: GitHubProfile[];
   activeAccountId: string | null;
   quota: PersonalQuota | null;
+  models: AccountModels | null;
   login: AccountLogin | null;
   refreshing: boolean;
   enabled: boolean;

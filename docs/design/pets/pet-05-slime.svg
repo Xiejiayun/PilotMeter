@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="p05-title">
+  <title id="p05-title">薄荷团：带小短手和透明高光的呆萌软糖史莱姆</title>
+  <defs>
+    <linearGradient id="p05-jelly" x1="46" y1="23" x2="79" y2="110" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#c8f8d9" stop-opacity=".94"/>
+      <stop offset=".46" stop-color="#8ce7bc" stop-opacity=".94"/>
+      <stop offset="1" stop-color="#55c7ac" stop-opacity=".96"/>
+    </linearGradient>
+    <linearGradient id="p05-arm" x1="30" y1="72" x2="30" y2="92" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#a3eecd"/>
+      <stop offset="1" stop-color="#65cdb0"/>
+    </linearGradient>
+    <radialGradient id="p05-glow" cx=".37" cy=".18" r=".8">
+      <stop stop-color="#f4ffe7" stop-opacity=".8"/>
+      <stop offset="1" stop-color="#d2ffe0" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="p05-soft" x="-25%" y="-100%" width="150%" height="300%">
+      <feGaussianBlur stdDeviation="2"/>
+    </filter>
+  </defs>
+  <ellipse cx="65" cy="112" rx="34" ry="3.2" fill="#318b77" opacity=".14" filter="url(#p05-soft)"/>
+  <g class="pet-body" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M31 78C24 73 16 72 15 78C13 84 20 91 29 91Z" fill="url(#p05-arm)" stroke="#55b79a" stroke-width="1.5"/>
+    <path d="M100 77C106 73 114 72 115 78C116 84 110 89 103 90Z" fill="url(#p05-arm)" stroke="#55b79a" stroke-width="1.5"/>
+    <path d="M29 91C21 81 25 67 33 59C35 43 38 31 49 25C61 18 71 23 75 33C87 29 98 38 99 54C109 64 114 85 105 99C99 109 86 111 75 107C64 113 51 110 43 107C31 112 20 105 29 91Z" fill="url(#p05-jelly)" stroke="#54b797" stroke-width="1.7"/>
+    <path d="M35 65C38 51 38 35 50 29C61 23 66 28 70 38C73 44 87 33 93 50C97 63 99 75 94 86C86 98 43 101 34 88C29 81 30 72 35 65Z" fill="url(#p05-glow)"/>
+    <path d="M30 91C41 98 44 94 52 98C60 103 67 100 74 99C81 103 97 99 105 93C104 104 89 110 75 105C66 110 52 108 44 104C35 108 27 103 30 98Z" fill="#2fae9d" opacity=".16"/>
+    <path d="M42 45C44 36 50 30 57 31" fill="none" stroke="#f6fff3" stroke-width="6" opacity=".87"/>
+    <ellipse cx="38" cy="56" rx="2.8" ry="4" fill="#f5fff1" opacity=".75" transform="rotate(18 38 56)"/>
+    <ellipse cx="90" cy="52" rx="3.7" ry="5" fill="#ecffe8" opacity=".32" transform="rotate(-24 90 52)"/>
+    <ellipse cx="43" cy="77" rx="6" ry="3" fill="#f8e1ad" opacity=".5"/>
+    <ellipse cx="85" cy="78" rx="6" ry="3" fill="#f8e1ad" opacity=".5"/>
+    <g class="pet-eyes" fill="#285f52">
+      <ellipse cx="50" cy="66" rx="3" ry="3.8"/>
+      <ellipse cx="78" cy="68" rx="3" ry="3.8"/>
+      <circle cx="50.8" cy="64.8" r=".8" fill="#f4ffe9"/>
+      <circle cx="78.8" cy="66.8" r=".8" fill="#f4ffe9"/>
+    </g>
+    <path d="M59 78C61 83 66 83 69 79" fill="none" stroke="#357762" stroke-width="2"/>
+    <path d="M43 101C46 102 49 102 52 102M79 103C84 104 89 103 92 101" fill="none" stroke="#d6ffdf" stroke-width="2" opacity=".6"/>
+  </g>
+</svg>

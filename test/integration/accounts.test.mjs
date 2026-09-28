@@ -146,7 +146,7 @@ test('demo exposes disabled account state and rejects every real account operati
 
 test('browser account responses and status cache omit capabilities and reject stale profile query IDs', async t => {
   const { instance, directory } = await service(t);
-  for (const route of ['/api/auth/accounts', '/api/summary', '/api/sessions', '/api/settings']) {
+  for (const route of ['/api/auth/accounts', '/api/summary', '/api/sessions', '/api/settings', '/api/desktop', '/api/desktop/records', '/api/widget']) {
     const result = await api(instance, route);
     assert.equal(result.status, 200);
     assert.equal(result.headers.get('cache-control'), 'no-store');
@@ -158,7 +158,7 @@ test('browser account responses and status cache omit capabilities and reject st
   assert.ok(!snapshot.includes(instance.managementToken));
   assert.ok(!snapshot.includes(instance.collectorToken));
   const unknown = randomUUID();
-  for (const route of ['/api/summary', '/api/sessions', '/api/sessions/missing', '/api/settings']) {
+  for (const route of ['/api/summary', '/api/sessions', '/api/sessions/missing', '/api/settings', '/api/desktop', '/api/desktop/records', '/api/widget']) {
     assert.equal((await api(instance, `${route}?accountId=${unknown}`)).status, 409, route);
   }
   assert.equal((await api(instance, '/api/summary?accountId=')).status, 200);
@@ -184,6 +184,12 @@ function fakeAccounts() {
         return { selectionId, scope: 'user', fetchedAt: new Date().toISOString(), snapshots: [{ type: 'chat', unit: null, billingMode: 'unknown',
           usedRequests: plan.used, entitlementRequests: '100', remainingPercentage: 100 - Number(plan.used), overage: '0', isUnlimitedEntitlement: false,
           usageAllowedWithExhaustedQuota: false, overageAllowedWithExhaustedQuota: false, resetDate: null }] };
+      },
+      async listModels(selectionId) {
+        assert.equal(selectionId, `private-selection-${plan.login}`);
+        return { selectionId, fetchedAt: new Date().toISOString(), items: [{ id: `${plan.login}-model`, name: 'Synthetic Model',
+          status: 'available', reason: 'Synthetic policy enabled', policyState: 'enabled', vision: true, reasoningEffort: false,
+          contextWindowTokens: 128000, multiplier: '1', token: 'synthetic-private-token' }] };
       },
       async close() { this.closed = true; },
     };
@@ -244,6 +250,23 @@ test('two authenticated HTTP profiles isolate live collectors, sessions, persona
   assert.equal(bSummary.githubAccount.id, b.id);
   assert.equal(bSummary.local.nanoAiu, '20');
   assert.equal(bSummary.account, null, 'personal quota is not inserted into organization billing evidence');
+  const bDesktop = (await api(instance, `/api/desktop?accountId=${b.id}`)).data;
+  assert.equal(bDesktop.activeAccountId, b.id); assert.equal(bDesktop.models.accountId, b.id);
+  assert.equal(bDesktop.models.items[0].id, 'SyntheticBob-model'); assert.equal(bDesktop.local.accountId, b.id);
+  assert.equal(bDesktop.local.nanoAiu, '20'); assert.equal(bDesktop.local.source, 'local-otel');
+  assert.equal(bDesktop.presentation.primary.unit, 'unspecified'); assert.equal(bDesktop.presentation.primary.used, null);
+  assert.equal(bDesktop.presentation.primary.remaining, null); assert.equal(bDesktop.presentation.primary.raw.used, '50');
+  const bRecords = (await api(instance, `/api/desktop/records?accountId=${b.id}&sort=usage`)).data;
+  assert.equal(bRecords.accountId, b.id); assert.equal(bRecords.items.length, 1); assert.equal(bRecords.items[0].nanoAiu, '20');
+  assert.equal(bRecords.items[0].credits, null); assert.equal(bRecords.items[0].unitVerified, false);
+  assert.equal(bRecords.coverage, 'partial'); assert.equal(bRecords.source, 'local-otel');
+  assert.doesNotMatch(JSON.stringify([bDesktop, bRecords]), /synthetic-private|private-selection|sourceContext|events/);
+  assert.doesNotMatch(JSON.stringify(bRecords), /inputTokens|outputTokens/);
+  const bWidget = (await api(instance, `/api/widget?accountId=${b.id}&quotaKey=chat`)).data;
+  assert.equal(bWidget.accountId, b.id); assert.equal(bWidget.accountLogin, 'SyntheticBob'); assert.equal(bWidget.value, '剩余 50%');
+  for (const route of ['/api/desktop', '/api/desktop/records', '/api/widget'])
+    assert.equal((await api(instance, `${route}?accountId=${a.id}&quotaKey=chat`)).status, 409);
+  assert.equal((await api(instance, `/api/auth/refresh?accountId=${a.id}`, { method: 'POST', headers: browser })).status, 409);
   const bSessions = (await api(instance, '/api/sessions')).data;
   assert.equal(bSessions.accountId, b.id);
   assert.equal(bSessions.items.length, 1);
@@ -254,6 +277,9 @@ test('two authenticated HTTP profiles isolate live collectors, sessions, persona
   assert.equal((await api(instance, '/api/settings')).data.monthlyBudget, '200');
   assert.equal((await api(instance, '/api/auth/select', { method: 'POST', headers: browser, body: { accountId: a.id } })).status, 200);
   assert.equal((await api(instance, '/api/summary')).data.local.nanoAiu, '17', 'the old Alice collector remains bound after switching to Bob');
+  const aDesktop = (await api(instance, `/api/desktop?accountId=${a.id}`)).data;
+  assert.equal(aDesktop.models.items[0].id, 'SyntheticAlice-model'); assert.equal(aDesktop.local.nanoAiu, '17');
+  assert.equal((await api(instance, `/api/desktop/records?accountId=${a.id}`)).data.items[0].nanoAiu, '17');
   assert.equal((await api(instance, '/api/settings')).data.monthlyBudget, '100');
   assert.equal((await api(instance, `/api/sessions/${aSession.id}`)).data.lifetime.nanoAiu, '17');
   const overview = (await api(instance, '/api/auth/accounts')).data;

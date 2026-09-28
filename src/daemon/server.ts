@@ -21,6 +21,7 @@ import { CopilotClientError } from '../providers/copilot-client.js';
 import { buildWidget } from '../domain/widget.js';
 import { projectPersonalQuota } from '../domain/personal-quota.js';
 import type { WidgetResponse } from '../shared/widget.js';
+import type { DesktopResponse, DesktopRecordsResponse, DesktopLocal } from '../shared/desktop.js';
 
 class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 const defaultSettings: Settings = { monthlyBudget: null, unitVerification: null, account: null, retentionDays: null, demo: false };
@@ -95,6 +96,12 @@ export async function serve(dir: string, demo = false, options: { accounts?: Pic
     return { period, local, account, display, retention, reconciliation: report, updatedAt: new Date().toISOString(), demo: settings.demo,
       githubAccount: active ? { id: active.id, login: active.login, host: active.host } : null };
   }
+  function localDesktop(period = month()): DesktopLocal {
+    const active = accounts.active();
+    return { ...repo.summary(period, settings.unitVerification, scope()), accountId: active?.id ?? null,
+      source: 'local-otel', scope: active ? `${active.login} · 通过 PilotMeter 启动的本机会话` : '本机仍保留的会话记录',
+      retained: repo.getRetentionStatus().prunedSpans > 0, updatedAt: new Date().toISOString() };
+  }
   let cacheChain = Promise.resolve();
   function updateCache(): Promise<void> { const snapshot = summary(); cacheChain = cacheChain.catch(() => {}).then(() => atomicJson(join(dir, 'status.json'), snapshot)); return cacheChain; }
   async function refresh(manual = false): Promise<unknown> {
@@ -123,7 +130,8 @@ export async function serve(dir: string, demo = false, options: { accounts?: Pic
       const url = new URL(req.url || '/', instance.url);
       const route = url.pathname;
       const requestProfile = accounts.active();
-      if ((route === '/api/summary' || route === '/api/sessions' || route.startsWith('/api/sessions/') || route === '/api/settings') && url.searchParams.has('accountId')
+      if ((route === '/api/summary' || route === '/api/sessions' || route.startsWith('/api/sessions/') || route === '/api/settings'
+        || route === '/api/desktop' || route === '/api/desktop/records' || route === '/api/widget' || route === '/api/auth/refresh') && url.searchParams.has('accountId')
         && url.searchParams.get('accountId') !== (accounts.active()?.id ?? '')) throw new HttpError(409, '当前账号已在另一窗口切换，请刷新后重试。');
       const management = equal(req.headers.authorization, `Bearer ${instance.managementToken}`);
       const presentedToken = (req.headers['x-pilotmeter-token'] as string | undefined) || req.headers.authorization?.replace(/^Bearer /, '');
@@ -192,16 +200,31 @@ export async function serve(dir: string, demo = false, options: { accounts?: Pic
         const overview = accounts.overview(!settings.demo);
         const profile = overview.accounts.find(item => item.id === overview.activeAccountId);
         const quota = profile && profile.status !== 'reauth-required' && overview.quota?.accountId === profile.id ? overview.quota : null;
-        json(res, 200, { app: APP, version: VERSION, instanceId: instance.instanceId,
+        const view: DesktopResponse = { app: APP, version: VERSION, instanceId: instance.instanceId,
           accounts: overview.accounts, activeAccountId: overview.activeAccountId, login: overview.login,
           enabled: overview.enabled, refreshing: overview.refreshing,
           quota: quota ? { accountId: quota.accountId, state: quota.state, fetchedAt: quota.fetchedAt, stale: quota.stale, error: quota.error } : null,
-          presentation: projectPersonalQuota(quota, Date.now(), url.searchParams.get('quotaKey')) });
+          presentation: projectPersonalQuota(quota, Date.now(), url.searchParams.get('quotaKey')),
+          models: profile && profile.status !== 'reauth-required' && overview.models?.accountId === profile.id ? overview.models : null,
+          local: localDesktop(),
+        };
+        json(res, 200, view);
         return;
       }
+      if (req.method === 'GET' && route === '/api/desktop/records') {
+        const period = month(url.searchParams.get('period') || undefined);
+        const sort = url.searchParams.get('sort') || 'recent';
+        if (!['recent', 'usage'].includes(sort)) throw new HttpError(400, '记录排序只支持 recent 或 usage。');
+        const local = localDesktop(period);
+        const records: DesktopRecordsResponse = { app: APP, version: VERSION, instanceId: instance.instanceId,
+          accountId: local.accountId, period, source: 'local-otel', scope: local.scope, coverage: 'partial',
+          retained: local.retained, updatedAt: local.updatedAt,
+          ...repo.desktopRecords(period, { cursor: url.searchParams.get('cursor') || undefined, sort, scope: scope() }, settings.unitVerification) };
+        json(res, 200, records); return;
+      }
       if (req.method === 'GET' && route === '/api/widget') {
-        const widget: WidgetResponse = { app: APP, version: VERSION, instanceId: instance.instanceId,
-          ...buildWidget(summary(), accounts.overview(!settings.demo)) };
+        const widget: WidgetResponse = { app: APP, version: VERSION, instanceId: instance.instanceId, accountId: accounts.active()?.id ?? null,
+          ...buildWidget(summary(), accounts.overview(!settings.demo), url.searchParams.get('quotaKey')) };
         json(res, 200, widget); return;
       }
       if (req.method === 'GET' && route === '/api/sessions') { json(res, 200, { ...repo.sessions(month(url.searchParams.get('period') || undefined), { cursor: url.searchParams.get('cursor') || undefined, sort: url.searchParams.get('sort') || 'usage', limit: 50, scope: scope() }), accountId: accounts.active()?.id ?? null }); return; }

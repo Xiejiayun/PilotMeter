@@ -7,6 +7,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { StringDecoder } from 'node:string_decoder';
 import { nonNegativeDecimal, normalizeDecimal } from '../domain/decimal.js';
+import type { AccountModel } from '../shared/models.js';
 
 /** Account RPCs are experimental. These wire shapes were checked against SDK 1.0.14 / CLI 1.0.88. */
 export const COPILOT_RUNTIME_VERSION = '1.0.88';
@@ -44,6 +45,11 @@ export interface CopilotQuota {
   fetchedAt: string;
   scope: 'user';
   snapshots: CopilotQuotaSnapshot[];
+}
+export interface CopilotModels {
+  selectionId: string;
+  fetchedAt: string;
+  items: AccountModel[];
 }
 export interface CopilotLogin {
   id: string;
@@ -222,7 +228,7 @@ class Runtime {
       let response: Record<string, unknown> | null;
       try {
         response = object(JSON.parse(bytes.toString('utf8'), (key: string, value: unknown, context?: { source?: string }) => {
-          if (!['entitlementRequests', 'usedRequests', 'overage'].includes(key) || typeof value !== 'number') return value;
+          if (!['entitlementRequests', 'usedRequests', 'overage', 'multiplier'].includes(key) || typeof value !== 'number') return value;
           if (!context?.source) throw fail('EXACT_JSON_UNAVAILABLE', '当前运行时无法保留额度小数精度');
           return context.source;
         }));
@@ -444,6 +450,41 @@ export class CopilotClient {
         resetDate: snapshot.resetDate === undefined ? null : snapshot.resetDate as string, unit, billingMode });
     }
     return { selectionId, fetchedAt: new Date().toISOString(), scope: 'user', snapshots };
+    });
+  }
+
+  /** SDK v1.0.14 ModelsListRequest binds this read-only RPC to an account.getAllUsers selection. */
+  async listModels(selectionId: string): Promise<CopilotModels> {
+    if (!safeText(selectionId, 4096)) throw fail('ACCOUNT_INVALID', 'Copilot 账号标识无效');
+    return this.#query(async runtime => {
+      if (this.#accountRuntime !== runtime || !this.#accounts.has(selectionId)) throw fail('ACCOUNT_NOT_FOUND', '请重新获取账号列表后选择账号');
+      const result = object(await runtime.request('models.list', { selectionId }));
+      if (!Array.isArray(result?.models) || result.models.length > 512) throw fail('MODELS_INVALID', 'Copilot 模型目录格式无法识别');
+      const ids = new Set<string>();
+      const items: AccountModel[] = result.models.map(raw => {
+        const model = object(raw);
+        if (!model || !safeText(model.id, 128) || !/^[a-z\d][a-z\d._:/-]*$/i.test(model.id)
+          || !safeText(model.name, 160) || ids.has(model.id)) throw fail('MODELS_INVALID', 'Copilot 模型标识无法识别');
+        ids.add(model.id);
+        const policy = object(model.policy)?.state;
+        const policyState: AccountModel['policyState'] = policy === 'enabled' || policy === 'disabled' || policy === 'unconfigured' ? policy : null;
+        const status = policyState === 'enabled' ? 'available' : policyState === 'disabled' ? 'disabled' : 'unknown';
+        const capabilities = object(model.capabilities);
+        const supports = object(capabilities?.supports);
+        const context = object(capabilities?.limits)?.max_context_window_tokens;
+        const rawMultiplier = object(model.billing)?.multiplier;
+        let multiplier: string | null = null;
+        try { if (rawMultiplier !== undefined) multiplier = nonNegativeDecimal(nonNegativeDecimal(rawMultiplier)); } catch { /* Omit unsupported billing metadata. */ }
+        return { id: model.id, name: model.name, status, policyState,
+          reason: status === 'available' ? '官方模型策略明确启用；不代表已完成实际调用验证。'
+            : status === 'disabled' ? '官方模型策略明确禁用；未推断禁用主体。' : '模型目录已返回，当前策略未明确确认使用资格。',
+          vision: typeof supports?.vision === 'boolean' ? supports.vision : null,
+          reasoningEffort: typeof supports?.reasoningEffort === 'boolean' ? supports.reasoningEffort : null,
+          contextWindowTokens: typeof context === 'number' && Number.isSafeInteger(context) && context > 0 ? context : null,
+          multiplier,
+        };
+      });
+      return { selectionId, fetchedAt: new Date().toISOString(), items };
     });
   }
 

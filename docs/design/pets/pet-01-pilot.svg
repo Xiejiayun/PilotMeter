@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-labelledby="p01-title">
+  <title id="p01-title">小航 · 戴护目镜和绿色围巾的口袋飞行员</title>
+  <defs>
+    <linearGradient id="p01-cap" x1="39" y1="21" x2="86" y2="74" gradientUnits="userSpaceOnUse"><stop stop-color="#719887"/><stop offset="1" stop-color="#3a6859"/></linearGradient>
+    <linearGradient id="p01-suit" x1="43" y1="74" x2="77" y2="109" gradientUnits="userSpaceOnUse"><stop stop-color="#92b3a0"/><stop offset="1" stop-color="#6e9683"/></linearGradient>
+    <linearGradient id="p01-face" x1="63" y1="37" x2="63" y2="82" gradientUnits="userSpaceOnUse"><stop stop-color="#fff5dc"/><stop offset="1" stop-color="#f2ddaf"/></linearGradient>
+    <linearGradient id="p01-lens" x1="48" y1="40" x2="53" y2="56" gradientUnits="userSpaceOnUse"><stop stop-color="#f3eac8"/><stop offset="1" stop-color="#d4dab9"/></linearGradient>
+    <radialGradient id="p01-shadow"><stop stop-color="#465f50" stop-opacity=".2"/><stop offset="1" stop-color="#465f50" stop-opacity="0"/></radialGradient>
+  </defs>
+  <ellipse cx="64" cy="112" rx="35" ry="5" fill="url(#p01-shadow)"/>
+  <g class="pet-body" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M80 76c12 1 18-5 25-2l-4 8 7 4c-12 5-23 3-30-3Z" fill="#24745c" stroke="#215c4b" stroke-width="1.5"/>
+    <path d="M85 79c7 2 13 1 18-2" fill="none" stroke="#68a58a" stroke-width="2"/>
+    <path d="M43 102l-2 7c0 4 15 5 18 1l1-8M69 102l1 8c3 4 18 3 18-1l-3-8" fill="#385b50" stroke="#304f45" stroke-width="1.7"/>
+    <path d="M48 75c-7 7-8 18-8 27 7 9 40 9 48 0 0-12-3-22-10-27Z" fill="url(#p01-suit)" stroke="#486e5b" stroke-width="1.7"/>
+    <path d="M50 89v12c7 4 21 4 28 0V89" fill="#a7c3ae" opacity=".65"/>
+    <path d="M64 86v18" fill="none" stroke="#648b76" stroke-width="1.8"/>
+    <path d="M42 80c-6 2-11 7-14 13l9 5 10-11" fill="#7da58d" stroke="#486e5b" stroke-width="1.7"/>
+    <path d="M30 91c-4 0-8 6-4 10 3 3 9 0 11-5" fill="url(#p01-face)" stroke="#957f59" stroke-width="1.5"/>
+    <path d="M84 80c5 1 10-4 13-8l7 5c-4 8-9 13-17 13" fill="#7da58d" stroke="#486e5b" stroke-width="1.7"/>
+    <path d="M97 74c-2-3 0-9 3-11 2-1 3 2 3 4 3-2 7 0 7 3 0 4-3 8-6 8" fill="url(#p01-face)" stroke="#957f59" stroke-width="1.5"/>
+    <path d="M28 47c0-19 14-28 35-28s36 9 37 28l-1 21c-1 6-7 10-11 7H39c-6 4-12-1-12-7Z" fill="url(#p01-cap)" stroke="#385e50" stroke-width="1.8"/>
+    <path d="M39 31c7-7 23-9 33-7" fill="none" stroke="#aac5af" stroke-width="3.4" opacity=".7"/>
+    <path d="M64 22v13" fill="none" stroke="#416d5a" stroke-width="1.7"/>
+    <path d="M36 43c8-10 45-10 55 0v18c0 15-12 23-27 23S35 76 35 62Z" fill="url(#p01-face)" stroke="#846f4f" stroke-width="1.6"/>
+    <path d="M29 49h7v18c0 4-2 7-5 7-3 0-4-3-4-6V55" fill="#456f5d"/>
+    <path d="M91 49h7v19c0 4-2 6-4 6s-4-3-4-7Z" fill="#456f5d"/>
+    <path d="M32 43h64" fill="none" stroke="#355649" stroke-width="5"/>
+    <path d="M37 44c1-5 20-6 24-1 3 4 1 12-3 15-4 3-13 3-17-1-3-3-5-9-4-13Z" fill="url(#p01-lens)" stroke="#5b5545" stroke-width="3"/>
+    <path d="M67 43c4-5 23-4 24 1 1 4-1 10-4 13-4 4-13 4-17 1-4-3-6-11-3-15Z" fill="url(#p01-lens)" stroke="#5b5545" stroke-width="3"/>
+    <path d="M61 47c2-2 4-2 6 0" fill="none" stroke="#5b5545" stroke-width="2.7"/>
+    <path d="M41 43l6-1M71 42l6 1" fill="none" stroke="#fff9e4" stroke-width="2.6"/>
+    <g class="pet-eyes" fill="#293f36">
+      <ellipse cx="51" cy="50" rx="2.6" ry="3.9"/>
+      <ellipse cx="78" cy="50" rx="2.6" ry="3.9"/>
+      <circle cx="51.7" cy="48.8" r=".8" fill="#fff9e8"/>
+      <circle cx="78.7" cy="48.8" r=".8" fill="#fff9e8"/>
+    </g>
+    <ellipse cx="43" cy="65" rx="5" ry="2.8" fill="#e8b697" opacity=".8"/>
+    <ellipse cx="85" cy="65" rx="5" ry="2.8" fill="#e8b697" opacity=".8"/>
+    <path d="M61 61c0 2 2 3 5 2" fill="none" stroke="#b4996f" stroke-width="1.5"/>
+    <path d="M58 68c3 5 9 5 12 0" fill="#bb7e5c" stroke="#806247" stroke-width="1.7"/>
+    <path d="M45 78c8 6 27 7 38-1l2 7c-11 9-31 8-41 0Z" fill="#2d8265" stroke="#24664f" stroke-width="1.5"/>
+    <path d="M72 84l4 15 8-5-7-13" fill="#398e6e" stroke="#24664f" stroke-width="1.5"/>
+    <path d="M48 81c6 3 15 4 22 2" fill="none" stroke="#83b394" stroke-width="2"/>
+    <circle cx="74" cy="84" r="4.4" fill="#d9bf76" stroke="#8e8651" stroke-width="1.2"/>
+    <path d="M71.5 84h5M74 81.5v5" stroke="#f9e8ab" stroke-width="1.2"/>
+  </g>
+</svg>

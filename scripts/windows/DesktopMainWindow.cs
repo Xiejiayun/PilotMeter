@@ -105,7 +105,8 @@ internal sealed class NativeAccount
 internal sealed class NativeBucket
 {
     internal string Key, Label, Value, Detail, NextResetAt, Unit, UnitLabel;
-    internal double? Percentage;
+    internal string Used, Limit, Remaining, Overage, RemainingSource, RemainingPercentageText, RawUsed, RawLimit, RawRemainingPercentage;
+    internal double? Percentage, RemainingPercentage;
     internal bool Unlimited;
     public override string ToString() { return Label; }
 
@@ -118,6 +119,17 @@ internal sealed class NativeBucket
             Unit = NativeData.Text(source, "unit", 32), UnitLabel = NativeData.Clean(NativeData.Text(source, "unitLabel", 80), 80), Unlimited = NativeData.Flag(source, "unlimited")
         };
         if (result.Unit != "ai-credits" && result.Unit != "premium-requests" && result.Unit != "unspecified") throw new InvalidDataException("额度单位无效。");
+        result.Used = NativeDisplay.Quantity(source, "used"); result.Limit = NativeDisplay.Quantity(source, "limit");
+        result.Remaining = NativeDisplay.Quantity(source, "remaining"); result.Overage = NativeDisplay.Quantity(source, "overage");
+        result.RemainingPercentage = NativeDisplay.Percent(source, "remainingPercentage");
+        result.RemainingPercentageText = NativeDisplay.Quantity(source, "remainingPercentage");
+        result.RemainingSource = NativeData.Text(source, "remainingSource", 32, true);
+        if (result.RemainingSource != null && result.RemainingSource != "calculated" || result.Unit == "unspecified" && (result.Used != null || result.Limit != null || result.Remaining != null || result.Overage != null)
+            || result.Unlimited && (result.Limit != null || result.Remaining != null || result.Overage != null)) throw new InvalidDataException("额度数量与计量单位不一致。");
+        var raw = NativeData.Map(source, "raw");
+        result.RawUsed = NativeDisplay.Quantity(raw, "used"); result.RawLimit = NativeDisplay.Quantity(raw, "limit");
+        result.RawRemainingPercentage = NativeDisplay.Quantity(raw, "remainingPercentage");
+        NativeDisplay.Percent(raw, "remainingPercentage");
         object percentage;
         if (source.TryGetValue("percentage", out percentage) && percentage != null)
         {
@@ -156,11 +168,14 @@ internal sealed class NativeOverview
     internal readonly List<NativeAccount> Accounts = new List<NativeAccount>();
     internal readonly List<NativeBucket> Buckets = new List<NativeBucket>();
     internal string ActiveId, Selection, FetchedAt, QuotaError;
-    internal bool Enabled, Refreshing, Stale, QuotaAvailable;
+    internal bool Enabled, Refreshing, Stale, QuotaAvailable, QuotaHasSnapshot;
     internal NativeBucket Primary;
     internal NativeLogin Login;
+    internal NativeModels Models;
+    internal NativeLocalUsage Local;
     internal NativeAccount Active { get { return Accounts.Find(delegate(NativeAccount account) { return account.Id == ActiveId; }); } }
     internal bool CanDisplayQuota { get { return Active != null && Active.Status == "connected" && QuotaAvailable && !Stale; } }
+    internal bool CanDisplaySnapshot { get { return Active != null && Active.Status == "connected" && QuotaHasSnapshot && Buckets.Count > 0; } }
 
     internal static NativeOverview Read(Dictionary<string, object> source, DesktopInstance expected)
     {
@@ -189,6 +204,7 @@ internal sealed class NativeOverview
             if (NativeData.Identifier(quota, "accountId") != result.ActiveId)
                 throw new InvalidDataException("额度与当前账号不一致，请刷新。");
             result.QuotaAvailable = NativeData.Text(quota, "state", 32) == "available";
+            result.QuotaHasSnapshot = result.QuotaAvailable || NativeData.Text(quota, "state", 32) == "error";
             result.QuotaError = NativeData.Text(NativeData.Map(quota, "error"), "message", 600, true);
         }
         var presentation = NativeData.Map(source, "presentation");
@@ -204,15 +220,17 @@ internal sealed class NativeOverview
             result.Primary = NativeBucket.Read(primary);
             if (!result.Buckets.Exists(delegate(NativeBucket bucket) { return bucket.Key == result.Primary.Key; })) throw new InvalidDataException("额度类别已更换，请刷新。");
         }
+        result.Models = NativeModels.Read(NativeData.Map(source, "models"), result.ActiveId);
+        result.Local = NativeLocalUsage.Read(NativeData.Map(source, "local"), result.ActiveId);
         return result;
     }
 }
 
 internal abstract class NativeForm : Form
 {
-    protected static readonly Color Ink = Color.FromArgb(32, 44, 60);
-    protected static readonly Color Muted = Color.FromArgb(101, 116, 133);
-    protected static readonly Color Accent = Color.FromArgb(30, 111, 171);
+    protected static readonly Color Ink = Color.FromArgb(47, 67, 45);
+    protected static readonly Color Muted = Color.FromArgb(111, 129, 100);
+    protected static readonly Color Accent = Color.FromArgb(79, 113, 75);
     private readonly List<Font> fonts = new List<Font>();
 
     protected NativeForm()
@@ -221,7 +239,7 @@ internal abstract class NativeForm : Form
         AutoScaleDimensions = new SizeF(96, 96);
         Font = Typeface(9.5F, FontStyle.Regular);
         ForeColor = Ink;
-        BackColor = Color.FromArgb(244, 247, 250);
+        BackColor = Color.FromArgb(249, 250, 244);
         ShowInTaskbar = true;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
@@ -243,8 +261,8 @@ internal abstract class NativeForm : Form
     protected static Button ButtonFor(string value)
     {
         var button = new Button { Text = value, AutoSize = false, Dock = DockStyle.Fill, FlatStyle = FlatStyle.Flat, BackColor = Color.White, Cursor = Cursors.Hand, Margin = Padding.Empty, UseVisualStyleBackColor = false };
-        button.FlatAppearance.BorderColor = Color.FromArgb(206, 215, 225);
-        button.FlatAppearance.MouseOverBackColor = Color.FromArgb(234, 241, 247);
+        button.FlatAppearance.BorderColor = Color.FromArgb(218, 226, 209);
+        button.FlatAppearance.MouseOverBackColor = Color.FromArgb(237, 243, 229);
         return button;
     }
 
@@ -252,337 +270,6 @@ internal abstract class NativeForm : Form
     {
         base.Dispose(disposing);
         if (disposing) { foreach (var font in fonts) font.Dispose(); fonts.Clear(); }
-    }
-}
-
-internal sealed class DashboardWindow : NativeForm
-{
-    private readonly Func<Task> retry;
-    private readonly ComboBox accounts, bucketChoice;
-    private readonly Button add, accountMenu, refresh;
-    private readonly ContextMenuStrip menu;
-    private readonly ToolStripMenuItem reauthenticate, remove;
-    private readonly Label accountStatus, category, value, detail, reset, synced, feedback;
-    private readonly ProgressBar progress;
-    private readonly LinkLabel other;
-    private readonly Panel otherPanel;
-    private readonly Label otherText;
-    private readonly System.Windows.Forms.Timer timer;
-    private DesktopInstance service;
-    private DesktopNativeApi api;
-    private NativeOverview overview;
-    private NativeLoginDialog loginDialog;
-    private string quotaKey, quotaAccount;
-    private string accountSignature;
-    private int generation;
-    private bool suppress, loading, busy, expanded, disposed;
-    private DateTime nextRefresh = DateTime.MinValue;
-
-    internal DashboardWindow(string directory, Func<Task> retry)
-    {
-        this.retry = retry;
-        Text = "PilotMeter";
-        Name = "PilotMeterMainWindow";
-        ClientSize = new Size(664, 521);
-        var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24), RowCount = 7, ColumnCount = 1, Margin = Padding.Empty };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 55));
-        var heading = LabelFor("PilotMeter", Ink); heading.Font = Typeface(17F, FontStyle.Bold); root.Controls.Add(heading, 0, 0);
-        var accountRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, Margin = Padding.Empty };
-        accountRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        accountRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 10));
-        accountRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
-        accountRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 8));
-        accountRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 38));
-        accounts = new ComboBox { Name = "AccountSelector", AccessibleName = "GitHub 账号", Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, IntegralHeight = false, DropDownHeight = 220, Margin = new Padding(0, 4, 0, 0) };
-        add = ButtonFor("添加账号"); add.Name = "AddAccount";
-        accountMenu = ButtonFor("···"); accountMenu.AccessibleName = "账号设置";
-        accountRow.Controls.Add(accounts, 0, 0); accountRow.Controls.Add(add, 2, 0); accountRow.Controls.Add(accountMenu, 4, 0);
-        root.Controls.Add(accountRow, 0, 1);
-        accountStatus = LabelFor("正在连接…", Muted); root.Controls.Add(accountStatus, 0, 2);
-        var card = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.White, Padding = new Padding(22, 18, 22, 14), ColumnCount = 1, RowCount = 6, Margin = Padding.Empty };
-        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
-        card.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 10));
-        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 13));
-        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 43));
-        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 23));
-        category = LabelFor("Copilot 额度", Muted); category.Font = Typeface(10F, FontStyle.Bold);
-        value = LabelFor("—", Ink); value.Name = "QuotaValue"; value.Font = Typeface(34F, FontStyle.Bold);
-        progress = new ProgressBar { Name = "QuotaProgress", AccessibleName = "当前类别已用额度", Dock = DockStyle.Fill, Minimum = 0, Maximum = 1000, Style = ProgressBarStyle.Continuous, Margin = Padding.Empty, Visible = false };
-        detail = LabelFor("登录后查看当前账号的额度。", Muted);
-        reset = LabelFor("", Muted); reset.Font = Typeface(8.5F, FontStyle.Regular);
-        card.Controls.Add(category, 0, 0); card.Controls.Add(value, 0, 1); card.Controls.Add(progress, 0, 2); card.Controls.Add(detail, 0, 4); card.Controls.Add(reset, 0, 5);
-        root.Controls.Add(card, 0, 3);
-        other = new LinkLabel { Text = "其他额度 ▸", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, LinkColor = Accent, ActiveLinkColor = Accent, Margin = Padding.Empty, Visible = false };
-        root.Controls.Add(other, 0, 4);
-        otherPanel = new Panel { Dock = DockStyle.Fill, Height = 116, Visible = false, Margin = Padding.Empty };
-        bucketChoice = new ComboBox { Name = "QuotaCategorySelector", AccessibleName = "选择额度类别", DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Top, IntegralHeight = false, DropDownHeight = 180 };
-        otherText = LabelFor("", Muted); otherText.Dock = DockStyle.Fill; otherText.TextAlign = ContentAlignment.TopLeft; otherText.Padding = new Padding(0, 8, 0, 0);
-        otherPanel.Controls.Add(otherText); otherPanel.Controls.Add(bucketChoice);
-        root.Controls.Add(otherPanel, 0, 5);
-        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 2, Margin = Padding.Empty, Padding = new Padding(0, 12, 0, 0) };
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 12)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 94));
-        footer.RowStyles.Add(new RowStyle(SizeType.Absolute, 20)); footer.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        synced = LabelFor("尚未同步", Muted); synced.Font = Typeface(8.5F, FontStyle.Regular);
-        feedback = LabelFor("", Muted); feedback.Font = Typeface(8.5F, FontStyle.Regular);
-        refresh = ButtonFor("刷新"); refresh.Name = "RefreshQuota"; footer.SetRowSpan(refresh, 2);
-        footer.Controls.Add(synced, 0, 0); footer.Controls.Add(feedback, 0, 1); footer.Controls.Add(refresh, 2, 0); root.Controls.Add(footer, 0, 6);
-        Controls.Add(root);
-        menu = new ContextMenuStrip();
-        reauthenticate = new ToolStripMenuItem("重新登录当前账号", null, delegate { OpenLogin(true); });
-        remove = new ToolStripMenuItem("移除当前账号…", null, async delegate { await RemoveAsync(); });
-        menu.Items.Add(reauthenticate); menu.Items.Add(remove);
-        accountMenu.Click += delegate { menu.Show(accountMenu, new Point(0, accountMenu.Height)); };
-        add.Click += delegate { OpenLogin(false); };
-        accounts.SelectedIndexChanged += async delegate {
-            if (suppress || busy || overview == null) return;
-            var selected = accounts.SelectedItem as NativeAccount;
-            if (selected == null || selected.Id == overview.ActiveId) return;
-            quotaKey = quotaAccount = null;
-            await ChangeAsync("/api/auth/select", "POST", new Dictionary<string, object> { { "accountId", selected.Id } }, "正在切换账号…");
-        };
-        bucketChoice.SelectedIndexChanged += async delegate {
-            if (suppress || busy || overview == null) return;
-            var selected = bucketChoice.SelectedItem as NativeBucket;
-            if (selected == null || selected.Key == quotaKey) return;
-            quotaKey = selected.Key; quotaAccount = overview.ActiveId; generation++; loading = false; ClearQuota("正在读取此类别…");
-            await LoadAsync(false);
-        };
-        other.LinkClicked += delegate { ExpandOther(!expanded); };
-        refresh.Click += async delegate {
-            if (busy || loading) return;
-            if (api == null) { await retry(); if (api != null) await LoadAsync(true); }
-            else if (overview == null) await LoadAsync(true);
-            else await ChangeAsync("/api/auth/refresh", "POST", null, "正在同步额度…");
-        };
-        timer = new System.Windows.Forms.Timer { Interval = 5000 };
-        timer.Tick += async delegate { await LoadAsync(true); };
-        Shown += async delegate { UpdatePolling(); await LoadAsync(true); };
-        VisibleChanged += delegate { UpdatePolling(); };
-        Resize += delegate { UpdatePolling(); };
-        UpdateControls();
-    }
-
-    private bool CanRead { get { return !disposed && Visible && WindowState != FormWindowState.Minimized && api != null && loginDialog == null; } }
-
-    private void UpdatePolling()
-    {
-        if (timer == null) return;
-        if (CanRead) timer.Start(); else timer.Stop();
-    }
-
-    internal void SetService(DesktopInstance instance, string explanation)
-    {
-        if (disposed || instance != null && instance.SameAs(service) && api != null) return;
-        generation++; loading = busy = false;
-        if (loginDialog != null) loginDialog.Disconnect();
-        if (api != null) api.Dispose();
-        api = null; service = instance; overview = null; quotaKey = quotaAccount = null; accountSignature = null;
-        suppress = true; accounts.Items.Clear(); suppress = false;
-        ClearQuota(instance == null ? explanation ?? "本机服务未连接。" : "正在读取当前账号…");
-        accountStatus.Text = instance == null ? "未连接" : "正在连接…";
-        synced.Text = "尚未同步"; feedback.Text = "";
-        ExpandOther(false); other.Visible = false;
-        nextRefresh = DateTime.MinValue;
-        if (instance != null) api = new DesktopNativeApi(instance);
-        UpdateControls(); UpdatePolling();
-        if (CanRead) BeginInvoke(new Action(async delegate { await LoadAsync(true); }));
-    }
-
-    private void ClearQuota(string description)
-    {
-        category.Text = "Copilot 额度"; value.Text = "—"; value.ForeColor = Ink;
-        progress.Visible = false; progress.Value = 0; detail.Text = NativeData.Clean(description, 220); reset.Text = "";
-        otherText.Text = ""; suppress = true; bucketChoice.Items.Clear(); suppress = false;
-    }
-
-    private void UpdateControls()
-    {
-        if (disposed) return;
-        var ready = api != null && overview != null && overview.Enabled && !busy && loginDialog == null;
-        accounts.Enabled = ready && overview.Accounts.Count > 0;
-        add.Enabled = ready;
-        add.Text = overview != null && overview.Login != null && overview.Login.Active ? "继续登录" : overview != null && overview.Accounts.Count == 0 ? "登录 GitHub" : "添加账号";
-        var selected = ready && overview.Active != null;
-        accountMenu.Enabled = selected;
-        reauthenticate.Enabled = selected && !(overview.Login != null && overview.Login.Active);
-        remove.Enabled = selected;
-        refresh.Enabled = !busy && !loading && loginDialog == null;
-        refresh.Text = api == null ? "重试连接" : busy ? "同步中…" : "刷新";
-        bucketChoice.Enabled = !busy && !loading;
-    }
-
-    private async Task<NativeOverview> ReadOverviewAsync(DesktopNativeApi client, DesktopInstance identity, int current)
-    {
-        var key = quotaKey;
-        var result = NativeOverview.Read(await client.RequestAsync("/api/desktop" + (key == null ? "" : "?quotaKey=" + Uri.EscapeDataString(key))), identity);
-        if (current != generation || disposed) return null;
-        if (key != null && result.ActiveId != quotaAccount)
-        {
-            quotaKey = quotaAccount = null;
-            result = NativeOverview.Read(await client.RequestAsync("/api/desktop"), identity);
-        }
-        return current == generation && !disposed ? result : null;
-    }
-
-    private async Task LoadAsync(bool autoRefresh)
-    {
-        if (!CanRead || loading || busy) return;
-        var current = generation; var client = api; var identity = service;
-        loading = true;
-        bool refreshDue = false;
-        try
-        {
-            var result = await ReadOverviewAsync(client, identity, current);
-            if (result == null) return;
-            ApplyOverview(result);
-            refreshDue = autoRefresh && result.Enabled && result.Active != null && !result.Refreshing && DateTime.UtcNow >= nextRefresh;
-        }
-        catch (Exception error)
-        {
-            if (current != generation || disposed) return;
-            overview = null; ClearQuota("暂时无法读取当前账号。请刷新重试。"); other.Visible = false; ExpandOther(false); feedback.Text = NativeData.Error(error);
-        }
-        finally { if (current == generation && !disposed) { loading = false; UpdateControls(); } }
-        if (refreshDue && current == generation && CanRead) await ChangeAsync("/api/auth/refresh", "POST", null, "正在同步额度…");
-    }
-
-    private async Task ChangeAsync(string path, string method, Dictionary<string, object> payload, string description)
-    {
-        if (api == null || busy || disposed || loginDialog != null) return;
-        var current = ++generation; var client = api; var identity = service;
-        busy = true; loading = false; nextRefresh = DateTime.UtcNow.AddMinutes(1);
-        if (path != "/api/auth/refresh" || overview == null || !overview.CanDisplayQuota) ClearQuota(description);
-        feedback.Text = description; UpdateControls();
-        try
-        {
-            await client.RequestAsync(path, method, payload);
-            if (current != generation || disposed) return;
-            var result = await ReadOverviewAsync(client, identity, current);
-            if (result != null) { ApplyOverview(result); feedback.Text = result.Refreshing ? "正在同步…" : ""; }
-        }
-        catch (Exception error)
-        {
-            if (current == generation && !disposed) { overview = null; ClearQuota("操作未完成，请刷新重试。"); other.Visible = false; ExpandOther(false); feedback.Text = NativeData.Error(error); }
-        }
-        finally { if (current == generation && !disposed) { busy = false; UpdateControls(); } }
-    }
-
-    private void ApplyOverview(NativeOverview result)
-    {
-        overview = result;
-        var signature = String.Join("|", result.Accounts.ConvertAll(delegate(NativeAccount account) { return account.Id + ":" + account.Login + ":" + account.Host; }).ToArray());
-        suppress = true;
-        if (accountSignature != signature)
-        {
-            accounts.Items.Clear(); accounts.Items.Add(new NativeAccount());
-            foreach (var account in result.Accounts) accounts.Items.Add(account);
-            accountSignature = signature;
-        }
-        accounts.SelectedIndex = 0;
-        for (var index = 1; index < accounts.Items.Count; index++) if (((NativeAccount)accounts.Items[index]).Id == result.ActiveId) accounts.SelectedIndex = index;
-        suppress = false;
-        var selected = result.Active;
-        accountStatus.Text = !result.Enabled ? "演示模式" : selected == null ? "连接你的个人或工作账号" : selected.Status == "reauth-required" ? "登录已失效 · 在账号设置中重新登录" : selected.Status == "error" ? "账号连接异常 · 请刷新或重新登录" : "已连接  ·  " + new Uri(selected.Host).Host;
-        var fetched = NativeData.Date(result.FetchedAt);
-        synced.Text = fetched.HasValue ? "上次同步  " + fetched.Value.ToLocalTime().ToString("M月d日 HH:mm", CultureInfo.GetCultureInfo("zh-CN")) : "尚未同步";
-        feedback.Text = result.Refreshing ? "正在同步…" : result.Stale ? "等待最新额度" : "";
-        if (selected == null) ClearQuota("登录或选择一个 GitHub 账号，查看 Copilot 额度。");
-        else if (selected.Status == "reauth-required") ClearQuota("请重新登录当前账号。额度暂不可用。");
-        else if (!result.CanDisplayQuota) ClearQuota(result.QuotaError ?? (result.Refreshing ? "正在同步当前账号的额度…" : "尚未取得当前额度，请刷新。"));
-        else if (result.Primary == null) ClearQuota(result.Buckets.Count > 0 ? "请选择要查看的额度类别。不同类别分别计量。" : "GitHub 尚未返回此账号的额度。");
-        else
-        {
-            var bucket = result.Primary;
-            category.Text = (bucket.Label.Contains("额度") ? bucket.Label : bucket.Label + "额度") + " · 当前周期";
-            value.Text = bucket.Value.Contains("%") ? "已用 " + bucket.Value : bucket.Value;
-            value.ForeColor = Ink;
-            detail.Text = !bucket.Unlimited && !bucket.Value.Contains("%") && bucket.Unit != "unspecified" ? bucket.UnitLabel : "";
-            progress.Visible = bucket.Percentage.HasValue;
-            progress.Value = bucket.Percentage.HasValue ? (int)Math.Round(bucket.Percentage.Value * 10) : 0;
-            var resetDate = NativeData.Date(bucket.NextResetAt);
-            reset.Text = resetDate.HasValue && fetched.HasValue && resetDate.Value > fetched.Value && resetDate.Value > DateTimeOffset.UtcNow
-                ? "下次重置  " + resetDate.Value.ToLocalTime().ToString("M月d日 HH:mm", CultureInfo.GetCultureInfo("zh-CN")) : "";
-        }
-        var canChoose = result.CanDisplayQuota;
-        other.Visible = canChoose && (result.Buckets.Count > 1 || result.Primary == null && result.Buckets.Count > 0);
-        other.Text = (result.Primary == null ? "选择额度类别" : "其他额度") + (expanded ? " ▾" : " ▸");
-        suppress = true; bucketChoice.Items.Clear();
-        if (canChoose)
-        {
-            foreach (var bucket in result.Buckets) bucketChoice.Items.Add(bucket);
-            bucketChoice.SelectedIndex = -1;
-            for (var index = 0; index < bucketChoice.Items.Count; index++) if (result.Primary != null && ((NativeBucket)bucketChoice.Items[index]).Key == result.Primary.Key) bucketChoice.SelectedIndex = index;
-            var lines = new List<string>();
-            foreach (var bucket in result.Buckets) if (result.Primary == null || bucket.Key != result.Primary.Key) lines.Add(bucket.Label + "  ·  " + bucket.Value);
-            if (result.Primary != null) lines.Add(result.Primary.Detail);
-            otherText.Text = String.Join(Environment.NewLine, lines.ToArray());
-        }
-        suppress = false;
-        if (!other.Visible) ExpandOther(false);
-        else if (result.Primary == null) ExpandOther(true);
-        UpdateControls();
-    }
-
-    private void ExpandOther(bool show)
-    {
-        if (expanded == show) return;
-        expanded = show; otherPanel.Visible = show;
-        ClientSize = new Size(ClientSize.Width, ClientSize.Height + (show ? otherPanel.Height : -otherPanel.Height));
-        other.Text = (overview != null && overview.Primary == null ? "选择额度类别" : "其他额度") + (show ? " ▾" : " ▸");
-    }
-
-    private async Task RemoveAsync()
-    {
-        if (overview == null || overview.Active == null || busy) return;
-        var account = overview.Active;
-        if (MessageBox.Show(this, "移除 " + account.Login + " 的登录连接？\n本机用量记录会保留。", "移除账号", MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
-        quotaKey = quotaAccount = null;
-        await ChangeAsync("/api/auth/accounts/" + account.Id, "DELETE", null, "正在移除账号…");
-    }
-
-    private async void OpenLogin(bool reauth)
-    {
-        if (api == null || service == null || overview == null || !overview.Enabled || busy || loginDialog != null) return;
-        var identity = service; var expected = reauth ? overview.Active : null;
-        var pending = overview.Login != null && overview.Login.Active ? overview.Login : null;
-        generation++; loading = false; timer.Stop();
-        using (var dialog = new NativeLoginDialog(identity, expected, pending))
-        {
-            loginDialog = dialog; UpdateControls();
-            dialog.ShowDialog(this);
-            loginDialog = null;
-            if (disposed) return;
-            if (service == null || !service.SameAs(identity))
-            {
-                UpdateControls(); UpdatePolling();
-                if (CanRead) await LoadAsync(true);
-                return;
-            }
-            generation++; overview = null; quotaKey = quotaAccount = null; nextRefresh = DateTime.MinValue;
-            ClearQuota(dialog.Succeeded ? "登录成功，正在读取额度…" : "正在读取当前账号…");
-            await LoadAsync(true);
-            if (!disposed && !String.IsNullOrEmpty(dialog.Feedback)) feedback.Text = dialog.Feedback;
-        }
-        UpdateControls(); UpdatePolling();
-    }
-
-    protected override void Dispose(bool disposing)
-    {
-        if (disposing && !disposed)
-        {
-            disposed = true; generation++;
-            timer.Stop(); timer.Dispose(); menu.Dispose();
-            if (loginDialog != null) loginDialog.Disconnect();
-            if (api != null) api.Dispose();
-        }
-        base.Dispose(disposing);
     }
 }
 
