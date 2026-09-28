@@ -51,21 +51,45 @@ test('a sole finite category is named, while ambiguous finite categories require
   assert.equal(duplicate.selection, 'required'); assert.equal(duplicate.primary, null);
 });
 
-test('unspecified quantity units suppress raw amounts without suppressing an independently provided percentage', () => {
+test('unspecified units restrict raw amounts to the expandable whitelist while preserving official percentages', () => {
   const raw = bucket('premium_interactions', { used: '987654321', limit: '9876543210', usedPercentage: '10' });
   const result = projectPersonalQuota(quota([raw]), now);
   assert.equal(result.primary.unit, 'unspecified'); assert.equal(result.primary.unitLabel, '单位未确认');
   assert.equal(result.primary.value, '10%'); assert.equal(result.primary.used, null); assert.equal(result.primary.limit, null);
-  assert.doesNotMatch(JSON.stringify(result), /987654321|AI Credits|Premium Requests|untrusted upstream/);
+  assert.equal(result.primary.remaining, null);
+  assert.deepEqual(result.primary.raw, { used: '987654321', limit: '9876543210', remainingPercentage: '75' });
+  assert.doesNotMatch(result.primary.value + result.primary.detail, /987654321|AI Credits|Premium Requests|untrusted upstream/);
   assert.match(result.primary.detail, /数量单位未确认/);
   const unknown = projectPersonalQuota(quota([bucket('chat', { usedPercentage: null })]), now);
   assert.equal(unknown.primary.value, '已用未知'); assert.equal(unknown.primary.percentage, null);
   const unlimited = projectPersonalQuota(quota([bucket('premium_interactions', { unlimited: true, used: '87654321' })]), now);
   assert.equal(unlimited.primary.value, '无固定上限'); assert.equal(unlimited.primary.percentage, null);
-  assert.doesNotMatch(JSON.stringify(unlimited), /87654321/);
+  assert.equal(unlimited.primary.raw.used, '87654321');
+  assert.equal(unlimited.primary.remaining, null);
+  assert.doesNotMatch(unlimited.primary.value + unlimited.primary.detail, /87654321/);
   const zero = projectPersonalQuota(quota([bucket('premium_interactions', { used: '0', limit: '0', usedPercentage: '0' })]), now);
   assert.equal(zero.primary.value, '已用未知'); assert.equal(zero.primary.percentage, null);
   assert.doesNotMatch(zero.primary.detail, /为 0|0 \/ 0/);
+});
+
+test('remaining allowance uses exact subtraction only for explicit units and fixed known totals', () => {
+  for (const [used, limit, remaining, overage] of [
+    ['0', '100', '100', null], ['9007199254740993.123456789', '9007199254740994', '0.876543211', null],
+    ['1.000000000000000001', '2', '0.999999999999999999', null], ['0', '0', '0', null],
+    ['100.000000000000000001', '100', '0', '0.000000000000000001'],
+  ]) {
+    const view = projectPersonalQuota(quota([bucket('chat', { unit: 'ai-credits', used, limit })]), now).primary;
+    assert.equal(view.remaining, remaining); assert.equal(view.remainingSource, 'calculated'); assert.equal(view.overage, overage);
+    if (limit === '0' || overage) assert.equal(view.percentage, null);
+  }
+  for (const changes of [{ unit: 'unspecified' }, { unlimited: true }, { used: null }, { limit: null }, { used: '-1' }]) {
+    const view = projectPersonalQuota(quota([bucket('premium_interactions', { unit: 'ai-credits', ...changes })]), now).primary;
+    assert.equal(view.remaining, null); assert.equal(view.remainingSource, null);
+  }
+  const input = bucket('chat', { unit: 'unspecified', token: 'private-token', raw: { token: 'private-token' } });
+  const view = projectPersonalQuota(quota([input]), now).primary;
+  assert.deepEqual(Object.keys(view.raw).sort(), ['limit', 'remainingPercentage', 'used']);
+  assert.doesNotMatch(JSON.stringify(view), /private-token/);
 });
 
 test('explicit units retain exact quantities, known zero, and bounded approximate display text', () => {

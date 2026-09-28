@@ -26,8 +26,18 @@ test('native desktop gets a bounded presentation and binds CSRF mutations to the
   assert.equal(read.headers.get('cache-control'), 'no-store');
   assert.equal(view.app, instance.app); assert.equal(view.version, instance.version); assert.equal(view.instanceId, instance.instanceId);
   assert.equal(view.presentation.primary, null); assert.deepEqual(view.presentation.buckets, []);
+  assert.equal(view.models, null); assert.equal(view.local.accountId, null); assert.equal(view.local.source, 'local-otel');
+  assert.equal(view.local.nanoAiu, null); assert.equal(view.local.coverage, 'empty');
   for (const privateValue of [instance.managementToken, instance.collectorToken, directory]) assert.equal(JSON.stringify(view).includes(privateValue), false);
   assert.equal('runCommand' in view, false);
+  const records = await (await fetch(`${instance.url}/api/desktop/records?period=2026-09&sort=usage`)).json();
+  assert.equal(records.app, instance.app); assert.equal(records.instanceId, instance.instanceId);
+  assert.equal(records.source, 'local-otel'); assert.equal(records.period, '2026-09'); assert.equal(records.accountId, null);
+  assert.deepEqual(records.items, []); assert.equal(records.nextCursor, null);
+  assert.equal((await fetch(`${instance.url}/api/desktop/records?sort=invalid`)).status, 400);
+  assert.equal((await fetch(`${instance.url}/api/desktop/records?accountId=stale`)).status, 409);
+  assert.equal((await fetch(`${instance.url}/api/desktop/records`, { headers: { origin: 'https://attacker.example' } })).status, 403);
+  assert.equal((await fetch(`${instance.url}/api/desktop/records`, { headers: { 'x-pilotmeter-instance': 'different-instance' } })).status, 409);
   await assert.rejects(access(join(directory, 'github-accounts')), { code: 'ENOENT' });
   for (const headers of [{ origin: 'https://attacker.example' }, { 'sec-fetch-site': 'cross-site' }])
     assert.equal((await fetch(`${instance.url}/api/desktop`, { headers })).status, 403);

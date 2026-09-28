@@ -227,6 +227,35 @@ test('fragmented JSON-RPC headers/bodies and additional Content-Type headers rem
   assert.equal((await client.getQuota('account-one')).snapshots[0].usedRequests, '9007199254740993.123456789');
 });
 
+test('models list binds the selected identity and exposes only explicit policy and safe capabilities', async t => {
+  const { client, home } = await clientFor(t);
+  await client.listAccounts();
+  const result = await client.listModels('account-two');
+  assert.equal(result.selectionId, 'account-two');
+  assert.ok(Number.isFinite(Date.parse(result.fetchedAt)));
+  assert.deepEqual(result.items.map(item => item.status), ['available', 'disabled', 'unknown', 'unknown']);
+  assert.deepEqual(result.items.map(item => item.policyState), ['enabled', 'disabled', 'unconfigured', null]);
+  assert.deepEqual(result.items[0], { id: 'synthetic-model', name: 'Synthetic Model', status: 'available', policyState: 'enabled',
+    reason: '官方模型策略明确启用；不代表已完成实际调用验证。', vision: true, reasoningEffort: false, contextWindowTokens: 128000,
+    multiplier: '0.123456789123456789' });
+  assert.equal(result.items[3].vision, null); assert.equal(result.items[3].contextWindowTokens, null); assert.equal(result.items[3].multiplier, null);
+  assert.doesNotMatch(JSON.stringify(result), /synthetic-private|terms|token|metadata/);
+  assert.doesNotMatch(result.items[1].reason, /组织禁用|企业禁用/);
+  const trace = (await requests(home)).slice(1);
+  assert.deepEqual(trace.map(row => row.method), ['connect', 'auth.getStatus', 'account.getAllUsers', 'models.list']);
+  assert.deepEqual(trace.at(-1).params, { selectionId: 'account-two' });
+  await assert.rejects(client.listModels('not-listed'), { code: 'ACCOUNT_NOT_FOUND' });
+});
+
+test('invalid, duplicate and oversized model catalogs fail safely; unsupported RPCs remain explicit', async t => {
+  for (const [mode, code] of [['models-invalid', 'MODELS_INVALID'], ['models-duplicate', 'MODELS_INVALID'], ['models-many', 'MODELS_INVALID'],
+    ['models-unsupported', 'RPC_UNSUPPORTED'], ['models-error', 'RPC_FAILED']]) {
+    const { client } = await clientFor(t, mode);
+    await client.listAccounts();
+    await assert.rejects(client.listModels('account-one'), error => error.code === code && !/synthetic-private/.test(error.message));
+  }
+});
+
 test('trusted bare account hostnames normalize to the same HTTPS current identity', async t => {
   const { client } = await clientFor(t, 'bare-hosts');
   assert.deepEqual(await client.listAccounts(), [
@@ -241,6 +270,8 @@ test('opaque account selections are invalidated when the official runtime restar
   await new Promise(resolve => setTimeout(resolve, 150));
   await assert.rejects(client.getQuota('account-one'), { code: 'ACCOUNT_NOT_FOUND' });
   assert.equal((await requests(home)).filter(row => row.method === 'account.getQuota').length, 0);
+  await assert.rejects(client.listModels('account-one'), { code: 'ACCOUNT_NOT_FOUND' });
+  assert.equal((await requests(home)).filter(row => row.method === 'models.list').length, 0);
 });
 
 test('idle runtimes close after queries, preserve in-flight quota requests, and reconnect with fresh selections', async t => {

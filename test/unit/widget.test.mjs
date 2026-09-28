@@ -24,12 +24,14 @@ const local = (changes = {}) => ({ period: '2026-09', nanoAiu: null, knownCalls:
 const summary = (changes = {}) => ({ githubAccount: identity, period: '2026-09', local: local(), account: null,
   display: { mode: 'usage', label: 'Synthetic local label', used: null, limit: null, percentage: null, unit: 'nano-aiu', scope: 'synthetic-private-source', reason: null },
   updatedAt: now, demo: false, retention: { days: null, lastRunAt: null, cutoff: null, prunedTraces: 0, prunedSpans: 0 }, reconciliation: {}, ...changes });
-const keys = ['state', 'title', 'value', 'detail', 'percentage', 'accountLogin', 'updatedAt'];
+const keys = ['state', 'title', 'value', 'detail', 'percentage', 'accountLogin', 'updatedAt', 'unitLabel', 'unitUnspecified'];
 function bounded(value) {
   assert.deepEqual(Object.keys(value).sort(), [...keys].sort());
   for (const name of ['title', 'value', 'detail']) assert.ok(value[name].length <= WIDGET_TEXT_LIMITS[name]);
   assert.ok(value.accountLogin === null || value.accountLogin.length <= WIDGET_TEXT_LIMITS.accountLogin);
   assert.ok(value.percentage === null || Number.isFinite(value.percentage) && value.percentage >= 0 && value.percentage <= 100);
+  assert.ok(value.unitLabel === null || ['AI Credits', 'Premium Requests'].includes(value.unitLabel));
+  assert.equal(typeof value.unitUnspecified, 'boolean');
   assert.ok(value.updatedAt === '' || /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value.updatedAt));
 }
 
@@ -48,19 +50,21 @@ test('widget never turns an empty ledger or unavailable quota into zero usage', 
     const value = buildWidget(summary({ local: local({ nanoAiu: '0', credits: '0' }) }), overview({ quota: missing }));
     assert.equal(value.state, 'waiting'); assert.equal(value.value, '用量未知'); assert.equal(value.percentage, null); bounded(value);
   }
-  const incomplete = buildWidget(summary(), overview({ quota: quota({ buckets: [bucket({ used: null, usedPercentage: null })] }) }));
+  const incomplete = buildWidget(summary(), overview({ quota: quota({ buckets: [bucket({ used: null, usedPercentage: null, remainingPercentage: null })] }) }));
   assert.equal(incomplete.value, '已用未知'); assert.equal(incomplete.percentage, null);
 });
 
 test('single personal quota keeps current-cycle meaning and known zero distinct', () => {
   const value = buildWidget(summary(), overview());
-  assert.equal(value.state, 'ready'); assert.equal(value.value, '25%'); assert.equal(value.percentage, 25);
+  assert.equal(value.state, 'ready'); assert.equal(value.value, '75 剩余'); assert.equal(value.percentage, 25);
+  assert.equal(value.unitLabel, 'Premium Requests'); assert.equal(value.unitUnspecified, false);
   assert.match(value.title, /高级请求.*当前周期/); assert.match(value.detail, /Premium Requests/);
   assert.doesNotMatch(value.title + value.detail, /本月|2026-09/); assert.equal(value.updatedAt, fetchedAt); bounded(value);
   const zero = buildWidget(summary(), overview({ quota: quota({ buckets: [bucket({ used: '0', usedPercentage: '0' })] }) }));
-  assert.equal(zero.value, '0%'); assert.equal(zero.percentage, 0);
+  assert.equal(zero.value, '100 剩余'); assert.equal(zero.percentage, 0);
   const unknownUnit = buildWidget(summary(), overview({ quota: quota({ buckets: [bucket({ unit: 'unspecified' })] }) }));
   assert.match(unknownUnit.detail, /单位未确认/); assert.doesNotMatch(unknownUnit.detail, /AI Credits|Premium Requests/);
+  assert.equal(unknownUnit.value, '剩余 75%'); assert.equal(unknownUnit.unitLabel, null); assert.equal(unknownUnit.unitUnspecified, true);
 });
 
 test('multiple finite categories without a premium category need an explicit choice', () => {
@@ -70,13 +74,21 @@ test('multiple finite categories without a premium category need an explicit cho
   assert.doesNotMatch(JSON.stringify(value), /403|400|25%|80%/); bounded(value);
 });
 
+test('explicit quota selection matches the main window and unknown keys use the same default fallback', () => {
+  const accounts = overview({ quota: quota({ buckets: [bucket(), bucket({ key: 'chat', unit: 'ai-credits', used: '10', limit: '500' })] }) });
+  const chosen = buildWidget(summary(), accounts, 'chat');
+  assert.match(chosen.title, /聊天/); assert.equal(chosen.value, '490 剩余'); assert.equal(chosen.unitLabel, 'AI Credits');
+  assert.deepEqual(buildWidget(summary(), accounts, 'not-present'), buildWidget(summary(), accounts));
+  assert.deepEqual(buildWidget(summary(), accounts, ''), buildWidget(summary(), accounts));
+});
+
 test('the named premium category is primary alongside unlimited chat and completions without inferring units', () => {
   const premium = bucket({ used: '73579', limit: '294316', unit: 'unspecified' });
   const chat = bucket({ key: 'chat', used: '8888', limit: null, unlimited: true });
   const completions = bucket({ key: 'completions', used: '9999', limit: null, unlimited: true });
   for (const buckets of [[chat, completions, premium], [premium, completions, chat]]) {
     const value = buildWidget(summary(), overview({ quota: quota({ buckets }) }));
-    assert.match(value.title, /高级请求/); assert.equal(value.value, '25%'); assert.equal(value.percentage, 25);
+    assert.match(value.title, /高级请求/); assert.equal(value.value, '剩余 75%'); assert.equal(value.percentage, 25);
     assert.doesNotMatch(JSON.stringify(value), /73579|294316|8888|9999|Premium Requests|AI Credits|多个额度池/);
     bounded(value);
   }
@@ -86,7 +98,7 @@ test('a sole finite category is named, while all unlimited categories have no ar
   const chat = bucket({ key: 'chat', unlimited: true });
   const finite = bucket({ key: 'synthetic_jobs' });
   const only = buildWidget(summary(), overview({ quota: quota({ buckets: [chat, finite] }) }));
-  assert.match(only.title, /synthetic_jobs/); assert.equal(only.value, '25%'); assert.equal(only.percentage, 25);
+  assert.match(only.title, /synthetic_jobs/); assert.equal(only.value, '75 剩余'); assert.equal(only.percentage, 25);
   const unlimited = buildWidget(summary(), overview({ quota: quota({ buckets: [chat, bucket({ key: 'completions', unlimited: true })] }) }));
   assert.equal(unlimited.value, '各类别无固定上限'); assert.equal(unlimited.percentage, null);
   assert.doesNotMatch(unlimited.title, /聊天|代码补全/);
@@ -97,7 +109,7 @@ test('stale and failed snapshots expose their condition without forwarding raw d
   assert.equal(stale.state, 'waiting'); assert.match(stale.detail, /旧快照/); assert.equal(stale.updatedAt, fetchedAt);
   const failed = buildWidget(summary(), overview({ quota: quota({ state: 'error', stale: true,
     error: { code: 'synthetic-private-code', message: 'synthetic-private-path-and-token' } }) }));
-  assert.equal(failed.state, 'error'); assert.match(failed.detail, /同步失败.*旧快照/); assert.equal(failed.value, '25%');
+  assert.equal(failed.state, 'error'); assert.match(failed.detail, /同步失败.*旧快照/); assert.equal(failed.value, '75 剩余');
   assert.doesNotMatch(JSON.stringify(failed), /synthetic-private/);
   const refreshing = buildWidget(summary(), overview({ refreshing: true }));
   assert.equal(refreshing.state, 'waiting'); assert.match(refreshing.detail, /正在同步/);
@@ -106,8 +118,8 @@ test('stale and failed snapshots expose their condition without forwarding raw d
 test('unlimited, zero limits and overage never become misleading progress ratios', () => {
   for (const [input, expected] of [
     [bucket({ unlimited: true, limit: null, used: null }), '无固定上限'],
-    [bucket({ used: '0', limit: '0', usedPercentage: '0' }), '0 / 0'],
-    [bucket({ used: '105', usedPercentage: '105' }), '105 / 100'],
+    [bucket({ used: '0', limit: '0', usedPercentage: '0' }), '0 剩余'],
+    [bucket({ used: '105', usedPercentage: '105' }), '0 剩余'],
   ]) {
     const value = buildWidget(summary(), overview({ quota: quota({ buckets: [input] }) }));
     assert.equal(value.value, expected); assert.equal(value.percentage, null); bounded(value);
@@ -118,16 +130,16 @@ test('unlimited, zero limits and overage never become misleading progress ratios
 });
 
 test('compact numeric values mark approximation and retain tiny or near-full nonzero meaning', () => {
-  for (const [usedPercentage, expected] of [['0.000001', '<0.1%'], ['99.999999999999999999', '>99.9%'], ['33.3333', '≈33.3%']]) {
-    const value = buildWidget(summary(), overview({ quota: quota({ buckets: [bucket({ usedPercentage })] }) }));
+  for (const [remainingPercentage, expected] of [['0.000001', '剩余 <0.1%'], ['99.999999999999999999', '剩余 >99.9%'], ['33.3333', '剩余 ≈33.3%']]) {
+    const value = buildWidget(summary(), overview({ quota: quota({ buckets: [bucket({ unit: 'unspecified', remainingPercentage })] }) }));
     assert.equal(value.value, expected); bounded(value);
   }
-  const large = buildWidget(summary(), overview({ quota: quota({ buckets: [bucket({ used: '9007199254740993.123456789', limit: null, usedPercentage: null })] }) }));
+  const large = buildWidget(summary(), overview({ quota: quota({ buckets: [bucket({ used: '9007199254740993.123456789', limit: null, usedPercentage: null, remainingPercentage: null })] }) }));
   assert.equal(large.value, '≈9×10^15'); bounded(large);
-  const exactPower = buildWidget(summary(), overview({ quota: quota({ buckets: [bucket({ used: '1e40', limit: null, usedPercentage: null })] }) }));
+  const exactPower = buildWidget(summary(), overview({ quota: quota({ buckets: [bucket({ used: '1e40', limit: null, usedPercentage: null, remainingPercentage: null })] }) }));
   assert.equal(exactPower.value, '1×10^40');
   for (const used of ['1e256', '1e-256', '-1', 'synthetic-private-token']) {
-    const value = buildWidget(summary(), overview({ quota: quota({ buckets: [bucket({ used, usedPercentage: null })] }) }));
+    const value = buildWidget(summary(), overview({ quota: quota({ buckets: [bucket({ used, usedPercentage: null, remainingPercentage: null })] }) }));
     assert.equal(value.value, '已用未知'); bounded(value);
   }
 });
@@ -194,7 +206,8 @@ test('widget HTTP endpoint uses daemon identity, existing origin checks and a to
   const response = await fetch(`${instance.url}/api/widget`);
   assert.equal(response.status, 200); assert.equal(response.headers.get('cache-control'), 'no-store');
   const value = await response.json();
-  assert.deepEqual(Object.keys(value).sort(), [...keys, 'app', 'version', 'instanceId'].sort());
+  assert.deepEqual(Object.keys(value).sort(), [...keys, 'app', 'version', 'instanceId', 'accountId'].sort());
+  assert.equal(value.accountId, null);
   assert.equal(value.app, instance.app); assert.equal(value.version, instance.version); assert.equal(value.instanceId, instance.instanceId);
   assert.equal(value.state, 'needs-login'); assert.equal(value.percentage, null);
   for (const privateValue of [instance.managementToken, instance.collectorToken, directory]) assert.equal(JSON.stringify(value).includes(privateValue), false);

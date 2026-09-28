@@ -17,6 +17,9 @@ const quota = (used = '25', changes = {}) => ({
     overage: '0', isUnlimitedEntitlement: false, usageAllowedWithExhaustedQuota: false, overageAllowedWithExhaustedQuota: false,
     resetDate: '2026-10-01T00:00:00.000Z' }], ...changes,
 });
+const models = (id = 'synthetic-model') => ({ selectionId: 'private-selection-not-for-browser', fetchedAt: timestamp,
+  items: [{ id, name: 'Synthetic Model', status: 'available', reason: 'Synthetic policy enabled', policyState: 'enabled',
+    vision: true, reasoningEffort: false, contextWindowTokens: 128000, multiplier: '1' }] });
 
 async function until(predicate) {
   const end = Date.now() + 4000;
@@ -28,9 +31,9 @@ async function until(predicate) {
 
 class FakeClient {
   constructor(home, login) {
-    this.home = home; this.accounts = [identity(login)]; this.data = quota();
+    this.home = home; this.accounts = [identity(login)]; this.data = quota(); this.modelData = models();
     this.listCalls = 0; this.quotaCalls = []; this.closeCalls = 0; this.cancelCalls = [];
-    this.listImpl = null; this.quotaImpl = null; this.startError = null;
+    this.listImpl = null; this.quotaImpl = null; this.startError = null; this.modelsImpl = null; this.modelsCalls = [];
   }
   async startLogin(loginHost) {
     if (this.startError) throw this.startError;
@@ -46,6 +49,7 @@ class FakeClient {
   }
   async listAccounts() { this.listCalls++; return this.listImpl ? this.listImpl() : structuredClone(this.accounts); }
   async getQuota(selectionId) { this.quotaCalls.push(selectionId); return this.quotaImpl ? this.quotaImpl(selectionId) : structuredClone(this.data); }
+  async listModels(selectionId) { this.modelsCalls.push(selectionId); return this.modelsImpl ? this.modelsImpl(selectionId) : structuredClone(this.modelData); }
   async close() { this.closeCalls++; }
 }
 
@@ -102,9 +106,90 @@ test('a new manager is read-only until explicit login and exposes no inherited a
   assert.deepEqual(manager.overview().accounts, []);
   assert.equal(manager.active(), null);
   assert.equal(manager.overview().quota, null);
+  assert.equal(manager.overview().models, null);
   assert.equal(await manager.runProfile(), null);
   assert.equal(f.clients.length, 0);
   assert.equal(existsSync(join(f.directory, 'github-accounts')), false);
+});
+
+test('models are account-bound, cloned, coalesced and stale after five minutes without GET-triggered RPCs', async t => {
+  const f = fixture(t); const manager = f.create(); await manager.initialize();
+  const a = await login(f, manager, 'Alice');
+  assert.deepEqual(a.client.modelsCalls, ['private-selection-Alice']);
+  const catalog = manager.overview().models;
+  assert.equal(catalog.accountId, a.profile.id); assert.equal(catalog.source, 'copilot-cli-models.list');
+  assert.equal(catalog.state, 'available'); assert.equal(catalog.stale, false); assert.equal(catalog.refreshing, false);
+  catalog.items[0].name = 'mutated';
+  assert.equal(manager.overview().models.items[0].name, 'Synthetic Model');
+  f.now += 5 * 60_000;
+  assert.equal(manager.overview().models.stale, false);
+  f.now++;
+  assert.equal(manager.overview().models.stale, true);
+  assert.equal(a.client.modelsCalls.length, 1);
+  const gate = f.gate(models('refreshed'));
+  a.client.modelsImpl = () => gate.promise;
+  const first = manager.refresh(a.profile.id); const second = manager.refresh(a.profile.id);
+  await until(() => a.client.modelsCalls.length === 2);
+  assert.equal(manager.overview().models.refreshing, true);
+  gate.resolve({ ...models('refreshed'), fetchedAt: new Date(f.now).toISOString() });
+  await Promise.all([first, second]);
+  assert.equal(manager.overview().models.stale, false); assert.equal(manager.overview().models.refreshing, false);
+  assert.equal(manager.overview().models.items[0].id, 'refreshed');
+  await manager.refresh(a.profile.id);
+  assert.equal(a.client.modelsCalls.length, 2, 'manual refresh stays subject to per-account throttle');
+});
+
+test('model and quota refresh failures retain only their own snapshots independently', async t => {
+  const f = fixture(t); const manager = f.create(); await manager.initialize();
+  const a = await login(f, manager, 'Alice');
+  f.now += 60_001;
+  a.client.data = quota('12'); a.client.modelsImpl = () => { throw new CopilotClientError('RPC_UNSUPPORTED', 'Synthetic model RPC unavailable'); };
+  await manager.refresh(a.profile.id);
+  let view = manager.overview();
+  assert.equal(view.quota.state, 'available'); assert.equal(view.quota.buckets[0].used, '12');
+  assert.equal(view.models.state, 'error'); assert.equal(view.models.stale, true); assert.equal(view.models.items[0].id, 'synthetic-model');
+  assert.equal(view.models.error.code, 'RPC_UNSUPPORTED'); assert.equal(manager.active().status, 'connected');
+  f.now += 60_001;
+  a.client.modelsImpl = null; a.client.modelData = models('new-model');
+  a.client.quotaImpl = () => { throw new Error('private-token'); };
+  await manager.refresh(a.profile.id);
+  view = manager.overview();
+  assert.equal(view.quota.state, 'error'); assert.equal(view.quota.buckets[0].used, '12'); assert.equal(view.quota.stale, true);
+  assert.equal(view.models.state, 'available'); assert.equal(view.models.items[0].id, 'new-model');
+  assert.equal(view.models.error, null); assert.doesNotMatch(JSON.stringify(view), /private-token/);
+  f.now += 60_001;
+  a.client.quotaImpl = null;
+  a.client.modelsImpl = () => { throw new CopilotClientError('AUTH_REQUIRED', 'Synthetic reauthentication required'); };
+  await manager.refresh(a.profile.id);
+  assert.equal(manager.active().status, 'reauth-required');
+});
+
+test('a late model response is isolated across selection, removal and reauthentication', async t => {
+  for (const change of ['select', 'remove', 'reauth']) {
+    const f = fixture(t); const manager = f.create(); await manager.initialize();
+    const a = await login(f, manager, 'Alice');
+    const b = await login(f, manager, 'Bob', { client: { modelData: models('bob-model') } });
+    await manager.select(a.profile.id); f.now += 60_001;
+    const gate = f.gate(models('late-alice-model')); a.client.modelsImpl = () => gate.promise;
+    const before = a.client.modelsCalls.length; const pending = manager.refresh(a.profile.id);
+    await until(() => a.client.modelsCalls.length > before);
+    if (change === 'select') await manager.select(b.profile.id);
+    if (change === 'remove') await manager.remove(a.profile.id);
+    if (change === 'reauth') {
+      f.plans.push({ login: 'Alice', modelData: models('renewed-model') });
+      const attempt = await manager.startLogin(host, a.profile.id); f.clients.at(-1).state.status = 'complete';
+      await manager.loginStatus(attempt.id);
+      await until(() => manager.overview().login.status === 'complete');
+    }
+    gate.resolve(models('late-alice-model')); await pending;
+    if (change === 'select') { assert.equal(manager.overview().models.accountId, b.profile.id); assert.equal(manager.overview().models.items[0].id, 'bob-model'); }
+    if (change === 'remove') { assert.equal(manager.overview().accounts.some(item => item.id === a.profile.id), false); assert.notEqual(manager.overview().models?.accountId, a.profile.id); }
+    if (change === 'reauth') {
+      assert.notEqual(manager.overview().models?.items[0]?.id, 'late-alice-model');
+      await manager.refresh(a.profile.id);
+      assert.equal(manager.overview().models.items[0].id, 'renewed-model');
+    }
+  }
 });
 
 test('multiple logins use independent homes, server-confirmed identities and persisted active selection', async t => {

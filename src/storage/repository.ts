@@ -6,6 +6,7 @@ import { identifier, integer, metadata, serverAddress } from '../collectors/otlp
 import { timestamp } from '../domain/period.js';
 import type { ReconciliationBasis } from '../domain/reconciliation-evidence.js';
 import type { Classification, Diagnostic, ImportResult, LocalUsage, RetentionStatus, SessionSummary, Settings, SpanRecord, UsageSnapshot } from '../shared/types.js';
+import type { DesktopRecord } from '../shared/desktop.js';
 
 export interface ImportCursor {
   fileKey: string; fileIdentity: string; generation: number; offset: number; prefixHash: string;
@@ -559,6 +560,27 @@ export class Repository {
     const items = all.slice(offset, offset + limit);
     return { items, nextCursor: offset + limit < all.length ? Buffer.from(JSON.stringify({ period, sort, after: items.at(-1)!.id,
       ...(prefix === null ? {} : { scope: prefix }) })).toString('base64url') : null };
+  }
+
+  /** A bounded, content-free monthly page; each row verifies its own contributing root versions. */
+  desktopRecords(period: string, options: { cursor?: string; sort?: string; scope?: UsageScope } = {},
+    unitVerification: Settings['unitVerification'] = null): { items: DesktopRecord[]; nextCursor: string | null } {
+    const page = this.sessions(period, { ...options, limit: 50 });
+    const known = new Map<string, StoredSpan[]>();
+    for (const span of this.#month(period, options.scope)) {
+      if (!span.sessionId || span.classification !== 'root' || span.nanoAiu === null) continue;
+      const id = sessionKey(span.sourceContext, span.sessionId);
+      const group = known.get(id) ?? []; group.push(span); known.set(id, group);
+    }
+    const items = page.items.map(({ id, sessionId, firstSeen, lastSeen, nanoAiu, knownCalls, unknownCalls, pendingCalls, models }) => {
+      const contributing = known.get(id) ?? [];
+      const unitVerified = Boolean(unitVerification && metadata(unitVerification.evidence, 4096)
+        && Number.isFinite(Date.parse(unitVerification.verifiedAt)) && contributing.length
+        && contributing.every(span => span.serviceVersion === unitVerification.cliVersion));
+      return { id, sessionId, firstSeen, lastSeen, nanoAiu, knownCalls, unknownCalls, pendingCalls, models,
+        unitVerified, credits: unitVerified && nanoAiu !== null ? credits(nanoAiu) : null };
+    });
+    return { items, nextCursor: page.nextCursor };
   }
 
   session(id: string, unitVerification: Settings['unitVerification'] = null, scope?: UsageScope): (SessionSummary & { lifetime: Totals; monthly: Record<string, Totals>; events: StoredSpan[]; modelBreakdown: { model: string; nanoAiu: string | null; calls: number; unknownCalls: number; unitVerified: boolean; source: string }[] }) | null {
