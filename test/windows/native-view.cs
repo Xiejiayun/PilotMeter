@@ -1,6 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
 
 internal static class NativeViewTests
 {
@@ -98,6 +102,110 @@ internal static class NativeViewTests
             { "source", "local-otel" }, { "scope", "Synthetic account · local sessions only" }, { "coverage", "partial" },
             { "items", new object[] { Record() } }, { "nextCursor", "abc_123" }
         };
+    }
+
+    private static T DashboardField<T>(DashboardWindow window, string name)
+    {
+        return (T)typeof(DashboardWindow).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic).GetValue(window);
+    }
+
+    private static void ApplyDashboard(DashboardWindow window, NativeOverview view)
+    {
+        typeof(DashboardWindow).GetMethod("ApplyOverview", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(window, new object[] { view });
+    }
+
+    private static void CheckMetric(DashboardWindow window, string name, string expected, string description)
+    {
+        var label = DashboardField<Label>(window, name);
+        Check(label.Text == expected, "The visible " + name + " must belong to the current snapshot.");
+        Check(DashboardField<ToolTip>(window, "tips").GetToolTip(label) == description, "The " + name + " tooltip must match the current snapshot.");
+        Check(label.AccessibleDescription == description, "The " + name + " accessible description must match the current snapshot.");
+    }
+
+    private static NativeOverview DashboardSnapshot(DesktopInstance identity, string accountId, Dictionary<string, object> bucket)
+    {
+        var source = Overview(); var profile = Profile(); profile["id"] = accountId;
+        profile["login"] = accountId == AccountId ? "synthetic-account-a" : "synthetic-account-b";
+        source["accounts"] = new object[] { profile }; source["activeAccountId"] = accountId;
+        NativeData.Map(source, "quota")["accountId"] = accountId;
+        var presentation = NativeData.Map(source, "presentation"); presentation["primary"] = bucket; presentation["buckets"] = new object[] { bucket };
+        var local = Local(); local["accountId"] = accountId; local["scope"] = profile["login"] + " local sessions"; source["local"] = local;
+        var models = Models(); models["accountId"] = accountId; source["models"] = models;
+        return NativeOverview.Read(source, identity);
+    }
+
+    private static void CheckDashboardTransitions(DesktopInstance identity, NativeOverview signedOut)
+    {
+        Exception failure = null;
+        var thread = new Thread(delegate() {
+            try
+            {
+                // Instantiate the shipping controls without showing a window or starting a daemon.
+                using (var window = new DashboardWindow(Path.GetTempPath(), delegate { return Task.FromResult(0); }))
+                {
+                    var complete = Bucket(); complete["unit"] = "ai-credits"; complete["unitLabel"] = "AI Credits";
+                    complete["used"] = "70"; complete["limit"] = "100"; complete["remaining"] = "30";
+                    complete["remainingSource"] = "calculated"; complete["percentage"] = 70; complete["remainingPercentage"] = "30";
+                    var accountA = DashboardSnapshot(identity, AccountId, complete);
+                    var accountBId = "99999999-2222-4333-8444-555555555555";
+                    ApplyDashboard(window, accountA);
+                    CheckMetric(window, "quotaValue", "30", "30"); CheckMetric(window, "quotaUsed", "70", "70"); CheckMetric(window, "quotaTotal", "100", "100");
+
+                    var ratio = Bucket(); ratio["remainingPercentage"] = "62.5";
+                    ApplyDashboard(window, DashboardSnapshot(identity, accountBId, ratio));
+                    CheckMetric(window, "quotaValue", "62.5%", "62.5%"); CheckMetric(window, "quotaUsed", "—", "—"); CheckMetric(window, "quotaTotal", "—", "—");
+                    ApplyDashboard(window, accountA);
+                    ApplyDashboard(window, DashboardSnapshot(identity, accountBId, Bucket()));
+                    CheckMetric(window, "quotaValue", "37.5%", "37.5%");
+
+                    var unlimited = Bucket(); unlimited["unit"] = "ai-credits"; unlimited["unitLabel"] = "AI Credits"; unlimited["unlimited"] = true; unlimited["used"] = "7";
+                    ApplyDashboard(window, accountA);
+                    ApplyDashboard(window, DashboardSnapshot(identity, accountBId, unlimited));
+                    CheckMetric(window, "quotaValue", "无固定上限", "无固定上限"); CheckMetric(window, "quotaUsed", "7", "7"); CheckMetric(window, "quotaTotal", "无固定上限", "无固定上限");
+
+                    var unknown = Bucket(); unknown["percentage"] = null;
+                    ApplyDashboard(window, accountA);
+                    ApplyDashboard(window, DashboardSnapshot(identity, accountBId, unknown));
+                    CheckMetric(window, "quotaValue", "—", "—"); CheckMetric(window, "quotaUsed", "—", "—"); CheckMetric(window, "quotaTotal", "—", "—");
+                    ApplyDashboard(window, accountA);
+                    ApplyDashboard(window, signedOut);
+                    CheckMetric(window, "quotaValue", "—", "—"); CheckMetric(window, "quotaUsed", "—", "—"); CheckMetric(window, "quotaTotal", "—", "—");
+                    var tips = DashboardField<ToolTip>(window, "tips");
+                    var modelState = DashboardField<Label>(window, "modelState");
+                    Check(tips.GetToolTip(modelState) == modelState.Text, "Signing out must replace the previous account's model tooltip.");
+
+                    ApplyDashboard(window, accountA);
+                    var localSummary = DashboardField<Label>(window, "localSummary");
+                    Check(localSummary.Text.Contains("synthetic-account-a"), "The transition fixture must begin with account A's local totals.");
+                    foreach (var description in new[] { "正在切换账号…", "登录成功，正在读取额度与模型权限…", "正在读取当前账号…" })
+                    {
+                        ApplyDashboard(window, accountA);
+                        typeof(DashboardWindow).GetMethod("ClearAccountPresentation", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(window, new object[] { description });
+                        Check(localSummary.Text == description && tips.GetToolTip(localSummary) == description && localSummary.AccessibleDescription == description, "Account switching and login completion must clear the previous account's local totals through every display channel.");
+                        Check(modelState.Text == description && tips.GetToolTip(modelState) == description && modelState.AccessibleDescription == description, "Account switching and login completion must clear the previous model status through every display channel.");
+                        Check(DashboardField<Label>(window, "modelSummary").Text == description, "Pending account changes must clear the previous model count.");
+                        CheckMetric(window, "quotaValue", "—", "—");
+                    }
+                    ApplyDashboard(window, accountA);
+                    // These are the exact control assignments made after read failures.
+                    var feedback = DashboardField<Label>(window, "feedback");
+                    var recordState = DashboardField<Label>(window, "recordState");
+                    feedback.Text = "同步失败 · synthetic-account-a"; tips.SetToolTip(feedback, feedback.Text);
+                    recordState.Text = "读取失败 · synthetic-account-a"; tips.SetToolTip(recordState, recordState.Text);
+                    window.SetService(null, "Synthetic disconnect");
+                    Check(tips.GetToolTip(localSummary) == localSummary.Text && !localSummary.Text.Contains("synthetic-account-a"), "Disconnecting must clear account A's local totals from visible text and tooltip.");
+                    Check(localSummary.AccessibleDescription == localSummary.Text, "Disconnecting must clear the old local totals from accessible descriptions.");
+                    Check(tips.GetToolTip(modelState) == modelState.Text, "Disconnecting must clear the previous model tooltip.");
+                    Check(tips.GetToolTip(feedback) == feedback.Text && feedback.AccessibleDescription == feedback.Text, "Disconnecting must clear the previous account's read error from every feedback channel.");
+                    Check(tips.GetToolTip(recordState) == recordState.Text && recordState.AccessibleDescription == recordState.Text, "Resetting records must clear the previous account's read error from every status channel.");
+                    Check(!window.Visible, "Native transition tests must never show the dashboard.");
+                }
+            }
+            catch (Exception error) { failure = error; }
+        });
+        thread.SetApartmentState(ApartmentState.STA); thread.Start();
+        Check(thread.Join(15000), "Hidden native transition checks must finish promptly.");
+        if (failure != null) throw new Exception("Native dashboard transition failed: " + failure.GetBaseException().Message, failure);
     }
 
     internal static int Run()
@@ -232,6 +340,7 @@ internal static class NativeViewTests
         Check(NativeData.DevicePage("https://work.ghe.com", "https://work.ghe.com/login/device") != null, "The matching enterprise device page must be allowed.");
         foreach (var target in new[] { "https://other.ghe.com/login/device", "https://github.com/login/device?next=x", "https://github.com/login/device#x", "https://github.com:444/login/device", "http://github.com/login/device", "https://github.com/login/oauth", "file:///C:/secret", "javascript:alert(1)", null })
             Check(NativeData.DevicePage("https://github.com", target) == null, "Only the requested host's exact device page may open externally.");
+        CheckDashboardTransitions(identity, NativeOverview.Read(noAccount, identity));
         return checks;
     }
 }

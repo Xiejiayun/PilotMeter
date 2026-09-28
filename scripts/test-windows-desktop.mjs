@@ -6,9 +6,9 @@ import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Compiles shipping native sources and exercises isolated, windowless contracts.
+// Compiles shipping native sources and exercises contracts without showing any forms.
 const workspace = resolve(fileURLToPath(new URL('..', import.meta.url)));
-if (process.argv.includes('--help')) { console.log('Usage: node scripts/test-windows-desktop.mjs\nWindows x64 native contracts and isolated loopback transport checks. No UI or external network.'); process.exit(0); }
+if (process.argv.includes('--help')) { console.log('Usage: node scripts/test-windows-desktop.mjs\nWindows x64 native contracts and isolated loopback transport checks. No visible windows or external network.'); process.exit(0); }
 assert.equal(process.argv.length, 2, 'This test takes no arguments.');
 assert.equal(process.platform, 'win32', 'Desktop contracts require Windows.');
 assert.equal(process.arch, 'x64', 'Desktop contracts require Windows x64.');

@@ -393,6 +393,7 @@ internal sealed class DashboardWindow : NativeForm
         shell.Controls.Add(content, 1, 0); Controls.Add(shell);
 
         BuildOverview(); BuildModels(); BuildRecords(); BuildAccounts();
+        FollowTextDescription(localSummary); FollowTextDescription(modelState); FollowTextDescription(feedback); FollowTextDescription(recordState);
         accountMenu = new ContextMenuStrip();
         reauthenticate = new ToolStripMenuItem("重新登录当前账号", null, delegate { OpenLogin(true); });
         remove = new ToolStripMenuItem("移除当前账号…", null, async delegate { await RemoveAsync(); });
@@ -484,6 +485,12 @@ internal sealed class DashboardWindow : NativeForm
         else if (column == 1) quotaUsedUnit = unit; else quotaTotalUnit = unit;
         amount.TextChanged += delegate { tips.SetToolTip(amount, amount.Text); amount.AccessibleDescription = amount.Text; };
         return amount;
+    }
+
+    private void FollowTextDescription(Control control)
+    {
+        control.TextChanged += delegate { tips.SetToolTip(control, control.Text); control.AccessibleDescription = control.Text; };
+        tips.SetToolTip(control, control.Text); control.AccessibleDescription = control.Text;
     }
 
     private void BuildOverview()
@@ -714,6 +721,12 @@ internal sealed class DashboardWindow : NativeForm
         suppress = true; bucketChoice.Items.Clear(); suppress = false;
     }
 
+    private void ClearAccountPresentation(string description)
+    {
+        ClearQuota(description); ResetRecords(); modelsSignature = null; modelsGrid.Rows.Clear(); overviewModels.Rows.Clear();
+        modelState.Text = modelSummary.Text = localSummary.Text = description;
+    }
+
     private void UpdateControls()
     {
         if (disposed || add == null) return;
@@ -774,7 +787,7 @@ internal sealed class DashboardWindow : NativeForm
             AccountMutationPending = true;
             object selectedId; var targetAccount = payload != null && payload.TryGetValue("accountId", out selectedId) ? selectedId as string : null;
             PublishQuotaSelection(targetAccount, null, true);
-            ClearQuota(description); ResetRecords(); modelsSignature = null; modelsGrid.Rows.Clear(); overviewModels.Rows.Clear(); modelState.Text = description; localSummary.Text = description;
+            ClearAccountPresentation(description);
         }
         feedback.Text = description; UpdateControls();
         try
@@ -962,8 +975,8 @@ internal sealed class DashboardWindow : NativeForm
                 loginDialog = dialog; UpdateControls(); dialog.ShowDialog(this); loginDialog = null;
                 if (disposed) return;
                 if (service == null || !service.SameAs(identity)) { UpdateControls(); UpdatePolling(); if (CanRead) await LoadAsync(true); return; }
-                generation++; overview = null; quotaKey = quotaAccount = null; nextRefresh = DateTime.MinValue; ResetRecords();
-                ClearQuota(dialog.Succeeded ? "登录成功，正在读取额度与模型权限…" : "正在读取当前账号…"); RenderModels();
+                generation++; overview = null; quotaKey = quotaAccount = null; nextRefresh = DateTime.MinValue;
+                ClearAccountPresentation(dialog.Succeeded ? "登录成功，正在读取额度与模型权限…" : "正在读取当前账号…"); RenderModels();
                 await LoadAsync(true); if (!disposed && !String.IsNullOrEmpty(dialog.Feedback)) feedback.Text = dialog.Feedback;
             }
         }
