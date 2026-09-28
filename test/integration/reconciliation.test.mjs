@@ -40,10 +40,12 @@ async function deliver(instance, spans) {
   assert.equal(response.status, 200); return response.json();
 }
 async function verifiedFile(instance) {
-  const { template } = await request(instance, `/api/reconciliation/inspect?period=${period}`);
-  assert.ok(template);
+  const { template, report } = await request(instance, `/api/reconciliation/inspect?period=${period}`);
+  assert.ok(template, report.reason);
+  // Use the daemon's clock after inspection, avoiding a cross-process wall-clock boundary.
+  const { updatedAt } = await request(instance, `/api/summary?period=${period}`);
   return { ...template, identityVerified: true, poolVerified: true, productsVerified: true, timeCoverageVerified: true,
-    verifiedAt: new Date().toISOString(), evidence: 'Synthetic bounded fixture: all sources and coverage checked for this test only.' };
+    verifiedAt: updatedAt, evidence: 'Synthetic bounded fixture: all sources and coverage checked for this test only.' };
 }
 
 test('real CLI and daemon expose finite reconciliation without trusting client-supplied totals', async () => {
@@ -70,7 +72,8 @@ test('real CLI and daemon expose finite reconciliation without trusting client-s
     const after = span(2, { traceId: '2'.repeat(32), cost: '99000000000', session: 'synthetic-after-cutoff',
       startTimeUnixNano: nanos('2025-01-20T00:00:00.000Z'), endTimeUnixNano: nanos('2025-01-20T00:00:01.000Z') });
     await deliver(instance, [before, after]);
-    assert.equal((await request(instance, '/api/quota-import', 'POST', quota())).capability.supported, true);
+    const imported = await request(instance, '/api/quota-import', 'POST', quota());
+    assert.equal(imported.capability.supported, true, imported.capability.reasons.join('; '));
     const evidenceFile = join(directory, 'review.json');
     await cli('inspect', '--period', period, '--output', evidenceFile);
     const template = JSON.parse(await readFile(evidenceFile, 'utf8'));
@@ -103,9 +106,11 @@ test('real CLI and daemon expose finite reconciliation without trusting client-s
     await assert.rejects(cli('verify', evidenceFile), 'old evidence must not silently rebind to changed data');
     await request(instance, '/api/reconciliation', 'POST', await verifiedFile(instance));
     const wholeMonth = quota('115');
-    wholeMonth.evidence.verifiedAt = new Date().toISOString();
+    // This fixture checks verification after month-end, independently of today's clock.
+    wholeMonth.evidence.verifiedAt = '2025-02-01T00:00:01.000Z';
     wholeMonth.evidence.providerUpdatedAt = '2025-02-01T00:00:00.000Z';
-    assert.equal((await request(instance, '/api/quota-import', 'POST', wholeMonth)).capability.supported, true);
+    const wholeMonthImported = await request(instance, '/api/quota-import', 'POST', wholeMonth);
+    assert.equal(wholeMonthImported.capability.supported, true, wholeMonthImported.capability.reasons.join('; '));
     report = await request(instance, '/api/reconciliation', 'POST', await verifiedFile(instance));
     assert.equal(report.cutoff, '2025-02-01T00:00:00.000Z');
     assert.equal(report.localUsed, '110'); assert.equal(report.difference, '5');
