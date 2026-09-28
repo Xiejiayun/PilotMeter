@@ -235,6 +235,16 @@ const runtime = JSON.parse(await run(join(payload, 'runtime', 'node.exe'), ['-e'
   'const {DatabaseSync}=require("node:sqlite");const d=new DatabaseSync(":memory:");d.exec("SELECT 1");d.close();console.log(JSON.stringify({version:process.versions.node,platform:process.platform,arch:process.arch}))']));
 if (runtime.version !== nodeVersion || runtime.platform !== 'win32' || runtime.arch !== 'x64') throw new Error('Unexpected bundled runtime.');
 
+step('Compile the native Windows desktop application');
+await mkdir(join(payload, 'desktop'), { recursive: true });
+const desktopConfiguration = join(stage, 'DesktopBuildInfo.cs');
+await writeFile(desktopConfiguration, 'using System.Reflection;\n[assembly: AssemblyInformationalVersion("' + packageInfo.version + '")]\n');
+await ps(['-Mode', 'CompileDesktop', '-Source', join(workspace, 'scripts', 'windows', 'DesktopApp.cs'),
+  '-Destination', join(payload, 'desktop', 'PilotMeter.Desktop.exe'), '-Configuration', desktopConfiguration,
+  '-ApplicationManifest', join(workspace, 'scripts', 'windows', 'app.manifest'),
+  '-ApplicationIcon', join(workspace, 'web', 'assets', 'pilotmeter.ico')]);
+await copyFile(join(workspace, 'scripts', 'windows', 'DesktopApp.config'), join(payload, 'desktop', 'PilotMeter.Desktop.exe.config'));
+
 async function files(root, prefix = '') {
   const result = [];
   for (const entry of await readdir(root, { withFileTypes: true })) {
@@ -285,6 +295,7 @@ const exeHash = hash(await readFile(exe));
 await writeFile(join(output, 'SHA256SUMS'), exeHash + '  ' + name + '\n');
 await writeFile(join(output, name + '.json'), JSON.stringify({
   version: packageInfo.version, platform: 'win32', arch: 'x64', nodeVersion, copilotVersion, copilotExecutableSha256,
+  desktop: { defaultEntry: 'widget', mainWindow: 'native-winforms', webView: false },
   filename: name, sha256: exeHash, bytes: (await stat(exe)).size, unpackedBytes, payloadHash, files: members.length,
   signed: false, nodeArchiveSha256: archiveSha256, nodeExecutableSha256: nodeSha256,
 }, null, 2) + '\n');

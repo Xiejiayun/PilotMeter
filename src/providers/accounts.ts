@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { atomicJson, readJson } from '../shared/runtime.js';
 import { compareDecimals, nonNegativeDecimal, percentageOf, subtractDecimals } from '../domain/decimal.js';
+import { quotaBucketLabel } from '../domain/personal-quota.js';
 import type { AccountLogin, AccountsOverview, GitHubProfile, PersonalQuota } from '../shared/accounts.js';
 import { CopilotClient, CopilotClientError, copilotHost, type CopilotQuota } from './copilot-client.js';
 
@@ -40,7 +41,7 @@ export function personalQuota(accountId: string, result: CopilotQuota): Personal
       const remainingPercentage = snapshot.isUnlimitedEntitlement ? null : percent(snapshot.remainingPercentage);
       const usedPercentage = snapshot.isUnlimitedEntitlement ? null : remainingPercentage !== null ? subtractDecimals('100', remainingPercentage)
         : used !== null && limit !== null ? percentageOf(used, limit, 2) : null;
-      return { key: snapshot.type, label: unit === 'ai-credits' ? 'AI Credits' : unit === 'premium-requests' ? 'Premium Requests' : 'Copilot 额度',
+      return { key: snapshot.type, label: quotaBucketLabel(snapshot.type),
         unit, used, limit, remainingPercentage, usedPercentage, unlimited: snapshot.isUnlimitedEntitlement, resetAt: snapshot.resetDate };
     }),
   };

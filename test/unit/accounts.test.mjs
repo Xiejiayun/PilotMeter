@@ -520,15 +520,15 @@ test('refresh commits queued during another login preserve both registry profile
 
 test('personal quota preserves percentages and never infers AI Credits from a bucket name', () => {
   const input = quota();
-  input.snapshots = ['chat', 'ai_credits', 'ai-credits', 'premium_requests'].map(type => ({ ...input.snapshots[0], type, unit: null, remainingPercentage: 12.345 }));
+  input.snapshots = ['chat', 'completions', 'premium_interactions', 'ai_credits', 'ai-credits', 'premium_requests'].map(type => ({ ...input.snapshots[0], type, unit: null, remainingPercentage: 12.345 }));
   const result = personalQuota('synthetic-account', input);
   assert.equal(result.scope, 'signed-in-user');
   for (const bucket of result.buckets) {
     assert.equal(bucket.unit, 'unspecified');
-    assert.equal(bucket.label, 'Copilot 额度');
     assert.equal(bucket.remainingPercentage, '12.345');
     assert.equal(bucket.usedPercentage, '87.655');
   }
+  assert.deepEqual(result.buckets.map(bucket => bucket.label), ['聊天', '代码补全', '高级请求', '其他额度 · ai_credits', '其他额度 · ai-credits', '其他额度 · premium_requests']);
   assert.ok(!JSON.stringify(result).includes('selectionId'));
 });
 
@@ -541,6 +541,7 @@ test('personal quota keeps explicit units, exact amounts, zero, unlimited and mi
     { ...template, usedRequests: '25', entitlementRequests: '100', remainingPercentage: 200 },
   ] }));
   assert.equal(result.buckets[0].unit, 'ai-credits');
+  assert.equal(result.buckets[0].label, '聊天', 'The quota category is independent of its explicitly returned unit.');
   assert.equal(result.buckets[0].used, '9007199254740993.123456789');
   assert.equal(result.buckets[0].usedPercentage, '50.00');
   assert.equal(result.buckets[1].unit, 'premium-requests');

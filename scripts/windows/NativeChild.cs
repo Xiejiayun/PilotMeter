@@ -33,6 +33,8 @@ internal static class NativeChild
     [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess();
     [DllImport("kernel32.dll")] private static extern IntPtr GetStdHandle(int number);
     [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint GetConsoleProcessList([Out] uint[] processes, uint count);
+    [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool DuplicateHandle(IntPtr sourceProcess, IntPtr source, IntPtr targetProcess,
         out IntPtr target, uint access, bool inherit, uint options);
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -92,8 +94,12 @@ internal static class NativeChild
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             startup.Attributes = attributes;
             // Keep the caller's environment and console/process group, including Ctrl+C.
+            // Inherited redirected handles do not imply a console association. A GUI
+            // launcher without one must not cause Node to allocate a new window.
+            var flags = 0x80000u; // EXTENDED_STARTUPINFO_PRESENT
+            if (GetConsoleProcessList(new uint[1], 1) == 0) flags |= 0x08000000; // CREATE_NO_WINDOW
             if (!CreateProcessW(application, new StringBuilder(commandLine), IntPtr.Zero, IntPtr.Zero,
-                true, 0x80000, IntPtr.Zero, directory, ref startup, out process))
+                true, flags, IntPtr.Zero, directory, ref startup, out process))
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "The bundled Node runtime could not start.");
         }
         finally

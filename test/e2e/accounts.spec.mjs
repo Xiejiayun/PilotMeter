@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 const period = new Date().toISOString().slice(0, 7);
-const time = `${period}-15T09:30:00.000Z`;
+const time = `${period}-01T00:00:00.000Z`;
 const alice = { id: 'account-a', login: 'alice-work', host: 'https://github.com', status: 'connected', createdAt: time, checkedAt: time };
 const bob = { ...alice, id: 'account-b', login: 'bob-personal' };
 const quota = accountId => ({ accountId, state: 'available', scope: 'signed-in-user', fetchedAt: time, stale: false, buckets: [{ key: 'premium_interactions', label: 'Premium interactions', unit: 'unspecified', used: '75', limit: '200', remainingPercentage: '62.5', usedPercentage: '37.5', unlimited: false, resetAt: time }], error: null });
@@ -116,18 +116,80 @@ test('device code login confirms selected identity and uses CSRF without exposin
   expect(await page.evaluate(() => ({ local: localStorage.length, session: sessionStorage.length }))).toEqual({ local: 0, session: 0 });
 });
 
-test('current personal quota is separate from month and keeps unspecified units explicit', async ({ page }) => {
+test('current premium percentage is distinct from local month and hides unspecified raw quantities and past resets', async ({ page }) => {
   const data = state();
   await mock(page, data);
   await page.goto('/');
   await expect(page.locator('#quota-buckets')).toContainText('37.5%');
-  await expect(page.locator('#quota-buckets')).toContainText('75 / 200');
-  await expect(page.locator('#quota-buckets')).toContainText('接口计量（单位未说明）');
+  await expect(page.locator('.quota-primary h4')).toHaveText('高级请求');
+  await expect(page.locator('#quota-buckets')).not.toContainText('75 / 200');
+  await expect(page.locator('#quota-buckets')).not.toContainText('重置');
   await expect(page.locator('#quota-buckets')).not.toContainText('AI Credits');
+  await expect(page.locator('#quota-buckets')).not.toContainText('Premium Requests');
   await expect(page.locator('#primary-unit')).toHaveText('nano AIU');
   await expect(page.locator('.quota-period')).toContainText('不随下方月份切换');
   await page.locator('#period').fill('2025-01');
   await expect(page.locator('#quota-buckets')).toContainText('37.5%');
+});
+
+test('premium is the visible main category and unlimited categories stay under a persistent native disclosure', async ({ page }) => {
+  // Deliberately artificial values; never sourced from a real account or screenshot.
+  const data = state();
+  const premium = { ...data.overview.quota.buckets[0], used: '432', limit: '1728', usedPercentage: '25', remainingPercentage: '75' };
+  data.overview.quota.buckets = [
+    { ...premium, key: 'chat', unlimited: true },
+    { ...premium, key: 'completions', unlimited: true }, premium,
+  ];
+  await mock(page, data);
+  await page.clock.install();
+  await page.goto('/');
+  await expect(page.locator('.quota-primary h4')).toHaveText('高级请求');
+  await expect(page.locator('.quota-primary .quota-value')).toHaveText('25%');
+  await expect(page.locator('.quota-other')).not.toHaveAttribute('open', '');
+  await expect(page.locator('[data-quota-key="chat"]')).toBeHidden();
+  await expect(page.locator('#quota-buckets')).not.toContainText('432');
+  await expect(page.locator('#quota-buckets')).not.toContainText('1728');
+  await page.locator('.quota-other > summary').press('Enter');
+  await expect(page.locator('[data-quota-key="chat"] h4')).toHaveText('聊天');
+  await expect(page.locator('[data-quota-key="completions"] h4')).toHaveText('代码补全');
+  await expect(page.locator('[data-quota-key="chat"] .quota-value')).toHaveText('无固定上限');
+  await expect(page.locator('[data-quota-key="completions"] .quota-value')).toHaveText('无固定上限');
+  await page.clock.runFor(5_100);
+  await expect(page.locator('.quota-other')).toHaveAttribute('open', '');
+  await expect(page.locator('.quota-other > summary')).toBeFocused();
+});
+
+test('multiple unrecognized finite categories stay independent until explicitly selected', async ({ page }) => {
+  const data = state();
+  const bucket = data.overview.quota.buckets[0];
+  data.overview.quota.buckets = [
+    { ...bucket, key: 'synthetic_first', usedPercentage: '20', used: '20', limit: '100', unit: 'ai-credits' },
+    { ...bucket, key: 'synthetic_second', usedPercentage: '80', used: '400', limit: '500', unit: 'premium-requests' },
+  ];
+  await mock(page, data);
+  await page.goto('/');
+  await expect(page.locator('.quota-primary')).toHaveCount(0);
+  await expect(page.getByLabel('查看额度类别')).toHaveValue('');
+  await expect(page.locator('#quota-buckets')).toContainText('不合并数量或比例');
+  await expect(page.locator('[data-quota-key="synthetic_first"]')).toBeVisible();
+  await expect(page.locator('[data-quota-key="synthetic_second"]')).toBeVisible();
+  await page.getByLabel('查看额度类别').selectOption('synthetic_second');
+  await expect(page.locator('.quota-primary h4')).toHaveText('其他额度 · synthetic_second');
+  await expect(page.locator('.quota-primary .quota-value')).toHaveText('80%');
+  await expect(page.locator('.quota-primary')).toContainText('400 / 500 Premium Requests');
+  await expect(page.locator('#quota-buckets')).not.toContainText('420');
+});
+
+test('only a future reset is presented as the next reset and quota from a different identity is hidden', async ({ page }) => {
+  const data = state();
+  data.overview.quota.buckets[0].resetAt = new Date(Date.now() + 86_400_000).toISOString();
+  await mock(page, data);
+  await page.goto('/');
+  await expect(page.locator('.quota-primary')).toContainText('下次重置');
+  data.overview.quota.accountId = bob.id;
+  await page.getByRole('button', { name: '同步额度', exact: true }).click();
+  await expect(page.locator('#quota-buckets')).toBeEmpty();
+  await expect(page.locator('#quota-status')).toContainText('尚未取得');
 });
 
 test('switch clears old sessions and dialog immediately and ignores late old snapshot', async ({ page }) => {
@@ -217,7 +279,8 @@ test('account endpoint failure and reauthentication error do not suppress local 
   await page.clock.install();
   await page.goto('/');
   await expect(page.locator('#github-description')).toContainText('请重新登录');
-  await expect(page.locator('#quota-status')).toContainText('旧快照');
+  await expect(page.locator('#quota-status')).toContainText('请重新登录');
+  await expect(page.locator('#quota-buckets')).toBeEmpty();
   await expect(page.locator('#primary-value')).toHaveText('1,000,000,000');
   data.authOffline = true;
   await page.clock.runFor(5_100);
