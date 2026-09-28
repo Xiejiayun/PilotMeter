@@ -1,0 +1,93 @@
+name: Windows Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag on main (for example v0.1.0-preview.8)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Verify, package and publish Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate version and main ancestry
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($env:RELEASE_TAG -cne "v$version") { throw 'Tag and package version must match.' }
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$') { throw 'Invalid version tag.' }
+          git merge-base --is-ancestor HEAD origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'Release commit must already be merged into main.' }
+          if (-not (Test-Path -LiteralPath "docs/releases/$version.md")) { throw 'Reviewed release notes are required.' }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: npm
+
+      - run: npm ci
+      - run: npx --no-install playwright install chromium
+      - name: Test, build and verify the actual Windows distribution
+        run: npm run release:windows
+
+      - name: Preserve verified artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.RELEASE_TAG }}-windows-x64
+          path: |
+            build/windows/PilotMeter-*-win-x64.exe
+            build/windows/PilotMeter-*-win-x64.exe.json
+            build/windows/PilotMeter-*-win-x64.zip
+            build/windows/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Create release only after all checks pass
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $stem = "build/windows/PilotMeter-$version-win-x64"
+          gh release view $env:RELEASE_TAG *> $null
+          if ($LASTEXITCODE -eq 0) { throw 'Release already exists; do not replace published binaries.' }
+          $releaseArgs = @('release', 'create', $env:RELEASE_TAG, '--verify-tag', '--draft', '--title', "PilotMeter $version", '--notes-file', "docs/releases/$version.md", "$stem.exe", "$stem.exe.json", "$stem.zip", 'build/windows/SHA256SUMS')
+          if ($version.Contains('-')) { $releaseArgs += '--prerelease' }
+          gh @releaseArgs
+          if ($LASTEXITCODE -ne 0) { throw 'Release upload failed; any partial draft is retained for inspection.' }
+          gh release edit $env:RELEASE_TAG --draft=false
+          if ($LASTEXITCODE -ne 0) { throw 'Uploaded draft was not published.' }
+
+      - name: Preserve failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.RELEASE_TAG }}-failure-evidence
+          path: test-results/
+          if-no-files-found: ignore

@@ -1,6 +1,6 @@
 {
   "name": "pilotmeter",
-  "version": "0.1.0-preview.7",
+  "version": "0.1.0-preview.8",
   "description": "Local, privacy-conscious GitHub Copilot CLI usage meter",
   "type": "module",
   "license": "MIT",
@@ -19,7 +19,8 @@
     "docs/compatibility.md",
     "docs/validation-guide.md",
     "docs/npm-package-contents.md",
-    "docs/windows-exe.md"
+    "docs/windows-exe.md",
+    "docs/releasing.md"
   ],
   "scripts": {
     "build": "tsc && tsc --project web/tsconfig.json && vite build",
@@ -29,7 +30,10 @@
     "test:pack": "node scripts/pack-smoke.mjs",
     "build:windows": "node scripts/build-windows.mjs",
     "test:windows": "node scripts/windows-exe-smoke.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:desktop": "node scripts/test-windows-desktop.mjs",
+    "release:check": "node scripts/verify-windows-release.mjs",
+    "release:windows": "npm test && npm run test:pack && npm run test:e2e && npm run build:windows && npm run test:windows && npm run release:check"
   },
   "dependencies": {
     "@github/copilot": "1.0.88",

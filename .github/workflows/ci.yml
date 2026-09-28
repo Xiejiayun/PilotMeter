@@ -70,6 +70,10 @@ jobs:
         run: npm run test:windows
         timeout-minutes: 10
 
+      - name: Verify release files and checksums
+        if: runner.os == 'Windows'
+        run: npm run release:check
+
       - name: Upload Windows executable and checksums
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
@@ -78,6 +82,7 @@ jobs:
           path: |
             build/windows/PilotMeter-*-win-x64.exe
             build/windows/PilotMeter-*-win-x64.exe.json
+            build/windows/PilotMeter-*-win-x64.zip
             build/windows/SHA256SUMS
           if-no-files-found: error
           compression-level: 0
