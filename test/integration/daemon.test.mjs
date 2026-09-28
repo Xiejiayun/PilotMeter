@@ -27,6 +27,15 @@ test('background service: concurrent start, authentication, isolation, restart, 
     assert.equal((await fetch(`${a.url}/api/settings`, { method: 'PATCH', headers: browserHeaders, body: '{"monthlyBudget":"0"}' })).status, 200);
     assert.equal((await fetch(`${a.url}/api/shutdown`, { method: 'POST', headers: browserHeaders })).status, 403);
     assert.equal((await fetch(`${a.url}/api/settings`, { method: 'PATCH', headers: browserHeaders, body: '{"account":{"login":"injected"}}' })).status, 400);
+    await assert.rejects(request(a, '/api/account', 'POST', { account: { kind: 'user', login: 'company-member' } }), /personal direct billing/);
+    await request(a, '/api/account', 'POST', { account: { kind: 'organization', login: 'test-org' } });
+    const missingCredential = await request(a, '/api/refresh', 'POST');
+    assert.equal(missingCredential.state, 'unknown');
+    assert.equal((await request(a, '/api/summary')).display.mode, 'usage');
+    await request(a, '/api/account', 'POST', { account: { kind: 'enterprise', login: 'another-company' } });
+    assert.equal((await request(a, '/api/summary')).account, null);
+    await request(a, '/api/account', 'POST', { account: null });
+    await assert.rejects(request(a, '/api/unit-verification', 'POST', { cliVersion: 'unverified', evidence: 'Made-up evidence' }), /supported CLI version/);
     const persisted = await readFile(join(dir, 'status.json'), 'utf8');
     assert.ok(!persisted.includes(a.managementToken)); assert.ok(!persisted.includes(a.collectorToken));
     await request(a, '/api/shutdown', 'POST');
