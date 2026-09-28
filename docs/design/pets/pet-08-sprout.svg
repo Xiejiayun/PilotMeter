@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none" role="img" aria-labelledby="p08-title">
+  <title id="p08-title">豆芽芽 · 顶着双叶的小豆子精灵</title>
+  <defs>
+    <linearGradient id="p08-bean" x1="49" y1="42" x2="82" y2="105" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFBE9"/><stop offset=".6" stop-color="#F9EDC9"/><stop offset="1" stop-color="#E4C58B"/>
+    </linearGradient>
+    <linearGradient id="p08-leaf" x1="64" y1="14" x2="65" y2="45" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#B9D984"/><stop offset=".55" stop-color="#84BB69"/><stop offset="1" stop-color="#538B54"/>
+    </linearGradient>
+  </defs>
+  <g class="pet-body" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M43 93C40 98 37 107 41 111C45 114 52 111 54 107L58 98M72 98L77 109C81 114 88 112 89 108C90 103 85 96 82 93" fill="#ECD49F" stroke="#8B7A54" stroke-width="2.5"/>
+    <path d="M35 69C28 68 19 72 21 78C22 82 27 82 31 81L38 78M88 67C96 63 104 67 105 73C106 78 102 81 96 79L89 77" fill="#FAEDCC" stroke="#8B7A54" stroke-width="2.5"/>
+    <path d="M46 44C57 38 74 38 82 48C88 55 90 63 94 75C102 96 85 105 65 106C44 107 29 96 32 80C35 66 34 52 46 44Z" fill="url(#p08-bean)" stroke="#8B7A54" stroke-width="2.7"/>
+    <path d="M35 85C44 99 70 100 88 89C92 86 94 83 95 80C99 96 83 102 65 103C48 104 36 97 35 85Z" fill="#DCBA7A" opacity=".38" stroke="none"/>
+    <path d="M44 56C47 48 56 46 62 47" stroke="#FFFFFF" stroke-width="4.5"/>
+    <path d="M64 44C66 37 64 29 61 25" stroke="#6F9556" stroke-width="5"/>
+    <path d="M62 32C46 38 28 32 24 16C43 13 59 17 62 32Z" fill="url(#p08-leaf)" stroke="#5E8F50" stroke-width="2.5"/>
+    <path d="M65 33C64 19 81 12 100 15C96 31 81 39 65 33Z" fill="url(#p08-leaf)" stroke="#5E8F50" stroke-width="2.5"/>
+    <path d="M35 21C42 27 51 28 59 31M92 20C84 23 74 29 68 32" stroke="#D8EAB1" stroke-width="2.5"/>
+    <path d="M48 23L48 27M82 24L83 19" stroke="#D8EAB1" stroke-width="1.6"/>
+    <path d="M60 89C57 83 61 80 65 80C69 80 72 83 69 88C67 91 64 93 64 93L60 89Z" fill="#88AA66" stroke="#78965A" stroke-width="1.6"/>
+    <path d="M65 84L64 90" stroke="#D5E5A8" stroke-width="1.5"/>
+    <ellipse cx="42" cy="77" rx="5" ry="3" fill="#EBC9A3" stroke="none"/>
+    <ellipse cx="83" cy="77" rx="5" ry="3" fill="#EBC9A3" stroke="none"/>
+    <g class="pet-eyes" fill="#665A3E" stroke="none">
+      <ellipse cx="49" cy="68" rx="3.1" ry="4.2"/><ellipse cx="77" cy="68" rx="3.1" ry="4.2"/>
+      <circle cx="50" cy="66.5" r="1" fill="#FFFDF3"/><circle cx="78" cy="66.5" r="1" fill="#FFFDF3"/>
+    </g>
+    <path d="M58 76C61 79 65 80 68 76" stroke="#786749" stroke-width="2.3"/>
+    <path d="M42 107L47 107M81 107L86 107" stroke="#FFF5D9" stroke-width="2.5"/>
+  </g>
+</svg>

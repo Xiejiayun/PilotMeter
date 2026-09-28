@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="p06-title">
+  <title id="p06-title">小瓷机：带天线、屏幕眼睛和短腿的搪瓷小机器人</title>
+  <defs>
+    <linearGradient id="p06-enamel" x1="43" y1="29" x2="87" y2="102" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f9fbf7"/>
+      <stop offset=".48" stop-color="#e2ebee"/>
+      <stop offset="1" stop-color="#acbecd"/>
+    </linearGradient>
+    <linearGradient id="p06-joint" x1="51" y1="76" x2="73" y2="113" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#a5b8c8"/>
+      <stop offset="1" stop-color="#728ca3"/>
+    </linearGradient>
+    <linearGradient id="p06-screen" x1="47" y1="38" x2="80" y2="65" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#294d68"/>
+      <stop offset="1" stop-color="#173148"/>
+    </linearGradient>
+    <filter id="p06-soft" x="-25%" y="-100%" width="150%" height="300%">
+      <feGaussianBlur stdDeviation="2"/>
+    </filter>
+  </defs>
+  <ellipse cx="64" cy="113" rx="29" ry="3" fill="#355771" opacity=".15" filter="url(#p06-soft)"/>
+  <g class="pet-body" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M65 29L66 21" fill="none" stroke="#829caf" stroke-width="3"/>
+    <circle cx="66" cy="16.5" r="4.5" fill="#f4c574" stroke="#d9aa61" stroke-width="1.3"/>
+    <circle cx="65" cy="15.4" r="1.4" fill="#fff0ca"/>
+    <rect x="47" y="95" width="13" height="16" rx="5" fill="url(#p06-joint)"/>
+    <rect x="70" y="95" width="13" height="16" rx="5" fill="url(#p06-joint)"/>
+    <path d="M48 106H59C62 106 63 109 62 112C56 114 47 114 43 112V110C43 108 45 106 48 106Z" fill="url(#p06-enamel)" stroke="#809bad" stroke-width="1.4"/>
+    <path d="M73 106H82C86 106 88 109 87 112C81 114 72 114 69 112V109C69 107 71 106 73 106Z" fill="url(#p06-enamel)" stroke="#809bad" stroke-width="1.4"/>
+    <path d="M43 81L34 83L29 94M86 81L95 83L100 93" fill="none" stroke="#829bae" stroke-width="9"/>
+    <path d="M39 81L34 83L31 88M90 81L95 83L97 88" fill="none" stroke="#c3d1db" stroke-width="4"/>
+    <path d="M28 90C23 90 21 96 24 99C26 101 29 100 31 98L34 94Z" fill="url(#p06-enamel)" stroke="#809bad" stroke-width="1.4"/>
+    <path d="M99 90C104 88 109 95 105 98C103 101 100 99 97 96L96 94Z" fill="url(#p06-enamel)" stroke="#809bad" stroke-width="1.4"/>
+    <rect x="55" y="69" width="19" height="11" rx="4" fill="#829bad"/>
+    <rect x="40" y="76" width="48" height="27" rx="11" fill="url(#p06-enamel)" stroke="#809bad" stroke-width="1.6"/>
+    <path d="M49 80H78" fill="none" stroke="#fff" stroke-width="2.3" opacity=".8"/>
+    <circle cx="64" cy="89" r="5.6" fill="#b2c5ce"/>
+    <circle cx="64" cy="88.5" r="3.7" fill="#7fcdbf"/>
+    <path d="M64 86V88.7" fill="none" stroke="#e4fff0" stroke-width="1.8"/>
+    <rect x="24" y="43" width="11" height="19" rx="5.5" fill="#a8becc" stroke="#7d98ac" stroke-width="1.4"/>
+    <rect x="94" y="43" width="11" height="19" rx="5.5" fill="#a8becc" stroke="#7d98ac" stroke-width="1.4"/>
+    <rect x="31" y="28" width="66" height="47" rx="17" fill="url(#p06-enamel)" stroke="#809bad" stroke-width="1.7"/>
+    <path d="M42 34C46 32 52 32 59 32" fill="none" stroke="#fff" stroke-width="2.8" opacity=".9"/>
+    <rect x="39" y="37" width="50" height="27" rx="10" fill="url(#p06-screen)"/>
+    <path d="M45 41H55" fill="none" stroke="#567d94" stroke-width="2" opacity=".65"/>
+    <g class="pet-eyes" fill="#a7efdf">
+      <rect x="49" y="46" width="6" height="10" rx="3"/>
+      <rect x="73" y="46" width="6" height="10" rx="3"/>
+      <path d="M50.5 48V50M74.5 48V50" fill="none" stroke="#e7fff4" stroke-width="1.1"/>
+    </g>
+    <path d="M59 60Q64 63 69 60" fill="none" stroke="#78bdb9" stroke-width="1.4"/>
+    <path d="M59 69H69" fill="none" stroke="#a4b6c0" stroke-width="2"/>
+  </g>
+</svg>

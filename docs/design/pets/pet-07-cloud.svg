@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none" role="img" aria-labelledby="p07-title">
+  <title id="p07-title">云团团 · 戴着星星的小云朵精灵</title>
+  <defs>
+    <linearGradient id="p07-cloud" x1="55" y1="25" x2="73" y2="93" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/><stop offset=".58" stop-color="#F3FCFF"/><stop offset="1" stop-color="#C8E1F6"/>
+    </linearGradient>
+    <linearGradient id="p07-feet" x1="47" y1="88" x2="47" y2="110" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A7D6F2"/><stop offset="1" stop-color="#78AED6"/>
+    </linearGradient>
+    <linearGradient id="p07-star" x1="67" y1="90" x2="72" y2="105" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF1B4"/><stop offset="1" stop-color="#EFB768"/>
+    </linearGradient>
+  </defs>
+  <g class="pet-body">
+    <path d="M40 85C37 93 37 102 40 107C44 111 51 109 53 105L55 87M76 86L77 104C79 109 87 109 90 105C92 100 89 91 85 85" fill="url(#p07-feet)" stroke="#719BC6" stroke-width="2.5" stroke-linejoin="round"/>
+    <path d="M42 103L48 103M81 102L86 102" stroke="#DDF3FF" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M27 59C22 53 14 56 14 64C14 72 21 77 29 73M100 57C107 52 115 58 114 66C114 73 108 77 101 73" fill="#DBEFFC" stroke="#91B5D5" stroke-width="2.5"/>
+    <path d="M30 87C17 88 12 78 15 68C17 61 23 57 31 57C28 45 34 36 44 34C50 32 54 34 57 36C61 24 71 20 81 25C90 29 94 37 92 46C105 44 113 52 112 63C120 73 115 86 104 90C99 93 92 92 87 90C80 101 66 102 58 96C47 101 34 97 30 87Z" fill="url(#p07-cloud)" stroke="#82A8CE" stroke-width="2.7" stroke-linejoin="round"/>
+    <path d="M21 76C28 86 39 80 41 77C46 91 60 91 68 85C76 94 89 89 92 82C99 87 108 82 111 76C111 86 101 92 89 87C80 98 65 98 58 92C46 96 35 92 33 84C28 86 23 82 21 76Z" fill="#C0DCF2" opacity=".65"/>
+    <path d="M38 47C38 40 45 37 50 39M66 33C73 27 83 32 85 39M99 52C104 52 108 56 108 61" stroke="white" stroke-width="4" stroke-linecap="round"/>
+    <path d="M62 87C62 92 65 95 69 97" stroke="#719BC6" stroke-width="2" stroke-linecap="round"/>
+    <path d="M70 90L73 95L79 96L75 101L76 107L70 104L64 107L65 101L61 96L67 95Z" fill="url(#p07-star)" stroke="#BB9456" stroke-width="1.8" stroke-linejoin="round"/>
+    <path d="M69 96L67 100" stroke="#FFFBE3" stroke-width="2" stroke-linecap="round"/>
+    <ellipse cx="43" cy="73" rx="6" ry="3.5" fill="#AED4EE"/>
+    <ellipse cx="84" cy="73" rx="6" ry="3.5" fill="#AED4EE"/>
+    <g class="pet-eyes" fill="#486885">
+      <ellipse cx="49" cy="64" rx="3.1" ry="4.5"/><ellipse cx="78" cy="64" rx="3.1" ry="4.5"/>
+      <circle cx="50" cy="62.4" r="1" fill="white"/><circle cx="79" cy="62.4" r="1" fill="white"/>
+    </g>
+    <path d="M58 73C60 78 67 78 70 73" stroke="#486885" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M103 21L105 25L110 27L105 29L103 33L101 29L97 27L101 25Z" fill="#B6DEF5"/>
+  </g>
+</svg>

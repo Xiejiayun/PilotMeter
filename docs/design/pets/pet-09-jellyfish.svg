@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none" role="img" aria-labelledby="p09-title">
+  <title id="p09-title">浮游游 · 淡紫色的小水母精灵</title>
+  <defs>
+    <linearGradient id="p09-bell" x1="42" y1="22" x2="86" y2="80" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F1E9FF" stop-opacity=".94"/><stop offset=".55" stop-color="#DCCAF8" stop-opacity=".82"/><stop offset="1" stop-color="#B7A0E4" stop-opacity=".95"/>
+    </linearGradient>
+    <linearGradient id="p09-tentacle" x1="62" y1="65" x2="62" y2="111" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#C2ADEB"/><stop offset=".65" stop-color="#E6D9FA"/><stop offset="1" stop-color="#B29BD9"/>
+    </linearGradient>
+    <radialGradient id="p09-glow" cx="0" cy="0" r="1" gradientTransform="translate(55 43) rotate(90) scale(27 32)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity=".8"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <g class="pet-body" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="#A692CF" stroke-width="9.5">
+      <path d="M35 67C27 78 42 82 37 93C33 100 33 105 39 108"/>
+      <path d="M49 70C56 80 42 89 51 103"/>
+      <path d="M64 70C58 86 76 93 67 111"/>
+      <path d="M79 70C72 83 92 88 83 105"/>
+      <path d="M93 66C105 77 89 87 99 98"/>
+    </g>
+    <g stroke="url(#p09-tentacle)" stroke-width="5.5">
+      <path d="M35 67C27 78 42 82 37 93C33 100 33 105 39 108"/>
+      <path d="M49 70C56 80 42 89 51 103"/>
+      <path d="M64 70C58 86 76 93 67 111"/>
+      <path d="M79 70C72 83 92 88 83 105"/>
+      <path d="M93 66C105 77 89 87 99 98"/>
+    </g>
+    <path d="M23 63C23 39 39 20 63 20C88 20 105 39 105 63C111 70 102 78 95 73C88 80 80 79 74 73C67 81 58 80 52 74C43 80 34 77 31 72C23 77 17 69 23 63Z" fill="url(#p09-bell)" stroke="#9B83C5" stroke-width="2.6"/>
+    <path d="M27 58C38 67 44 63 50 65C60 70 70 70 78 65C89 65 96 66 103 60L104 66C109 71 100 75 95 69C88 77 80 74 74 69C68 77 58 77 52 70C44 77 36 72 32 67C26 72 21 68 27 58Z" fill="#B9A1E4" opacity=".64"/>
+    <ellipse cx="57" cy="44" rx="31" ry="24" fill="url(#p09-glow)"/>
+    <path d="M32 47C36 36 43 30 51 28" stroke="#FFFFFF" stroke-opacity=".85" stroke-width="4.5"/>
+    <path d="M85 30C91 36 95 44 96 51" stroke="#F4EBFF" stroke-opacity=".58" stroke-width="2.5"/>
+    <circle cx="39" cy="50" r="2.3" fill="#FFFFFF" opacity=".6"/>
+    <circle cx="85" cy="42" r="1.6" fill="#FFFFFF" opacity=".65"/>
+    <ellipse cx="42" cy="62" rx="5.5" ry="3.2" fill="#D7A6DB" opacity=".65"/>
+    <ellipse cx="84" cy="62" rx="5.5" ry="3.2" fill="#D7A6DB" opacity=".65"/>
+    <g class="pet-eyes" fill="#655382">
+      <ellipse cx="49" cy="54" rx="3" ry="4.2"/><ellipse cx="77" cy="54" rx="3" ry="4.2"/>
+      <circle cx="50" cy="52.5" r="1" fill="#FFFFFF"/><circle cx="78" cy="52.5" r="1" fill="#FFFFFF"/>
+    </g>
+    <path d="M58 63C60 67 66 67 68 63" stroke="#74618F" stroke-width="2.3"/>
+  </g>
+</svg>
