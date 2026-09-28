@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile, mkdir, readFile } from 'node:fs/promises';
+import { access, mkdtemp, rm, writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
@@ -45,4 +45,49 @@ test('run forwards original arguments and exit code via Windows npm shim without
     const instance = await instanceAt(dataDir); if (instance) await request(instance, '/api/shutdown', 'POST');
     await new Promise(r => setTimeout(r, 200)); await rm(root, { recursive: true, force: true });
   }
+});
+
+test('profile runs remove inherited account credentials, pin the selected home and require exporter replacement', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'pilotmeter-profile-run-'));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+  const profileHome = join(root, '独立账号 & profile home');
+  const capture = join(root, 'child-environment.json');
+  const stub = join(root, 'synthetic-copilot.cjs');
+  const runner = join(root, 'run-profile.mjs');
+  const instance = { url: 'http://127.0.0.1:54321', collectorToken: 'synthetic-profile-collector-token' };
+  const observedKeys = ['GH_TOKEN', 'GITHUB_TOKEN', 'COPILOT_GITHUB_TOKEN', 'PILOTMETER_GITHUB_TOKEN', 'GH_HOST', 'COPILOT_HOME',
+    'OTEL_EXPORTER_OTLP_ENDPOINT', 'OTEL_EXPORTER_OTLP_PROTOCOL', 'OTEL_EXPORTER_OTLP_HEADERS', 'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT',
+    'COPILOT_OTEL_ENABLED', 'COPILOT_OTEL_EXPORTER_TYPE', 'COPILOT_OTEL_FILE_EXPORTER_PATH', 'OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT',
+    'OTEL_TRACES_EXPORTER', 'OTEL_METRICS_EXPORTER', 'OTEL_LOGS_EXPORTER', 'PM_SYNTHETIC_PRESERVED'];
+  await writeFile(stub, `require('node:fs').writeFileSync(process.argv[2], JSON.stringify(Object.fromEntries(${JSON.stringify(observedKeys)}.map(key => [key, process.env[key] ?? null])))); process.stdout.write('synthetic-profile-child'); process.exitCode = 7;`);
+  await writeFile(runner, `import { runCopilot } from ${JSON.stringify(new URL('../../dist/cli/run.js', import.meta.url).href)};
+    try { process.exitCode = await runCopilot(${JSON.stringify(instance)}, ${JSON.stringify([stub, capture])}, process.argv[2] === 'replace', process.execPath, ${JSON.stringify(profileHome)}); }
+    catch (error) { process.stderr.write(error.message); process.exitCode = 42; }
+  `);
+  const environment = { ...process.env };
+  for (const key of Object.keys(environment)) {
+    if (/^(?:COPILOT_|PILOTMETER_|GITHUB_|GH_|OTEL_|NODE_OPTIONS$|NODE_DEBUG$|BASH_ENV$|ENV$)/i.test(key)) delete environment[key];
+  }
+  Object.assign(environment, { GH_TOKEN: 'synthetic-gh-secret', GITHUB_TOKEN: 'synthetic-github-secret',
+    COPILOT_GITHUB_TOKEN: 'synthetic-copilot-secret', PILOTMETER_GITHUB_TOKEN: 'synthetic-billing-secret', GH_HOST: 'other.ghe.com',
+    COPILOT_HOME: join(root, 'unselected-account-home'), PM_SYNTHETIC_PRESERVED: 'ordinary-environment-kept' });
+  const run = (env, replace = false) => exec(process.execPath, [runner, ...(replace ? ['replace'] : [])], { env, timeout: 10000, windowsHide: true });
+  const childExit = error => { assert.equal(error.code, 7); assert.equal(error.stdout, 'synthetic-profile-child'); assert.equal(error.stderr, ''); return true; };
+  await assert.rejects(run(environment), childExit);
+  const expected = { GH_TOKEN: null, GITHUB_TOKEN: null, COPILOT_GITHUB_TOKEN: null, PILOTMETER_GITHUB_TOKEN: null, GH_HOST: null, COPILOT_HOME: profileHome,
+    OTEL_EXPORTER_OTLP_ENDPOINT: instance.url, OTEL_EXPORTER_OTLP_PROTOCOL: 'http/json', OTEL_EXPORTER_OTLP_HEADERS: `x-pilotmeter-token=${instance.collectorToken}`,
+    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: null, COPILOT_OTEL_ENABLED: 'true', COPILOT_OTEL_EXPORTER_TYPE: 'otlp-http', COPILOT_OTEL_FILE_EXPORTER_PATH: null,
+    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: 'false', OTEL_TRACES_EXPORTER: 'otlp', OTEL_METRICS_EXPORTER: 'none', OTEL_LOGS_EXPORTER: 'none',
+    PM_SYNTHETIC_PRESERVED: 'ordinary-environment-kept' };
+  assert.deepEqual(JSON.parse(await readFile(capture, 'utf8')), expected);
+  await rm(capture);
+  const conflicting = { ...environment, OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'https://existing-exporter.invalid/traces',
+    OTEL_EXPORTER_OTLP_HEADERS: 'Authorization=synthetic-old-exporter-secret', COPILOT_OTEL_FILE_EXPORTER_PATH: 'synthetic-previous.jsonl' };
+  await assert.rejects(run(conflicting), error => {
+    assert.equal(error.code, 42); assert.equal(error.stdout, ''); assert.match(error.stderr, /Existing telemetry settings/);
+    assert.match(error.stderr, /--replace-telemetry/); assert.ok(!error.stderr.includes('synthetic-old-exporter-secret')); return true;
+  });
+  await assert.rejects(access(capture), { code: 'ENOENT' });
+  await assert.rejects(run(conflicting, true), childExit);
+  assert.deepEqual(JSON.parse(await readFile(capture, 'utf8')), expected);
 });

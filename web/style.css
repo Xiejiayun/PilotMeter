@@ -4,8 +4,8 @@
 [hidden] { display: none !important; }
 html { scroll-behavior: smooth; }
 body { margin: 0; font-family: var(--font); color: var(--ink); background: var(--paper); font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
-button, input { font: inherit; }
-button, a, input, summary { -webkit-tap-highlight-color: transparent; }
+button, input, select { font: inherit; }
+button, a, input, select, summary { -webkit-tap-highlight-color: transparent; }
 button { cursor: pointer; }
 button:disabled { opacity: .55; cursor: wait; }
 a { color: inherit; }
@@ -66,3 +66,26 @@ dialog { border: 1px solid #dbe3ed; border-radius: 14px; padding: 28px; width: m
 @media (max-width: 600px) { .site-header { padding: 15px 20px; min-height: 68px; gap: 12px; }.brand { font-size: 18px; gap: 7px; }.preview { display: none; }.brand-mark { width: 27px; padding-inline: 2px; }.header-status { font-size: 10px; gap: 5px; }main { padding: 30px 18px 22px; }.page-heading { display: block; margin-bottom: 23px; }.subheading { font-size: 12px; }.toolbar { margin-top: 23px; align-items: end; justify-content: space-between; }.period-field { flex: 1; }#period { width: 100%; max-width: 210px; }.overview { gap: 15px; }.usage-card { padding: 23px 22px; min-height: 250px; }.context-card { padding: 22px; }#primary-value { font-size: 44px; }.hero-footer { font-size: 9px; }.metrics { grid-template-columns: repeat(2, 1fr); padding: 0; margin-top: 18px; }.metrics > div { padding: 18px 21px; }.metrics > div:nth-child(2) { border-right: 0; }.metrics > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }.metrics strong { font-size: 27px; }.metric-note { font-size: 9px; }.side-panels { grid-template-columns: 1fr; }.panel-heading { padding: 23px 20px 0; }.panel-description { margin-inline: 20px; }.sort-label { max-width: 96px; font-size: 9px; }.session-columns { padding-inline: 20px; font-size: 9px; }.session-list { padding-inline: 6px; }.session-row { padding: 17px 14px; gap: 12px; }.session-name { font-size: 12px; }.session-amount { font-size: 16px; }.session-usage { min-width: 80px; }.session-meta { font-size: 9px; }.session-quality { font-size: 9px; }.row-arrow { display: none; }.model-tag { font-size: 8px; }.settings-panel form { padding-inline: 20px; }.account-info { margin-inline: 20px; }.empty-state { padding: 30px 20px; }.empty-state h3 { font-size: 16px; }.site-footer { font-size: 9px; }.notice { font-size: 11px; }dialog { padding: 22px 18px; }.detail-total { font-size: 28px; }.call-amount { max-width: 130px; }.demo-banner { font-size: 11px; } }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; }* { transition: none !important; } }
 @media (max-width: 600px) { .reconciliation-panel .panel-heading { align-items: start; }.reconciliation-panel h2 { font-size: 15px; }.reconciliation-state { font-size: 10px; }.reconciliation-values { grid-template-columns: 1fr; gap: 14px; margin-inline: 20px; }.reconciliation-values > div + div { padding-top: 12px; border-top: 1px solid var(--line); }.reconciliation-values dd { font-size: 22px; }.reconciliation-footer { padding-inline: 20px; } }
+
+.accounts-panel { padding: 25px 28px; margin-bottom: 28px; border-top: 3px solid var(--blue); }
+.account-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.account-heading > div { min-width: 0; }.account-heading h2 { font-size: 23px; overflow-wrap: anywhere; }
+.account-description { color: var(--muted); font-size: 12px; margin-top: 7px; overflow-wrap: anywhere; }
+.account-controls { display: flex; align-items: end; gap: 14px; flex-wrap: wrap; margin-top: 12px; }
+.account-select-field { flex: 1; min-width: 180px; max-width: 480px; }
+.account-select-field label, #github-host-form label { display: block; font-size: 11px; color: #63758c; margin-bottom: 6px; }
+.account-select-field select { width: 100%; min-height: 40px; min-width: 0; max-width: 100%; border: 1px solid #d5dde8; border-radius: 7px; color: var(--ink); background: #fff; padding: 8px; }
+.account-actions { display: flex; gap: 7px; flex-wrap: wrap; }.account-actions .button { font-size: 12px; }
+.account-scope { margin-top: 14px; color: #63758c; font-size: 11px; overflow-wrap: anywhere; }
+.personal-quota { margin-top: 21px; padding-top: 20px; border-top: 1px solid var(--line); }
+.quota-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 7px; flex-wrap: wrap; }.quota-heading h3 { font-size: 14px; }.quota-period { color: var(--muted); font-size: 10px; }
+.quota-buckets { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(225px, 100%), 1fr)); gap: 12px; margin-top: 13px; }
+.quota-bucket { background: #f4f7fb; border: 1px solid #e7edf5; border-radius: 8px; padding: 17px 20px; min-width: 0; overflow-wrap: anywhere; }.quota-bucket h4 { font-size: 12px; color: #506884; font-weight: 550; margin: 0 0 5px; }.quota-value { font: 550 29px/1.4 var(--numbers); color: var(--navy); }.quota-amount { font-size: 11px; color: #637a97; margin: 6px 0; }.quota-note { margin-top: 12px; }
+.capture-guide { margin-top: 20px; padding-top: 17px; border-top: 1px solid var(--line); }.capture-guide strong { font-size: 12px; }.capture-command { display: flex; align-items: center; gap: 12px; margin-top: 10px; }.capture-command code { flex: 1; background: #f3f6fa; padding: 10px 12px; border-radius: 6px; font-size: 11px; min-width: 0; user-select: all; }.capture-command .button { font-size: 11px; }
+.local-section-heading { margin-bottom: 16px; }.local-section-heading h2 { font-size: 15px; margin-bottom: 3px; }
+.login-description { color: #63758c; font-size: 12px; margin: 18px 0; overflow-wrap: anywhere; }
+#github-login-dialog, #github-remove-dialog { width: min(540px, calc(100vw - 32px)); }#github-login-dialog .dialog-heading h2 { overflow-wrap: anywhere; }
+#github-host-form { margin-top: 20px; }#github-host-form .button { margin-top: 17px; }#github-host-help { margin-top: 7px; }
+#device-login { font-size: 12px; margin-top: 22px; }.device-code-row { display: flex; align-items: center; gap: 12px; margin-top: 10px; }#github-user-code { display: block; flex: 1; min-width: 0; padding: 12px 14px; background: #edf3fb; color: var(--navy); font: 650 26px var(--mono); border-radius: 7px; letter-spacing: 2px; user-select: all; }#github-verification-link { text-decoration: none; margin: 12px 0; }
+.login-status { color: #516d90; font-size: 12px; margin-top: 18px; overflow-wrap: anywhere; }.login-footer { margin-top: 25px; display: flex; justify-content: end; flex-wrap: wrap; gap: 9px; }
+@media (max-width: 600px) { .accounts-panel { padding: 21px 19px; }.account-heading { display: block; }.account-heading h2 { font-size: 21px; }.account-heading > .button { margin-top: 16px; }.account-controls { gap: 11px; }.account-select-field { width: 100%; max-width: none; flex-basis: 100%; min-width: 0; }.account-actions { gap: 6px; }.account-actions .button { padding-inline: 10px; font-size: 11px; }.capture-command { flex-wrap: wrap; }.capture-command code { flex-basis: 100%; }.quota-bucket { padding: 14px 15px; }.quota-value { font-size: 26px; }.device-code-row { flex-wrap: wrap; }#github-user-code { flex-basis: 100%; font-size: 24px; }.local-section-heading { padding-inline: 2px; }.login-footer .button { white-space: normal; }.account-description, .account-scope { font-size: 11px; } }

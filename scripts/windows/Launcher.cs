@@ -194,6 +194,7 @@ internal static class Launcher
             var forwarded = args.Length == 0 ? new[] { "start", "--background", "--open" } : args;
             foreach (var argument in forwarded) command.Append(" ").Append(Quote(argument));
             var executable = Path.Combine(root, "runtime", "node.exe");
+            Environment.SetEnvironmentVariable("PILOTMETER_LAUNCHER_PATH", Assembly.GetExecutingAssembly().Location);
             Console.CancelKeyPress += delegate(object sender, ConsoleCancelEventArgs e) { e.Cancel = true; };
             var exitCode = NativeChild.Run(executable, Quote(executable) + " " + command, Environment.CurrentDirectory);
             if (exitCode != 0) KeepErrorVisible(args);

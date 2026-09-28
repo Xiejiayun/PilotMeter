@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const workspace = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const nodeVersion = '24.14.0';
+const copilotVersion = '1.0.88';
 const archiveName = 'node-v' + nodeVersion + '-win-x64.zip';
 // Pinned from the official release SHASUMS256.txt, independently of each download.
 const archiveSha256 = '313fa40c0d7b18575821de8cb17483031fe07d95de5994f6f435f3b345f85c66';
@@ -20,6 +21,7 @@ const app = join(payload, 'app');
 await mkdir(app, { recursive: true });
 const packageInfo = JSON.parse(await readFile(join(workspace, 'package.json'), 'utf8'));
 if (!/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(packageInfo.version)) throw new Error('Invalid release version.');
+if (packageInfo.dependencies?.['@github/copilot'] !== copilotVersion) throw new Error('The release requires the exactly pinned official Copilot CLI.');
 const powershell = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 const helper = join(workspace, 'scripts', 'windows', 'package.ps1');
 const npmCli = [
@@ -49,6 +51,18 @@ const npm = args => run(process.execPath, [npmCli, ...args], workspace, npmEnvir
 const ps = args => run(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', helper, ...args]);
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const step = message => console.log('[Windows EXE] ' + message);
+async function bundledCopilotVersion(command) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await run(command, ['--no-auto-update', '--version'], stage); }
+    catch (error) {
+      // Windows can briefly deny execution of a freshly extracted native file.
+      // Retry only the version probe, never an install or a credential operation.
+      if (!['EPERM', 'EBUSY'].includes(error.code) || attempt >= 4) throw error;
+      step('Copilot version probe temporarily denied; retry ' + (attempt + 1) + '/4');
+      await new Promise(resolveRetry => setTimeout(resolveRetry, 250 * 2 ** attempt));
+    }
+  }
+}
 
 // Keep this application allowlist aligned with scripts/pack-smoke.mjs. npm's
 // files field permits whole directories, including stale compiler output.
@@ -56,7 +70,22 @@ const applicationFile = /^(?:package\.json|README\.md|LICENSE|docs\/(?:compatibi
 const privateApplicationFile = /(?:^|\/)(?:\.env(?:\.|$)|test(?:s)?|fixtures|node_modules|\.git|\.npmrc|[^/]*(?:credentials|secrets)[^/]*)(?:\/|$)|\.(?:db|sqlite|log)(?:[.-]|$)/i;
 const secretPatterns = [/\bgh[pousr]_[A-Za-z0-9]{20,}\b/, /\bgithub_pat_[A-Za-z0-9_]{40,}\b/, /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/];
 function rejectSecrets(name, bytes) {
-  if (secretPatterns.some(pattern => pattern.test(bytes.toString('utf8')))) throw new Error('Credential-shaped content in release file: ' + name);
+  // All credential signatures are ASCII. Latin-1 avoids UTF-8 expansion of a native binary.
+  const text = bytes.toString('latin1');
+  if (secretPatterns.some(pattern => pattern.test(text))) throw new Error('Credential-shaped content in release file: ' + name);
+}
+async function inspectFile(path, name, scanSecrets = true) {
+  const digest = createHash('sha256'); let size = 0; let carry = Buffer.alloc(0);
+  for await (const bytes of createReadStream(path, { highWaterMark: 256 * 1024 })) {
+    digest.update(bytes); size += bytes.length;
+    if (scanSecrets) {
+      // Retain more than the longest signature prefix/minimum token length so a
+      // credential crossing a read boundary remains detectable. Memory is bounded.
+      rejectSecrets(name, Buffer.concat([carry, bytes]));
+      carry = bytes.subarray(Math.max(0, bytes.length - 512));
+    }
+  }
+  return { sha256: digest.digest('hex'), size };
 }
 function sameMembers(actual, expected, label) {
   const left = [...actual].sort(); const right = [...expected].sort();
@@ -156,6 +185,9 @@ sameMembers(new Set(await files(app)), packageFiles, 'Extracted application file
 for (const file of packageFiles) rejectSecrets(file, await readFile(join(app, file)));
 await copyFile(join(workspace, 'package-lock.json'), join(app, 'package-lock.json'));
 const lock = JSON.parse(await readFile(join(app, 'package-lock.json'), 'utf8'));
+if (lock.version !== packageInfo.version || lock.packages?.['']?.version !== packageInfo.version
+  || lock.packages?.['node_modules/@github/copilot']?.version !== copilotVersion
+  || lock.packages?.['node_modules/@github/copilot-win32-x64']?.version !== copilotVersion) throw new Error('Release metadata and Copilot runtime do not match the lockfile.');
 for (const [name, record] of Object.entries(lock.packages ?? {})) {
   if (record.resolved) {
     const source = new URL(record.resolved);
@@ -164,15 +196,23 @@ for (const [name, record] of Object.entries(lock.packages ?? {})) {
 }
 await npm(['ci', '--prefix', app, '--include=prod', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund']);
 await verifyProductionInstall(lock);
+const copilotMember = 'app/node_modules/@github/copilot-win32-x64/copilot.exe';
+const copilotExecutable = join(payload, copilotMember);
+const copilotOutput = await bundledCopilotVersion(copilotExecutable);
+if (!copilotOutput.startsWith('GitHub Copilot CLI ' + copilotVersion + '.')) throw new Error('Unexpected bundled Copilot version.');
 await writeFile(join(payload, 'WINDOWS-README.md'), (await readFile(join(workspace, 'docs', 'windows-exe.md'), 'utf8'))
   .replaceAll('](validation-guide.md)', '](app/docs/validation-guide.md)')
   .replaceAll('](../README.md#', '](app/README.md#'));
 await mkdir(join(payload, 'licenses'), { recursive: true });
 await copyFile(join(workspace, 'node_modules', 'vite', 'LICENSE.md'), join(payload, 'licenses', 'VITE-LICENSE.md'));
+await copyFile(join(app, 'node_modules', '@github', 'copilot', 'LICENSE.md'), join(payload, 'licenses', 'GITHUB-COPILOT-LICENSE.md'));
 await writeFile(join(payload, 'THIRD-PARTY-NOTICES.txt'),
   'PilotMeter ' + packageInfo.version + '\n' +
   'PilotMeter: MIT; see app/LICENSE.\n' +
   'Node.js ' + nodeVersion + ': complete notices and component licenses in NODE-LICENSE.txt.\n' +
+  'GitHub Copilot CLI ' + copilotVersion + ': redistributed unmodified as a component of PilotMeter under the GitHub Copilot CLI License; see licenses/GITHUB-COPILOT-LICENSE.md.\n' +
+  'Copilot package copyright, trademark, attribution, and license notices remain in app/node_modules/@github/copilot and app/node_modules/@github/copilot-win32-x64.\n' +
+  'PilotMeter is independently licensed under MIT; its MIT license does not apply to the bundled Copilot CLI.\n' +
   'Production npm dependency licenses are retained under app/node_modules.\n' +
   'The built browser modulepreload helper is from Vite; see licenses/VITE-LICENSE.md.\n' +
   'The launcher uses the Windows-provided .NET Framework; no .NET runtime is redistributed.\n');
@@ -209,14 +249,20 @@ async function files(root, prefix = '') {
 const members = await files(payload);
 const lines = [];
 let unpackedBytes = 0;
+let copilotExecutableSha256;
 for (const name of members) {
   if (/[\t\r\n\\:]/.test(name) || name.split('/').some(part => part === '..' || part === '.')) throw new Error('Unsafe release path.');
   if (/(?:^|\/)(?:\.env(?:\.[^/]*)?|\.npmrc|[^/]*\.(?:pem|pfx|p12|key)|[^/]*\.(?:db|sqlite|log)(?:[.-][^/]*)?)$/i.test(name)) throw new Error('Private or runtime-state file in release payload: ' + name);
-  const bytes = await readFile(join(payload, name));
-  if (name !== 'runtime/node.exe') rejectSecrets(name, bytes);
-  unpackedBytes += bytes.length;
-  lines.push(hash(bytes) + '\t' + bytes.length + '\t' + name);
+  const scanStarted = performance.now();
+  const checked = await inspectFile(join(payload, name), name, name !== 'runtime/node.exe');
+  unpackedBytes += checked.size;
+  lines.push(checked.sha256 + '\t' + checked.size + '\t' + name);
+  if (name === copilotMember) {
+    copilotExecutableSha256 = checked.sha256;
+    step('Scanned and hashed the unmodified Copilot executable: ' + checked.size + ' bytes in ' + Math.round(performance.now() - scanStarted) + ' ms');
+  }
 }
+if (!copilotExecutableSha256) throw new Error('The official Copilot executable is missing from the payload.');
 const fileManifest = join(stage, 'payload-files.tsv');
 await writeFile(fileManifest, lines.join('\n') + '\n');
 step('Embed verified application and runtime into the Windows launcher');
@@ -237,7 +283,7 @@ await copyFile(built, exe);
 const exeHash = hash(await readFile(exe));
 await writeFile(join(output, 'SHA256SUMS'), exeHash + '  ' + name + '\n');
 await writeFile(join(output, name + '.json'), JSON.stringify({
-  version: packageInfo.version, platform: 'win32', arch: 'x64', nodeVersion,
+  version: packageInfo.version, platform: 'win32', arch: 'x64', nodeVersion, copilotVersion, copilotExecutableSha256,
   filename: name, sha256: exeHash, bytes: (await stat(exe)).size, unpackedBytes, payloadHash, files: members.length,
   signed: false, nodeArchiveSha256: archiveSha256, nodeExecutableSha256: nodeSha256,
 }, null, 2) + '\n');
