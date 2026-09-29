@@ -9,10 +9,12 @@ import { designDemo } from './desktop-demo';
 import { pets } from './desktop-pets';
 
 type Page = 'overview' | 'models' | 'records' | 'accounts';
-type ServiceState = { type: 'service-state'; connected: boolean; recoverable: boolean; recovering: boolean; epoch: number; instanceId?: string; version?: string; message?: string; accountId?: string | null; quotaKey?: string | null };
+type ServiceState = { type: 'service-state'; connected: boolean; recoverable: boolean; recovering: boolean; epoch: number; instanceId?: string; version?: string; message?: string; accountId?: string | null; quotaKey?: string | null; sessionLaunchAvailable?: boolean };
 type PetState = { type: 'pet-state'; petId: string; sizePixels: number; motionEnabled: boolean; alwaysOnTop: boolean; persistenceWarning?: string };
 type MutationAck = { type: 'account-mutation-state'; pending: boolean; operationId: string; epoch: number };
-type HostBridge = { postMessage: (message: object) => void; addEventListener: (type: 'message', listener: (event: { data: ServiceState | PetState | MutationAck | { type: 'error' | 'host-error'; message?: string } }) => void) => void };
+type SessionStartResult = { type: 'session-start-result'; requestId: string; epoch: number; status: 'started' | 'cancelled' | 'error'; message?: string };
+type SessionExit = { type: 'session-exit'; accountId: string; epoch: number; exitCode: number; message?: string };
+type HostBridge = { postMessage: (message: object) => void; addEventListener: (type: 'message', listener: (event: { data: ServiceState | PetState | MutationAck | SessionStartResult | SessionExit | { type: 'error' | 'host-error'; message?: string } }) => void) => void };
 const bridge = (window as unknown as { chrome?: { webview?: HostBridge } }).chrome?.webview;
 const demo = new URLSearchParams(location.search).get('demo') === '1' || document.documentElement.dataset.designPreview === 'true';
 const demoData = demo ? designDemo() : null;
@@ -25,10 +27,15 @@ const pages: Record<Page, { title: string; description: string }> = {
 let page: Page = 'overview';
 let desktop: DesktopResponse | null = null;
 let records: DesktopRecordsResponse | null = null;
+let recentRecords: DesktopRecordsResponse | null = null;
 let viewGeneration = 0;
 let recordsGeneration = 0;
+let recentGeneration = 0;
 let recordsLoading = false;
+let recentLoading = false;
+let recordPages = 1;
 let recordFailure = '';
+let recentFailure = '';
 let service: ServiceState | null = null;
 let browserIdentity: { instanceId: string; version: string } | null = null;
 let petState: PetState | null = demo ? { type: 'pet-state', petId: '01', sizePixels: 96, motionEnabled: true, alwaysOnTop: true } : null;
@@ -42,6 +49,7 @@ let mutationAck: { id: string; epoch: number; resolve: () => void; reject: (erro
 let refreshTimer: number | undefined;
 let refreshRequested = false;
 let removeProfile: GitHubProfile | null = null;
+let sessionLaunch: { requestId: string; accountId: string; epoch: number } | null = null;
 
 const currentProfile = () => desktop?.accounts.find(account => account.id === desktop?.activeAccountId);
 const epoch = () => service?.epoch ?? 0;
@@ -143,6 +151,14 @@ function controls(): void {
   element<HTMLSelectElement>('record-sort').disabled = busy();
   document.querySelectorAll<HTMLButtonElement>('[data-action="select-pet"]').forEach(node => { node.disabled = busy() || !petState || !bridge && !demo; });
   for (const id of ['pet-size', 'pet-motion', 'pet-topmost']) element<HTMLInputElement>(id).disabled = busy() || !petState || !bridge && !demo;
+  const profile = currentProfile();
+  document.querySelectorAll<HTMLButtonElement>('[data-action="start-session"]').forEach(button => {
+    button.disabled = !isEnabled() || busy() || disconnected || !!sessionLaunch || !!bridge && service?.sessionLaunchAvailable !== true;
+    button.querySelector('[data-session-start-label]')!.textContent = sessionLaunch ? '正在启动…' : !profile ? desktop?.accounts.length ? '选择账号后开始' : '连接账号并开始' : profile.status === 'reauth-required' ? '重新登录后开始' : '启动 Copilot 会话';
+  });
+  document.querySelectorAll<HTMLElement>('[data-session-help]').forEach(node => {
+    node.textContent = demo ? '设计预览 · 启动会话已停用，记录均为虚构示例。' : bridge && service?.sessionLaunchAvailable !== true ? '启动会话需要桌面应用连接到本机服务。' : '从这里启动的 Copilot CLI 会话会自动记录用量。登录 GitHub 不会导入历史会话。';
+  });
 }
 
 function renderHeader(): void {
@@ -226,17 +242,20 @@ function renderLocal(): void {
   element('local-summary').innerHTML = `<div class="local-stat-grid"><div><div class="local-stat-value">${escape(amount(String(local.sessionCount)))}</div><div class="local-stat-label">会话</div></div><div><div class="local-stat-value">${escape(amount(String(calls)))}</div><div class="local-stat-label">采集调用</div></div><div><div class="local-stat-value">${escape(amount(String(local.unknownCalls + local.pendingCalls)))}</div><div class="local-stat-label">用量待确认</div></div></div><div class="local-scope"><p>${local.unitVerified && local.credits !== null ? `已确认用量 <strong>${escape(amount(local.credits))} AI Credits</strong>` : local.nanoAiu !== null ? `采集原始量 <strong>${escape(amount(local.nanoAiu))}</strong> · 单位待确认` : '本机尚未取得可确认的用量数值'}</p><p>${escape(local.scope)}。${local.retained ? '仅包含留存范围内的记录。' : ''}这些记录不代表账号的全部消耗。</p></div>`;
 }
 
-function recordTable(items: DesktopRecord[], recent = false): string {
-  if (!items.length) return emptyState(recordFailure ? '记录读取未完成' : '还没有本机记录', recordFailure || '使用 PilotMeter 启动 Copilot CLI 后，采集到的会话会显示在这里。', recordFailure ? '<button type="button" class="button button-secondary" data-action="reload-records">重新读取</button>' : '', true, 'terminal');
+function recordTable(items: DesktopRecord[], recent = false, failure = ''): string {
+  if (!items.length) return emptyState(failure ? '记录读取未完成' : '还没有本机记录', failure || '通过上方按钮启动 Copilot 会话，完成对话后，采集记录会自动显示在这里。', failure ? `<button type="button" class="button button-secondary" data-action="${recent ? 'reload-recent' : 'reload-records'}">重新读取</button>` : '', true, 'terminal');
   return `<div class="table-scroll" tabindex="0" aria-label="${recent ? '最近会话' : '会话记录'}，宽表可横向滚动"><table class="records-table"><thead><tr><th>会话</th><th>模型</th><th>调用</th><th>已知用量</th><th>最近活跃</th></tr></thead><tbody>${items.map(item => `<tr><td><div class="session-name">${icon('terminal')}<code title="${escape(item.sessionId)}">${escape(item.sessionId)}</code></div></td><td class="record-models">${escape(item.models.join(' / ') || '模型未知')}</td><td class="record-number">${escape(amount(String(item.knownCalls + item.unknownCalls + item.pendingCalls)))}${item.unknownCalls + item.pendingCalls ? `<span class="record-note">${item.unknownCalls + item.pendingCalls} 条用量待确认</span>` : ''}</td><td class="record-number">${escape(amount(item.unitVerified ? item.credits : item.nanoAiu))}<span class="record-note">${item.unitVerified ? 'AI Credits' : item.nanoAiu !== null ? '原始值 · 单位待确认' : '用量待确认'}</span></td><td class="record-number">${escape(timestamp(item.lastSeen, true))}</td></tr>`).join('')}</tbody></table></div>`;
 }
 
 function renderRecords(): void {
-  element('recent-description').textContent = `${records?.period ? records.period + '（UTC）· ' : ''}通过 PilotMeter 启动的 Copilot CLI 会话`;
+  element('recent-description').textContent = `${recentRecords?.period ?? desktop?.local.period ?? new Date().toISOString().slice(0, 7)}（UTC）· 最近活跃的本机采集会话`;
   if (page === 'records') element('page-meta').textContent = `本机记录 · ${month().replace('-', ' / ')}（UTC）`;
   const items = records?.items ?? [];
-  element('recent-records').innerHTML = recordsLoading && !records ? emptyState('正在读取本机记录', '请稍候。', '', true, 'terminal') : recordTable(items.slice(0, 3), true);
-  element('records-list').innerHTML = recordsLoading && !records ? emptyState('正在读取本机记录', '请稍候。', '', true, 'terminal') : recordTable(items);
+  element('recent-records').innerHTML = recentLoading && !recentRecords ? emptyState('正在读取本机记录', '请稍候。', '', true, 'terminal') : recordTable(recentRecords?.items.slice(0, 3) ?? [], true, recentFailure);
+  element('records-list').innerHTML = recordsLoading && !records ? emptyState('正在读取本机记录', '请稍候。', '', true, 'terminal') : recordTable(items, false, recordFailure);
+  const staleNotice = (failure: string, action: string) => `<p class="context-line error-text" role="status">记录更新未完成，当前显示上次读取结果。${escape(failure)} <button type="button" class="text-button" data-action="${action}">重新读取</button></p>`;
+  if (recentFailure && recentRecords?.items.length) element('recent-records').insertAdjacentHTML('afterbegin', staleNotice(recentFailure, 'reload-recent'));
+  if (recordFailure && items.length) element('records-list').insertAdjacentHTML('afterbegin', staleNotice(recordFailure, 'reload-records'));
   element('records-context').textContent = records ? `${records.scope} · ${records.period}（UTC）· ${records.retained ? '仅包含留存记录' : '仅包含本机采集记录'}，不代表账号的全部消耗。` : '记录与当前选择的 GitHub 账号对应。';
   element<HTMLButtonElement>('load-records').hidden = !records?.nextCursor;
   controls();
@@ -268,26 +287,98 @@ function updatePet(update: Partial<PetState>): void {
 
 function render(): void { renderHeader(); renderQuota(); renderModels(); renderLocal(); renderAccounts(); controls(); }
 
-async function loadRecords(append = false): Promise<void> {
-  if (!desktop || append && (!records?.nextCursor || recordsLoading) || busy()) return;
+function resetRecords(): void {
+  recordsGeneration++; recentGeneration++;
+  records = recentRecords = null;
+  recordFailure = recentFailure = '';
+  recordsLoading = recentLoading = false;
+  recordPages = 1;
+  sessionLaunch = null;
+  element<HTMLDialogElement>('session-cli-dialog').close();
+}
+
+function startSession(): void {
+  if (!isEnabled() || busy() || sessionLaunch) return;
+  const profile = currentProfile();
+  if (!profile && desktop?.accounts.length) {
+    feedback('请在右上角选择一个已连接账号，再启动 Copilot 会话。');
+    const selected = element<HTMLSelectElement>('account-select');
+    selected.focus();
+    try { selected.showPicker?.(); } catch { /* Focus still reaches the account list when the host cannot open its picker. */ }
+    return;
+  }
+  if (!profile || profile.status === 'reauth-required') { login.open(profile); return; }
+  if (!bridge) {
+    element('session-cli-command').textContent = `pilotmeter run --account ${profile.id} --`;
+    element('session-cli-account').textContent = `使用 @${profile.login} 的已保存账号连接。`;
+    element('session-copy-feedback').textContent = '';
+    element<HTMLDialogElement>('session-cli-dialog').showModal();
+    return;
+  }
+  if (!service?.connected || service.sessionLaunchAvailable !== true) return;
+  sessionLaunch = { requestId: crypto.randomUUID(), accountId: profile.id, epoch: epoch() };
+  feedback('请选择项目文件夹，随后会打开 Copilot 终端。');
+  controls();
+  send({ type: 'start-session', ...sessionLaunch });
+}
+
+async function loadRecent(): Promise<void> {
+  if (!desktop || recentLoading || busy()) return;
+  const operation = ++recentGeneration;
+  const account = desktop.activeAccountId;
+  const currentEpoch = epoch();
+  const period = desktop.local.period;
+  if (recentRecords?.period !== period) recentRecords = null;
+  recentLoading = true;
+  recentFailure = '';
+  renderRecords();
+  try {
+    const params = new URLSearchParams({ accountId: account ?? '', period, sort: 'recent' });
+    const value = demo ? structuredClone(demoData!.records) : await api<DesktopRecordsResponse>(`/api/desktop/records?${params}`);
+    if (operation !== recentGeneration || currentEpoch !== epoch() || account !== desktop?.activeAccountId) return;
+    identity(value);
+    if (value.accountId !== account || !demo && value.period !== period) throw new Error('账号或月份已变化，请重新读取记录。');
+    recentRecords = value;
+  } catch (error) {
+    if (operation !== recentGeneration || currentEpoch !== epoch() || account !== desktop?.activeAccountId) return;
+    recentFailure = errorMessage(error);
+  } finally { if (operation === recentGeneration) { recentLoading = false; renderRecords(); } }
+}
+
+/** Refresh every loaded page together so new rows do not discard pagination or leave old totals behind. */
+async function loadRecords(append = false, preserve = false): Promise<void> {
+  if (!desktop || append && !records?.nextCursor || (append || preserve) && recordsLoading || busy()) return;
   const operation = ++recordsGeneration;
   const account = desktop.activeAccountId;
   const currentEpoch = epoch();
   const period = month();
+  const sort = element<HTMLSelectElement>('record-sort').value;
+  const pages = preserve ? recordPages : 1;
+  const previous = records;
   recordsLoading = true;
   recordFailure = '';
-  if (!append) records = null;
+  if (!append && !preserve) { records = null; recordPages = 1; }
   renderRecords();
   try {
-    const params = new URLSearchParams({ accountId: account ?? '', period, sort: element<HTMLSelectElement>('record-sort').value });
-    if (append && records?.nextCursor) params.set('cursor', records.nextCursor);
-    const value = demo ? structuredClone(demoData!.records) : await api<DesktopRecordsResponse>(`/api/desktop/records?${params}`);
-    if (operation !== recordsGeneration || currentEpoch !== epoch() || account !== desktop?.activeAccountId) return;
-    identity(value);
-    if (value.accountId !== account || !demo && value.period !== period) throw new Error('账号或月份已变化，请重新读取记录。');
-    records = append && records ? { ...value, items: [...records.items, ...value.items] } : value;
+    const params = new URLSearchParams({ accountId: account ?? '', period, sort });
+    if (append && previous?.nextCursor) params.set('cursor', previous.nextCursor);
+    let refreshed: DesktopRecordsResponse | null = null;
+    let fetched = 0;
+    do {
+      const value = demo ? structuredClone(demoData!.records) : await api<DesktopRecordsResponse>(`/api/desktop/records?${params}`);
+      if (operation !== recordsGeneration || currentEpoch !== epoch() || account !== desktop?.activeAccountId) return;
+      identity(value);
+      if (value.accountId !== account || !demo && value.period !== period) throw new Error('账号或月份已变化，请重新读取记录。');
+      const existing: DesktopRecord[] = refreshed?.items ?? (append ? previous?.items : []) ?? [];
+      refreshed = { ...value, items: [...new Map([...existing, ...value.items].map(item => [item.id, item])).values()] };
+      fetched++;
+      if (!value.nextCursor || demo) break;
+      params.set('cursor', value.nextCursor);
+    } while (fetched < pages);
+    records = refreshed;
+    recordPages = append ? recordPages + fetched : fetched;
   } catch (error) {
-    if (operation !== recordsGeneration || currentEpoch !== epoch()) return;
+    if (operation !== recordsGeneration || currentEpoch !== epoch() || account !== desktop?.activeAccountId) return;
     recordFailure = errorMessage(error);
     if (append) feedback(`更多记录读取失败：${recordFailure}`, true);
   } finally { if (operation === recordsGeneration) { recordsLoading = false; renderRecords(); } }
@@ -311,10 +402,11 @@ async function loadDesktop(): Promise<void> {
     if (operation !== viewGeneration || currentEpoch !== epoch()) return;
     identity(value);
     const scopeChanged = value.activeAccountId !== desktop?.activeAccountId;
-    if (scopeChanged) { recordsGeneration++; records = null; recordFailure = ''; recordsLoading = false; }
+    if (scopeChanged) resetRecords();
     desktop = value;
     render();
-    if (scopeChanged || !records && !recordsLoading) void loadRecords();
+    void loadRecent();
+    if (!recordsLoading) void loadRecords(false, true);
     if (refreshRequested && !value.refreshing) {
       refreshRequested = false;
       const failure = value.quota?.error ?? value.models?.error;
@@ -337,7 +429,7 @@ async function changeAccount(accountId: string | null): Promise<void> {
   let release: (() => void) | undefined;
   try {
     release = await acquire();
-    viewGeneration++; recordsGeneration++; records = null; quotaKey = null;
+    viewGeneration++; resetRecords(); quotaKey = null;
     if (desktop) { desktop = { ...desktop, activeAccountId: accountId, presentation: { selection: 'none', primary: null, buckets: [], fetchedAt: null, stale: true }, quota: null, models: null }; render(); element('local-summary').innerHTML = emptyState('正在切换账号', '本机记录将随账号更新。', '', true, 'terminal'); renderRecords(); }
     feedback('正在切换账号…');
     await mutate('/api/auth/select', 'POST', { accountId });
@@ -363,7 +455,7 @@ async function refresh(): Promise<void> {
   finally { release?.(); if (currentEpoch === epoch()) await loadDesktop(); }
 }
 
-const login = initializeDesktopLogin({ api, mutate, permitted: isEnabled, existing: () => desktop?.login ?? null, changed: async () => { viewGeneration++; recordsGeneration++; quotaKey = null; await loadDesktop(); }, feedback, acquire, epoch,
+const login = initializeDesktopLogin({ api, mutate, permitted: isEnabled, existing: () => desktop?.login ?? null, changed: async () => { viewGeneration++; resetRecords(); quotaKey = null; await loadDesktop(); }, feedback, acquire, epoch,
   external: (url, loginId) => {
     if (bridge) send({ type: 'open-external', url, loginId });
     else window.open(url, '_blank', 'noopener,noreferrer');
@@ -381,7 +473,8 @@ function navigate(): void {
   element('page-description').textContent = info.description;
   document.title = `${info.title} · PilotMeter`;
   renderHeader();
-  if (page === 'records' && !records && !recordsLoading) void loadRecords();
+  if (page === 'records' && !recordsLoading) void loadRecords(false, true);
+  if (page === 'overview' && !recentLoading) void loadRecent();
 }
 
 async function removeAccount(): Promise<void> {
@@ -396,7 +489,7 @@ async function removeAccount(): Promise<void> {
     await mutate(`/api/auth/accounts/${encodeURIComponent(profile.id)}`, 'DELETE');
     if (currentEpoch !== epoch()) return;
     element<HTMLDialogElement>('remove-dialog').close(); removeProfile = null;
-    viewGeneration++; recordsGeneration++; records = null; quotaKey = null;
+    viewGeneration++; resetRecords(); quotaKey = null;
     feedback(`已移除 @${profile.login} 的账号连接。本机历史记录已保留。`);
   } catch (error) { if (currentEpoch === epoch()) { element('remove-error').hidden = false; element('remove-error').textContent = errorMessage(error); } }
   finally { release?.(); button.disabled = false; if (currentEpoch === epoch()) await loadDesktop(); }
@@ -413,6 +506,12 @@ document.addEventListener('click', event => {
   if (action === 'reload') void loadDesktop();
   if (action === 'load-records') void loadRecords(true);
   if (action === 'reload-records') void loadRecords();
+  if (action === 'reload-recent') void loadRecent();
+  if (action === 'start-session') startSession();
+  if (action === 'close-session-cli') element<HTMLDialogElement>('session-cli-dialog').close();
+  if (action === 'copy-session-command') void navigator.clipboard.writeText(element('session-cli-command').textContent ?? '').then(() => {
+    element('session-copy-feedback').textContent = '启动命令已复制。';
+  }).catch(() => { element('session-copy-feedback').textContent = '复制未完成，请选择上方命令手动复制。'; });
   if (action === 'quota-details') { const details = element<HTMLDetailsElement>('quota-explanation'); details.open = !details.open; if (details.open) details.scrollIntoView({ block: 'nearest' }); }
   if (action === 'pets') { location.hash = 'accounts'; navigate(); element('pet-settings').scrollIntoView({ block: 'start', behavior: 'smooth' }); }
   if (action === 'select-pet' && petState && pets.some(pet => pet.id === target.dataset.pet)) updatePet({ petId: target.dataset.pet });
@@ -446,6 +545,20 @@ bridge?.addEventListener('message', event => {
     if (mutationAck && value.pending && value.operationId === mutationAck.id && value.epoch === mutationAck.epoch) { window.clearTimeout(mutationAck.timer); mutationAck.resolve(); mutationAck = null; }
     return;
   }
+  if (value.type === 'session-start-result') {
+    if (!sessionLaunch || value.requestId !== sessionLaunch.requestId || value.epoch !== sessionLaunch.epoch || value.epoch !== epoch() || sessionLaunch.accountId !== desktop?.activeAccountId) return;
+    sessionLaunch = null;
+    controls();
+    feedback(value.message ?? (value.status === 'started' ? 'Copilot 终端已打开。完成对话后，会话与用量会自动显示。' : value.status === 'cancelled' ? '已取消启动会话。' : '会话启动失败，请重试。'), value.status === 'error');
+    if (value.status === 'started') void loadDesktop();
+    return;
+  }
+  if (value.type === 'session-exit') {
+    if (value.accountId !== desktop?.activeAccountId || value.epoch !== epoch()) return;
+    feedback(value.message ?? 'Copilot 会话意外结束，请检查账号登录后重试。', true);
+    void loadDesktop();
+    return;
+  }
   if (value.type === 'pet-state') { petState = value; renderPets(); return; }
   if (value.type === 'error' || value.type === 'host-error') { feedback(value.message ?? '桌面操作未完成，请重试。', true); return; }
   if (value.type !== 'service-state' || !Number.isSafeInteger(value.epoch)) return;
@@ -455,7 +568,7 @@ bridge?.addEventListener('message', event => {
   service = value;
   if (selectionChanged) quotaKey = value.quotaKey ?? null;
   if (changed) {
-    viewGeneration++; recordsGeneration++; desktop = null; records = null; recordsLoading = false; loading = false; quotaKey = value.quotaKey ?? null;
+    viewGeneration++; resetRecords(); desktop = null; loading = false; quotaKey = value.quotaKey ?? null;
     login.invalidate();
     if (mutationAck) { window.clearTimeout(mutationAck.timer); mutationAck.reject(new Error('本机服务已变化，请重试。')); mutationAck = null; }
     element('quota-area').innerHTML = `<div class="card">${emptyState('正在重新连接本机服务', '连接完成后自动读取当前账号。', '', false, 'activity')}</div>`;

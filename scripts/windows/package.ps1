@@ -64,6 +64,7 @@ switch ($Mode) {
         $brand = Join-Path ([IO.Path]::GetDirectoryName($Source)) 'DesktopBrand.cs'
         $nativeWindow = Join-Path ([IO.Path]::GetDirectoryName($Source)) 'DesktopMainWindow.cs'
         $webWindow = Join-Path ([IO.Path]::GetDirectoryName($Source)) 'DesktopWebWindow.cs'
+        $sessionLaunch = Join-Path ([IO.Path]::GetDirectoryName($Source)) 'DesktopSessionLaunch.cs'
         $nativeApi = Join-Path ([IO.Path]::GetDirectoryName($Source)) 'DesktopNativeApi.cs'
         $dashboardViews = Join-Path ([IO.Path]::GetDirectoryName($Source)) 'DesktopDashboardViews.cs'
         $pets = Join-Path ([IO.Path]::GetDirectoryName($Source)) 'DesktopPets.cs'
@@ -76,7 +77,7 @@ switch ($Mode) {
             "/resource:$petFile,PilotMeter.Pets.$petId"
         }
         if (-not $WebViewDirectory) { throw 'The pinned WebView2 SDK directory is required.' }
-        & $compiler /nologo /target:winexe /platform:x64 /optimize+ "/out:$Destination" "/win32manifest:$ApplicationManifest" "/win32icon:$ApplicationIcon" "/resource:$ApplicationIcon,PilotMeter.Icon" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll "/reference:$WebViewDirectory\Microsoft.Web.WebView2.Core.dll" "/reference:$WebViewDirectory\Microsoft.Web.WebView2.WinForms.dll" @petResources $Source $widget $brand $nativeWindow $nativeApi $dashboardViews $pets $webWindow $Configuration
+        & $compiler /nologo /target:winexe /platform:x64 /optimize+ "/out:$Destination" "/win32manifest:$ApplicationManifest" "/win32icon:$ApplicationIcon" "/resource:$ApplicationIcon,PilotMeter.Icon" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll "/reference:$WebViewDirectory\Microsoft.Web.WebView2.Core.dll" "/reference:$WebViewDirectory\Microsoft.Web.WebView2.WinForms.dll" @petResources $Source $widget $brand $nativeWindow $nativeApi $dashboardViews $pets $webWindow $sessionLaunch $Configuration
         if ($LASTEXITCODE -ne 0) { throw "Desktop compilation failed: $LASTEXITCODE" }
     }
 }
