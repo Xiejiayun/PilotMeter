@@ -1,18 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
   <defs>
     <linearGradient id="tile" x1="10" y1="6" x2="54" y2="61" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#326FBC"/>
-      <stop offset="1" stop-color="#173658"/>
+      <stop stop-color="#4F714B"/>
+      <stop offset="1" stop-color="#2F432D"/>
     </linearGradient>
     <linearGradient id="meter" x1="16" y1="17" x2="51" y2="46" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FFFFFF"/>
-      <stop offset="1" stop-color="#A9D8FF"/>
+      <stop stop-color="#F9FAF4"/>
+      <stop offset="1" stop-color="#DFE9D0"/>
     </linearGradient>
   </defs>
   <rect x="2" y="2" width="60" height="60" rx="17" fill="url(#tile)"/>
-  <rect x="2.5" y="2.5" width="59" height="59" rx="16.5" stroke="#FFFFFF" stroke-opacity=".12"/>
+  <rect x="2.5" y="2.5" width="59" height="59" rx="16.5" stroke="#F9FAF4" stroke-opacity=".12"/>
   <path d="M18.6 45.4a19 19 0 1 1 26.8 0" stroke="url(#meter)" stroke-width="4.5" stroke-linecap="round"/>
-  <path d="m41.5 22.5-5.4 17.2-5.3-6.5-6.5-5.3 17.2-5.4Z" fill="#FFFFFF"/>
-  <path d="m41.5 22.5-10.7 10.7 5.3 6.5 5.4-17.2Z" fill="#73CDF4"/>
-  <path d="M28 49h8" stroke="#73CDF4" stroke-width="4" stroke-linecap="round"/>
+  <path d="m41.5 22.5-5.4 17.2-5.3-6.5-6.5-5.3 17.2-5.4Z" fill="#F9FAF4"/>
+  <path d="m41.5 22.5-10.7 10.7 5.3 6.5 5.4-17.2Z" fill="#C4D8B1"/>
+  <path d="M28 49h8" stroke="#C4D8B1" stroke-width="4" stroke-linecap="round"/>
 </svg>

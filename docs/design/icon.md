@@ -1,6 +1,8 @@
 # PilotMeter icon
 
-深蓝圆角底，白色开口计量环和冰蓝导航指针，将 Pilot（导航）与 Meter（用量监测）合为一个符号。图标是固定品牌标志，不代表实时用量或连接状态。
+森林绿圆角底，暖白开口计量环和浅鼠尾草绿导航指针，将 Pilot（导航）与 Meter（用量监测）合为一个符号。图标是固定品牌标志，不代表实时用量或连接状态。
+
+配色与原生桌面界面一致：底板渐变采用 `DesktopMainWindow.cs` 的 Accent `#4F714B` 和 Ink `#2F432D`；计量环采用窗口暖白 `#F9FAF4` 和导航选中浅绿 `#DFE9D0`。指针侧面与底部短横使用较亮的 `#C4D8B1`，保证小尺寸下与底板的对比。造型、留白和导出尺寸保持一致。
 
 - 矢量原稿：[`web/assets/pilotmeter.svg`](../../web/assets/pilotmeter.svg)
 - 透明背景 PNG（512 × 512）：[`web/assets/pilotmeter-512.png`](../../web/assets/pilotmeter-512.png)

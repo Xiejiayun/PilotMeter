@@ -72,18 +72,18 @@ try {
   const uri = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(source);
   await page.setViewportSize({ width: 1200, height: 800 });
   await page.setContent(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>
-    *{box-sizing:border-box}body{margin:0;background:#f4f7fb;color:#173658;font-family:'Segoe UI','Microsoft YaHei',sans-serif}
-    main{padding:48px 56px}.top{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #d9e3ef;padding-bottom:24px}
-    .brand{font-size:24px;font-weight:650;letter-spacing:-.7px}.eyebrow{font-size:11px;letter-spacing:2.5px;color:#6d829b}
-    .hero{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:30px}.tile{height:384px;display:flex;align-items:center;justify-content:center;border-radius:26px;background:white;border:1px solid #e1e8f1}
-    .dark{background:#152638;border-color:#152638}.tile img{width:264px;height:264px}.caption{font-size:13px;color:#6c8098;margin:14px 2px}
-    .bottom{display:flex;justify-content:space-between;align-items:center;margin-top:30px;padding-top:24px;border-top:1px solid #d9e3ef}.sizes{display:flex;align-items:center;gap:28px}.sample{display:flex;align-items:center;gap:9px;color:#70829a;font-size:11px}
-    .lockup{display:flex;align-items:center;gap:12px;color:#24364d;font-size:22px;font-weight:650;letter-spacing:-.6px}.lockup img{width:36px;height:36px}
-    .note{margin-top:34px;font-size:12px;color:#6c8098;letter-spacing:.4px}
-  </style><main><div class="top"><div class="brand">PilotMeter</div><div class="eyebrow">APP ICON / 01</div></div>
-    <div class="hero"><div><div class="tile"><img src="${uri}"></div><div class="caption">浅色背景</div></div><div><div class="tile dark"><img src="${uri}"></div><div class="caption">深色背景</div></div></div>
+    *{box-sizing:border-box}body{margin:0;background:#F9FAF4;color:#2F432D;font-family:'Segoe UI','Microsoft YaHei',sans-serif}
+    main{padding:48px 56px}.top{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #DAE2D1;padding-bottom:24px}
+    .brand{font-size:24px;font-weight:650;letter-spacing:-.7px}.eyebrow{font-size:11px;letter-spacing:2.5px;color:#6F8164}
+    .hero{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:30px}.tile{height:384px;display:flex;align-items:center;justify-content:center;border-radius:26px;background:#F2F6EA;border:1px solid #DDE5D7}
+    .dark{background:#263524;border-color:#263524}.tile img{width:264px;height:264px}.caption{font-size:13px;color:#6F8164;margin:14px 2px}
+    .bottom{display:flex;justify-content:space-between;align-items:center;margin-top:30px;padding-top:24px;border-top:1px solid #DAE2D1}.sizes{display:flex;align-items:center;gap:28px}.sample{display:flex;align-items:center;gap:9px;color:#6F8164;font-size:11px}
+    .lockup{display:flex;align-items:center;gap:12px;color:#2F432D;font-size:22px;font-weight:650;letter-spacing:-.6px}.lockup img{width:36px;height:36px}
+    .note{margin-top:34px;font-size:12px;color:#6F8164;letter-spacing:.4px}
+  </style><main><div class="top"><div class="brand">PilotMeter</div><div class="eyebrow">APP ICON / 02</div></div>
+    <div class="hero"><div><div class="tile"><img src="${uri}"></div><div class="caption">界面浅绿背景</div></div><div><div class="tile dark"><img src="${uri}"></div><div class="caption">深色背景</div></div></div>
     <div class="bottom"><div class="sizes">${[16,24,32,48].map(size => `<div class="sample"><img src="${uri}" width="${size}" height="${size}"><span>${size}px</span></div>`).join('')}</div><div class="lockup"><img src="${uri}">PilotMeter</div></div>
-    <p class="note">导航指针 × 用量仪表 · 深蓝 / 冰蓝 · SVG 矢量原稿与多尺寸 Windows ICO</p>
+    <p class="note">导航指针 × 用量仪表 · 森林绿 / 鼠尾草绿 / 暖白 · 与桌面界面同源配色</p>
   </main></html>`);
   await page.evaluate(() => Promise.all(Array.from(document.images, image => image.decode())));
   const preview = join(workspace, 'docs', 'design', 'pilotmeter-icon-preview.png');
