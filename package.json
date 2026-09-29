@@ -25,7 +25,7 @@
   "scripts": {
     "build": "tsc && tsc --project web/tsconfig.json && vite build",
     "typecheck": "tsc --noEmit && tsc --project web/tsconfig.json",
-    "test": "npm run build && node --test test/unit/*.test.mjs test/integration/*.test.mjs",
+    "test": "npm run build && node --test --test-concurrency=2 test/unit/*.test.mjs test/integration/*.test.mjs",
     "prepack": "npm run build",
     "test:pack": "node scripts/pack-smoke.mjs",
     "build:windows": "node scripts/build-windows.mjs",
