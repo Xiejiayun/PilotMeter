@@ -5,8 +5,53 @@ import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { acquireLock } from '../../dist/daemon/lock.js';
+
+function contenderReport(child) {
+  return new Promise((resolve, reject) => {
+    const finish = (error, result) => {
+      child.removeListener('message', onMessage);
+      child.removeListener('error', onError);
+      child.removeListener('close', onClose);
+      if (error) reject(error); else resolve(result);
+    };
+    const onMessage = result => finish(null, result);
+    const onError = error => finish(error);
+    const onClose = (code, signal) => finish(new Error(`Lock contender closed before reporting: ${code ?? signal}`));
+    child.once('message', onMessage);
+    child.once('error', onError);
+    // exit can arrive before an already-sent IPC message. close waits for the
+    // IPC pipe to drain, so only it proves that no report can still arrive.
+    child.once('close', onClose);
+  });
+}
+
+test('a lock contender report may drain after process exit', async () => {
+  const child = new EventEmitter();
+  const report = contenderReport(child);
+  const result = { acquired: false, message: 'A writer already owns this data directory.' };
+  child.emit('exit', 0, null);
+  child.emit('message', result);
+  child.emit('close', 0, null);
+  assert.deepEqual(await report, result);
+});
+
+test('a lock contender that closes without a report still fails', async () => {
+  const child = new EventEmitter();
+  const report = contenderReport(child);
+  child.emit('exit', 2, null);
+  child.emit('close', 2, null);
+  await assert.rejects(report, /Lock contender closed before reporting: 2/);
+});
+
+test('a lock contender spawn error rejects without waiting for close', async () => {
+  const child = new EventEmitter();
+  const report = contenderReport(child);
+  const error = new Error('synthetic spawn failure');
+  child.emit('error', error);
+  await assert.rejects(report, candidate => candidate === error);
+});
 
 async function staleDirectory() {
   const dir = await fs.promises.mkdtemp(join(tmpdir(), 'pilotmeter-lock-'));
@@ -67,10 +112,9 @@ test('multiple real processes recovering one dead owner still produce exactly on
       const exited = new Promise(resolve => { child.once('exit', resolve); child.once('error', resolve); });
       const record = { child, exited, acquired: false };
       children.push(record);
-      return new Promise((resolve, reject) => {
-        child.once('message', result => { record.acquired = result.acquired === true; resolve(result); });
-        child.once('error', reject);
-        child.once('exit', (code, signal) => reject(new Error(`Lock contender exited before reporting: ${code ?? signal}`)));
+      return contenderReport(child).then(result => {
+        record.acquired = result.acquired === true;
+        return result;
       });
     }));
     assert.equal(results.filter(result => result.acquired).length, 1);

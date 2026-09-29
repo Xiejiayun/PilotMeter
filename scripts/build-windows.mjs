@@ -4,6 +4,7 @@ import { createReadStream, existsSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { prepareWebView2Sdk, webView2Version, webView2Sha256 } from './webview2-sdk.mjs';
 
 const workspace = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const nodeVersion = '24.14.0';
@@ -66,7 +67,7 @@ async function bundledCopilotVersion(command) {
 
 // Keep this application allowlist aligned with scripts/pack-smoke.mjs. npm's
 // files field permits whole directories, including stale compiler output.
-const applicationFile = /^(?:package\.json|README\.md|LICENSE|docs\/(?:compatibility|validation-guide|npm-package-contents|windows-exe|releasing)\.md|bin\/pilotmeter\.js|dist\/.+\.(?:js|d\.ts|js\.map)|public\/index\.html|public\/assets\/[A-Za-z0-9_.-]+\.(?:js|css|svg|ico))$/;
+const applicationFile = /^(?:package\.json|README\.md|LICENSE|docs\/(?:compatibility|validation-guide|npm-package-contents|windows-exe|releasing)\.md|bin\/pilotmeter\.js|dist\/.+\.(?:js|d\.ts|js\.map)|public\/(?:index|desktop)\.html|public\/assets\/[A-Za-z0-9_.-]+\.(?:js|css|svg|ico|png|woff2?))$/;
 const privateApplicationFile = /(?:^|\/)(?:\.env(?:\.|$)|test(?:s)?|fixtures|node_modules|\.git|\.npmrc|[^/]*(?:credentials|secrets)[^/]*)(?:\/|$)|\.(?:db|sqlite|log)(?:[.-]|$)/i;
 const secretPatterns = [/\bgh[pousr]_[A-Za-z0-9]{20,}\b/, /\bgithub_pat_[A-Za-z0-9_]{40,}\b/, /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/];
 function rejectSecrets(name, bytes) {
@@ -175,7 +176,7 @@ for (const file of pack.files) {
   if (typeof file.path !== 'string' || /[\t\r\n\\:]/.test(file.path) || file.path.split('/').some(part => !part || part === '.' || part === '..') || !applicationFile.test(file.path) || privateApplicationFile.test(file.path) || packageFiles.has(file.path)) throw new Error('Unexpected application archive member: ' + file.path);
   packageFiles.add(file.path);
 }
-for (const required of ['package.json', 'bin/pilotmeter.js', 'dist/cli/main.js', 'dist/daemon/server.js', 'public/index.html', 'README.md', 'LICENSE', 'docs/compatibility.md', 'docs/validation-guide.md', 'docs/npm-package-contents.md', 'docs/windows-exe.md', 'docs/releasing.md']) {
+for (const required of ['package.json', 'bin/pilotmeter.js', 'dist/cli/main.js', 'dist/daemon/server.js', 'public/index.html', 'public/desktop.html', 'README.md', 'LICENSE', 'docs/compatibility.md', 'docs/validation-guide.md', 'docs/npm-package-contents.md', 'docs/windows-exe.md', 'docs/releasing.md']) {
   if (!packageFiles.has(required)) throw new Error('Missing application file: ' + required);
 }
 for (const extension of ['js', 'css']) if (![...packageFiles].some(name => name.startsWith('public/assets/') && name.endsWith('.' + extension))) throw new Error('Missing built browser ' + extension + ' asset.');
@@ -206,6 +207,7 @@ await writeFile(join(payload, 'WINDOWS-README.md'), (await readFile(join(workspa
   .replaceAll('](../README.md#', '](app/README.md#'));
 await mkdir(join(payload, 'licenses'), { recursive: true });
 await copyFile(join(workspace, 'node_modules', 'vite', 'LICENSE.md'), join(payload, 'licenses', 'VITE-LICENSE.md'));
+await copyFile(join(workspace, 'node_modules', 'tailwindcss', 'LICENSE'), join(payload, 'licenses', 'TAILWINDCSS-LICENSE.txt'));
 await copyFile(join(app, 'node_modules', '@github', 'copilot', 'LICENSE.md'), join(payload, 'licenses', 'GITHUB-COPILOT-LICENSE.md'));
 await writeFile(join(payload, 'THIRD-PARTY-NOTICES.txt'),
   'PilotMeter ' + packageInfo.version + '\n' +
@@ -216,6 +218,8 @@ await writeFile(join(payload, 'THIRD-PARTY-NOTICES.txt'),
   'PilotMeter is independently licensed under MIT; its MIT license does not apply to the bundled Copilot CLI.\n' +
   'Production npm dependency licenses are retained under app/node_modules.\n' +
   'The built browser modulepreload helper is from Vite; see licenses/VITE-LICENSE.md.\n' +
+  'The desktop stylesheet is compiled with Tailwind CSS (MIT); see licenses/TAILWINDCSS-LICENSE.txt.\n' +
+  'Microsoft WebView2 SDK ' + webView2Version + ': see desktop/WEBVIEW2-LICENSE.txt. The separately installed Evergreen runtime is maintained by Microsoft.\n' +
   'The launcher uses the Windows-provided .NET Framework; no .NET runtime is redistributed.\n');
 
 step('Download and verify official Node.js ' + nodeVersion + ' x64');
@@ -238,12 +242,14 @@ if (runtime.version !== nodeVersion || runtime.platform !== 'win32' || runtime.a
 
 step('Compile the native Windows desktop application');
 await mkdir(join(payload, 'desktop'), { recursive: true });
+step('Download and verify pinned Microsoft WebView2 SDK ' + webView2Version);
+await prepareWebView2Sdk(workspace, join(payload, 'desktop'));
 const desktopConfiguration = join(stage, 'DesktopBuildInfo.cs');
 await writeFile(desktopConfiguration, 'using System.Reflection;\n[assembly: AssemblyInformationalVersion("' + packageInfo.version + '")]\n');
 await ps(['-Mode', 'CompileDesktop', '-Source', join(workspace, 'scripts', 'windows', 'DesktopApp.cs'),
   '-Destination', join(payload, 'desktop', 'PilotMeter.Desktop.exe'), '-Configuration', desktopConfiguration,
   '-ApplicationManifest', join(workspace, 'scripts', 'windows', 'app.manifest'),
-  '-ApplicationIcon', join(workspace, 'web', 'assets', 'pilotmeter.ico')]);
+  '-ApplicationIcon', join(workspace, 'web', 'assets', 'pilotmeter.ico'), '-WebViewDirectory', join(payload, 'desktop')]);
 await copyFile(join(workspace, 'scripts', 'windows', 'DesktopApp.config'), join(payload, 'desktop', 'PilotMeter.Desktop.exe.config'));
 
 async function files(root, prefix = '') {
@@ -295,7 +301,7 @@ await copyFile(built, exe);
 const exeHash = hash(await readFile(exe));
 await writeFile(join(output, name + '.json'), JSON.stringify({
   version: packageInfo.version, platform: 'win32', arch: 'x64', nodeVersion, copilotVersion, copilotExecutableSha256,
-  desktop: { defaultEntry: 'pet', mainWindow: 'native-winforms', webView: false, pets: 10 },
+  desktop: { defaultEntry: 'pet', mainWindow: 'webview2-tailwind', webView: true, pets: 10, webView2SdkVersion: webView2Version, webView2SdkSha256: webView2Sha256, runtime: 'Microsoft Edge WebView2 Evergreen (system installed)' },
   filename: name, sha256: exeHash, bytes: (await stat(exe)).size, unpackedBytes, payloadHash, files: members.length,
   signed: false, nodeArchiveSha256: archiveSha256, nodeExecutableSha256: nodeSha256,
 }, null, 2) + '\n');
@@ -306,7 +312,7 @@ await mkdir(portable);
 await copyFile(exe, join(portable, name));
 await copyFile(join(output, name + '.json'), join(portable, name + '.json'));
 await writeFile(join(portable, 'README.md'), '# PilotMeter ' + packageInfo.version + '\n\n' +
-  '双击 ' + name + ' 显示桌面宠物，点击宠物打开主窗口。无需安装 Node/npm/WebView。\n\n' +
+  '双击 ' + name + ' 显示桌面宠物，点击宠物打开 HTML + Tailwind 独立主窗口。无需 Node/npm。主窗口使用 Microsoft Edge WebView2 Evergreen 运行时；缺失时应用会提供微软官方下载入口，安装后点击重新连接。\n\n' +
   '支持 Windows 10/11 x64 和系统 .NET Framework 4.8。十个宠物可在账户页或右键菜单切换。\n\n' +
   '升级前从旧宠物菜单退出桌面界面，再启动新版；如提示后台版本冲突，先结束采集会话，再点击“重启本机服务”。账户和账本保留。\n\n' +
   'SHA256SUMS 包含本包 EXE 校验值；版本清单记录运行时与未签名状态。\n\n' +

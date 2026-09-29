@@ -1,8 +1,8 @@
 # PilotMeter
 
-GitHub Copilot CLI 本地用量监控工具：10 个可选桌面宠物、原生 Windows 主窗口、账户额度与模型清单、终端状态提示和可选原生状态栏。Node.js + SQLite，无独立云服务，无 Electron。
+GitHub Copilot CLI 本地用量监控工具：10 个可选桌面宠物、HTML + Tailwind CSS 的独立 Windows 工作台、账户额度与模型清单、终端状态提示和可选原生状态栏。Node.js + SQLite，无独立云服务，无 Electron。
 
-**当前为 `0.1.0-preview.11` 预览版，尚未公开发布 npm。** 支持多账号登录和读取当前用户的 Copilot 额度。本机采集默认保存原始 nano AIU，组织账单对账仍需核验；真实订阅、`/usage` 和官方页面对账是独立发布门槛，合成测试不能替代。
+**当前为 `0.1.0-preview.12` 预览版，尚未公开发布 npm。** 支持多账号登录和读取当前用户的 Copilot 额度。本机采集默认保存原始 nano AIU，组织账单对账仍需核验；真实订阅、`/usage` 和官方页面对账是独立发布门槛，合成测试不能替代。
 
 ## 安装与开始使用
 
@@ -10,24 +10,26 @@ GitHub Copilot CLI 本地用量监控工具：10 个可选桌面宠物、原生 
 
 ### Windows 单 EXE
 
-Windows 10/11 x64 使用单文件 `PilotMeter-0.1.0-preview.11-win-x64.exe`，无需安装 Node.js 或 npm；已发布产物见 [Releases](https://github.com/Xiejiayun/PilotMeter/releases)，源码构建方式见 [Windows EXE 指南](docs/windows-exe.md)。挂件和独立主窗口都使用原生 WinForms 控件，需要 .NET Framework 4.8；没有内嵌网页或 WebView 依赖。不要求管理员权限，不修改 PATH。
+Windows 10/11 x64 使用单文件 `PilotMeter-0.1.0-preview.12-win-x64.exe`，无需安装 Node.js 或 npm；已发布产物见 [Releases](https://github.com/Xiejiayun/PilotMeter/releases)，源码构建方式见 [Windows EXE 指南](docs/windows-exe.md)。原生 PET 和窗口宿主使用 .NET Framework 4.8，主界面通过 Microsoft Edge WebView2 显示随包编译的 HTML 与 Tailwind CSS。需要 WebView2 Evergreen Runtime；缺少时程序显示官方安装入口和重试提示。应用不修改 PATH。
 
 双击 EXE 先显示可拖动的小挂件，不打开浏览器或命令行窗口。点击挂件打开独立主窗口，关闭主窗口后挂件仍保留；右键可隐藏到托盘、调整置顶或退出桌面界面。重复双击会唤回同一数据目录的挂件。退出桌面界面不停止采集服务，停止服务仍使用 `stop`。在 PowerShell 中也能使用完整命令：
 
 ```powershell
-.\PilotMeter-0.1.0-preview.11-win-x64.exe doctor
-.\PilotMeter-0.1.0-preview.11-win-x64.exe desktop
-.\PilotMeter-0.1.0-preview.11-win-x64.exe desktop --open
-Start-Process .\PilotMeter-0.1.0-preview.11-win-x64.exe -ArgumentList 'run -- --no-auto-update' -NoNewWindow -Wait
+.\PilotMeter-0.1.0-preview.12-win-x64.exe doctor
+.\PilotMeter-0.1.0-preview.12-win-x64.exe desktop
+.\PilotMeter-0.1.0-preview.12-win-x64.exe desktop --open
+Start-Process .\PilotMeter-0.1.0-preview.12-win-x64.exe -ArgumentList 'run -- --no-auto-update' -NoNewWindow -Wait
 
 # 另一个终端或分屏
-Start-Process .\PilotMeter-0.1.0-preview.11-win-x64.exe -ArgumentList 'watch' -NoNewWindow -Wait
-.\PilotMeter-0.1.0-preview.11-win-x64.exe stop
+Start-Process .\PilotMeter-0.1.0-preview.12-win-x64.exe -ArgumentList 'watch' -NoNewWindow -Wait
+.\PilotMeter-0.1.0-preview.12-win-x64.exe stop
 ```
 
 `desktop --open` 直接打开主窗口。EXE 使用 GUI 子系统，交互式 PowerShell 可能立即返回提示符；`run` 和 `watch` 使用上方 `Start-Process -NoNewWindow -Wait` 保持终端输入归属。主窗口的账号菜单提供重新登录和移除，设备码窗口支持取消与过期重试。
 
-主窗口分为总览、可用模型、用量记录和账户四页。总览在单位明确时展示同一类别的总额、已用和剩余；来源未说明单位时保留可靠比例，并提供原始数量展开区。模型页来自当前账号的官方 CLI 模型目录与策略，不把登录成功当成所有模型可用。本机记录按账号隔离，与组织共享账单分别展示。
+主窗口分为总览、可用模型、用量记录和账户四页。总览在单位明确时展示同一类别的总额、已用和剩余；来源未说明单位时直接显示原始已用和总额，并明确标注剩余比例。模型页来自当前账号的官方 CLI 模型目录与策略，不把登录成功当成所有模型可用。本机记录按账号隔离，与组织共享账单分别展示。
+
+界面可通过[离线交互设计稿](docs/design/desktop-v3.html)和 [HTML 设计报告](docs/design/desktop-v3-report.html)预览；其中所有数据明确标为示例。开发者运行 `npm run design:export` 可从同一套页面代码重新生成离线设计稿。
 
 账户页和宠物右键菜单可更换 10 个宠物，调整大小、动效与置顶。宠物素材嵌入 EXE，选择保存在本机；启动不依赖设计 HTML 或联网下载图片。发布资产另提供便携 ZIP。开发者可以使用 `npm run release:windows` 完整测试和打包，推送合并到 main 的版本标签即可触发 GitHub Release，见[打包与发布方案](docs/releasing.md)。
 
@@ -41,7 +43,7 @@ npm 方式需要 Node.js **24.14+**。当前尚未公开发布 npm，可从源�
 npm ci
 npm test
 npm pack
-npm install -g ./pilotmeter-0.1.0-preview.11.tgz
+npm install -g ./pilotmeter-0.1.0-preview.12.tgz
 
 pilotmeter doctor
 pilotmeter run -- --no-auto-update
@@ -93,7 +95,7 @@ Windows npm 全局安装目录不要包含 `&`：npm 11.9.0 自身生成的 `.cm
 
 ## 官方额度与预算
 
-原生主窗口和可选网页显示所选 GitHub 用户的当前周期 Copilot 额度，直接读取官方 CLI 的只读账号接口。默认突出“高级请求”类别，聊天、代码补全等放入“其他额度”；没有高级请求时，只有唯一有限类别可以成为默认主指标，多个有限类别需明确选择，不合并数量或比例。类别名不代表计量单位：单位未确认时隐藏原始数量，只展示上游明确返回的比例或额度状态；过去的重置日期不显示为下次重置。个人额度不等于组织共享账单，也不随网页的历史月份选择变化。
+独立主窗口和可选网页显示所选 GitHub 用户的当前周期 Copilot 额度，直接读取官方 CLI 的只读账号接口。默认突出“高级请求”类别，聊天、代码补全等放入“其他额度”；没有高级请求时，只有唯一有限类别可以成为默认主指标，多个有限类别需明确选择，不合并数量或比例。类别名不代表计量单位：桌面工作台可展示明确标注“单位未确认”的原始已用与总额，剩余显示上游可靠比例，不能据此推断剩余 Credits；过去的重置日期不显示为下次重置。个人额度不等于组织共享账单，也不随历史月份选择变化。
 
 下方本机记录与账单核验保留三种显示模式：
 

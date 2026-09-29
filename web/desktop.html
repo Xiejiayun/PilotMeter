@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#f6f7f9">
+    <title>PilotMeter</title>
+    <link rel="icon" href="./assets/pilotmeter.svg" type="image/svg+xml">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到内容</a>
+    <div id="app" class="app-shell">
+      <aside class="sidebar" aria-label="主导航">
+        <a class="brand" href="#overview" aria-label="PilotMeter 总览">
+          <img class="brand-symbol" src="./assets/pilotmeter.svg" width="32" height="32" alt="">
+          <span class="brand-word">PilotMeter<span class="brand-caption">YOUR COPILOT, IN VIEW</span></span>
+        </a>
+        <div class="nav-caption">工作空间</div>
+        <nav id="navigation" class="nav-list">
+          <a href="#overview" class="nav-item" data-page="overview" aria-label="用量总览"><span data-icon="overview"></span><span class="nav-label">用量总览</span></a>
+          <a href="#models" class="nav-item" data-page="models" aria-label="可用模型"><span data-icon="sparkles"></span><span class="nav-label">可用模型</span><span id="nav-model-count" class="nav-count" hidden></span></a>
+          <a href="#records" class="nav-item" data-page="records" aria-label="用量记录"><span data-icon="activity"></span><span class="nav-label">用量记录</span></a>
+          <a href="#accounts" class="nav-item" data-page="accounts" aria-label="账户管理"><span data-icon="users"></span><span class="nav-label">账户管理</span></a>
+        </nav>
+        <div class="sidebar-bottom">
+          <button type="button" id="pet-shortcut" class="pet-shortcut" data-action="pets"><img id="sidebar-pet" alt="" width="62" height="62"><span><strong>你的桌面伙伴</strong><span>选一个喜欢的小家伙 <span aria-hidden="true">↗</span></span></span></button>
+          <div class="sidebar-footer"><span class="status-dot" id="service-dot"></span><span id="sidebar-status">正在连接本机服务</span><span id="app-version"></span></div>
+        </div>
+      </aside>
+      <div class="workspace">
+        <header class="topbar">
+          <div class="breadcrumb"><span class="breadcrumb-root">工作空间</span><span class="breadcrumb-divider">/</span><span id="breadcrumb-current">用量总览</span></div>
+          <div class="topbar-actions">
+            <label class="account-switch"><span class="account-avatar" id="header-avatar" aria-hidden="true">G</span><span class="sr-only">当前 GitHub 账号</span><select id="account-select" aria-label="当前 GitHub 账号"><option value="">尚未连接账号</option></select><span data-icon="chevron" class="select-chevron"></span></label>
+            <button class="button button-secondary button-sync" id="refresh-button" type="button" data-action="refresh"><span data-icon="refresh"></span><span>同步</span></button>
+          </div>
+        </header>
+        <main id="main" class="main-content" tabindex="-1">
+          <div id="demo-banner" class="notice notice-amber" hidden>设计预览 · 此页中的账号、模型和用量都是示例。登录与账号操作已停用。</div>
+          <div id="service-banner" class="notice notice-amber" hidden><span id="service-message"></span><button type="button" class="text-button" data-action="restart" id="restart-button" hidden>重启本机服务</button></div>
+          <div id="feedback" class="notice" role="status" aria-live="polite" hidden></div>
+          <div class="page-heading"><div><div class="eyebrow" id="page-eyebrow" hidden></div><h1 id="page-title">用量总览<span class="heading-dot">.</span></h1><p id="page-description">当前账号的额度、可用模型与本机记录。</p></div><div id="page-meta" class="page-meta"></div></div>
+          <section id="overview-page" class="page" aria-label="用量总览">
+            <div id="quota-area" class="quota-area"><div class="card skeleton-card" aria-label="正在读取额度"><div class="skeleton w-28 h-4"></div><div class="skeleton w-48 h-10 mt-8"></div><div class="skeleton w-full h-2 mt-10"></div></div></div>
+            <div class="overview-columns">
+              <section class="card model-preview"><div class="section-heading"><div><h2>可用模型</h2></div><a class="text-button" href="#models">全部模型 <span data-icon="arrow"></span></a></div><div id="model-preview-list"></div></section>
+              <section class="card local-card"><div class="section-heading"><div><h2>本机用量</h2></div><span class="subtle-badge">部分记录</span></div><div id="local-summary"></div></section>
+            </div>
+            <section class="card recent-card"><div class="section-heading"><div><h2>最近会话</h2><p class="section-description" id="recent-description">通过 PilotMeter 启动的 Copilot CLI 会话</p></div><a class="text-button" href="#records">全部记录 <span data-icon="arrow"></span></a></div><div id="recent-records"></div></section>
+          </section>
+          <section id="models-page" class="page" aria-label="可用模型" hidden>
+            <div class="filter-bar"><label class="search-field"><span data-icon="search"></span><input id="model-search" type="search" placeholder="搜索模型名称或 ID" aria-label="搜索模型名称或 ID" autocomplete="off"></label><div class="segmented" role="group" aria-label="筛选模型状态"><button type="button" data-model-filter="all" aria-pressed="true">全部 <span id="model-total"></span></button><button type="button" data-model-filter="available" aria-pressed="false">可用</button><button type="button" data-model-filter="disabled" aria-pressed="false">不可用</button><button type="button" data-model-filter="unknown" aria-pressed="false">待确认</button></div></div>
+            <p id="models-context" class="context-line"></p><div id="models-list" class="models-grid"></div>
+          </section>
+          <section id="records-page" class="page" aria-label="用量记录" hidden>
+            <div class="filter-bar"><label class="field-label">月份（UTC）<input id="record-period" type="month" aria-label="记录月份（UTC）"></label><label class="field-label">排序<select id="record-sort" aria-label="记录排序"><option value="recent">最近活跃</option><option value="usage">用量最多</option></select></label></div>
+            <p id="records-context" class="context-line"></p><div class="card records-card"><div id="records-list"></div><div class="load-more"><button type="button" id="load-records" class="button button-secondary" data-action="load-records" hidden>加载更多记录</button></div></div>
+          </section>
+          <section id="accounts-page" class="page" aria-label="账户管理" hidden>
+            <div class="section-heading"><div><h2>已连接账号</h2><p class="section-description">在个人与工作账号间切换，每个账号的额度独立展示。</p></div><button type="button" class="button button-primary" data-action="login"><span data-icon="plus"></span>添加账号</button></div>
+            <div id="accounts-list" class="accounts-grid"></div>
+            <section class="card pet-card" id="pet-settings"><div class="section-heading"><div><div class="eyebrow">A SMALL COMPANION</div><h2>选一个，让桌面有点不一样</h2><p class="section-description">点击小伙伴打开主界面，拖动它找到合适的位置。</p></div><span id="pet-selection-label" class="subtle-badge">10 个伙伴</span></div><div id="pet-options" class="pet-grid"></div><div id="pet-controls" class="pet-controls"><label class="pet-size-control">尺寸 <input type="range" id="pet-size" min="64" max="160" step="8" value="96" disabled><output for="pet-size" id="pet-size-value">96 px</output></label><label class="toggle-label"><input type="checkbox" id="pet-motion" disabled><span class="switch" aria-hidden="true"></span>轻微动效</label><label class="toggle-label"><input type="checkbox" id="pet-topmost" disabled><span class="switch" aria-hidden="true"></span>保持置顶</label></div><p id="pet-help" class="context-line mb-0">在 Windows 桌面应用中设置伙伴，选择会保存在这台电脑。</p></section>
+          </section>
+          <footer class="workspace-footer"><span><span class="tiny-lock" data-icon="lock"></span> 数据保存在这台电脑</span><span id="last-sync">PilotMeter · 让用量清晰一点</span></footer>
+        </main>
+      </div>
+    </div>
+    <dialog id="login-dialog" class="dialog login-dialog" aria-labelledby="login-title"><div class="dialog-header"><span class="dialog-mark" data-icon="github"></span><button type="button" class="icon-button" data-login-action="close" aria-label="关闭登录"><span data-icon="close"></span></button></div><div class="dialog-body"><div class="eyebrow">CONNECT YOUR GITHUB</div><h2 id="login-title">连接你的 GitHub 账号</h2><p class="dialog-description" id="login-account-hint">在 GitHub 完成安全授权，PilotMeter 会自动连接。</p><div id="login-status" class="login-status" role="status" aria-live="polite">正在准备登录…</div><ol class="login-steps"><li><span class="step-number">1</span><div class="step-content"><h3>复制本次验证码</h3><div class="device-code-box"><code id="login-code">···· ····</code><button id="copy-login-code" type="button" class="icon-button" data-login-action="copy" aria-label="复制登录验证码" disabled><span data-icon="copy"></span></button></div><p id="login-copy-feedback" class="step-caption" aria-live="polite">验证码只用于本次登录。</p></div></li><li><span class="step-number">2</span><div class="step-content"><h3>在 GitHub 中输入并授权</h3><p class="step-caption">请确认 GitHub 上登录的是你要连接的账号。</p><button id="open-github" type="button" class="button button-primary" data-login-action="authorize" disabled>打开 GitHub 授权 <span data-icon="external"></span></button></div></li><li><span class="step-number">3</span><div class="step-content"><h3>完成后，回到这里</h3><p class="step-caption">账号和可用额度会自动显示，无需重复登录。</p></div></li></ol><details id="login-host-options" class="host-options"><summary>使用企业托管账号</summary><form id="login-host-form"><label for="login-host">GitHub 地址</label><div class="host-input-row"><input id="login-host" type="url" value="https://github.com" spellcheck="false" autocomplete="off" required><button type="submit" class="button button-secondary">重新连接</button></div><p class="step-caption">支持 github.com 或你的企业.ghe.com</p></form></details></div><div class="dialog-footer"><span id="login-expiry" class="step-caption"></span><button type="button" id="login-retry" class="button button-secondary" data-login-action="retry" hidden>重新获取验证码</button><button type="button" class="text-button" data-login-action="close">取消登录</button></div></dialog>
+    <dialog id="remove-dialog" class="dialog small-dialog" aria-labelledby="remove-title"><div class="dialog-body"><span class="dialog-mark" data-icon="users"></span><h2 id="remove-title">移除账号连接？</h2><p id="remove-description" class="dialog-description"></p><p class="context-line">本机历史记录会保留。你可以随时重新添加此账号。</p><p id="remove-error" role="alert" class="error-text" hidden></p></div><div class="dialog-footer"><button type="button" class="button button-secondary" data-action="cancel-remove">取消</button><button type="button" class="button button-danger" data-action="confirm-remove">移除连接</button></div></dialog>
+    <script type="module" src="./desktop.ts"></script>
+  </body>
+</html>

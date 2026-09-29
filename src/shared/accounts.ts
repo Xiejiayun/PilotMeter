@@ -39,6 +39,8 @@ export interface AccountLogin {
   verificationUri: string | null;
   userCode: string | null;
   expiresAt: string | null;
+  /** Existing local profile being reauthorized; never proof of completed identity. */
+  targetAccountId?: string | null;
   accountId: string | null;
   error: { code: string; message: string } | null;
 }

@@ -166,7 +166,7 @@ export class AccountsManager {
       let started;
       try { await mkdir(this.#dir, { recursive: true, mode: 0o700 }); started = await client.startLogin(targetHost); }
       catch (error) { await client.close(); throw error; }
-      const view: AccountLogin = { ...started, accountId: null };
+      const view: AccountLogin = { ...started, targetAccountId: expected?.id ?? null, accountId: null };
       this.#attempt = { view, client, providerId: started.id, homeId, expected, finalizing: null, committing: false };
       this.#changed(); return structuredClone(view);
     });
@@ -182,7 +182,7 @@ export class AccountsManager {
           if (attempt.view.status !== 'verifying' || this.#attempt !== attempt || this.#closed) return;
           attempt.view = { ...attempt.view, status: 'failed', error: { code: 'LOGIN_VERIFY_FAILED', message: '无法确认登录结果，请重新登录。' } };
         });
-      } else attempt.view = { ...state, accountId: null };
+      } else attempt.view = { ...state, targetAccountId: attempt.expected?.id ?? null, accountId: null };
     }
     return structuredClone(attempt.view);
   }

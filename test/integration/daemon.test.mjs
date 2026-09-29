@@ -6,6 +6,43 @@ import { tmpdir } from 'node:os';
 import { request as httpRequest } from 'node:http';
 import { ensureService, instanceAt, request } from '../../dist/daemon/client.js';
 
+test('desktop HTML and compiled assets are served locally under the existing CSP', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'pilotmeter-desktop-assets-'));
+  let instance;
+  try {
+    instance = await ensureService(dir);
+    const response = await fetch(`${instance.url}/desktop.html`);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type'), /^text\/html/);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.match(response.headers.get('content-security-policy'), /script-src 'self'/);
+    assert.match(response.headers.get('content-security-policy'), /style-src 'self'/);
+    const html = await response.text();
+    const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[A-Za-z0-9_.-]+)"/g)].map(match => match[1]);
+    assert.ok(assets.some(path => path.endsWith('.js')), 'desktop module must be compiled and included');
+    assert.ok(assets.some(path => path.endsWith('.css')), 'Tailwind stylesheet must be compiled and included');
+    assert.doesNotMatch(html, /<(?:script|link)[^>]+(?:src|href)="https?:/i, 'desktop cannot depend on CDN assets');
+    for (const path of new Set(assets)) {
+      const asset = await fetch(`${instance.url}${path}`);
+      assert.equal(asset.status, 200, `missing desktop asset ${path}`);
+      assert.ok((await asset.arrayBuffer()).byteLength > 0, `empty desktop asset ${path}`);
+      if (path.endsWith('.css')) assert.match(asset.headers.get('content-type'), /^text\/css/);
+      if (path.endsWith('.js')) assert.match(asset.headers.get('content-type'), /^text\/javascript/);
+    }
+    assert.equal((await fetch(`${instance.url}/desktop.ts`)).status, 404);
+    assert.equal((await fetch(`${instance.url}/package.json`)).status, 404);
+    assert.equal((await fetch(`${instance.url}/desktop.html`, { headers: { origin: 'https://attacker.example' } })).status, 403);
+    for (const path of ['/desktop.html', assets[0]]) {
+      assert.equal((await fetch(`${instance.url}${path}`, { headers: { 'x-pilotmeter-instance': 'stale-instance' } })).status, 409);
+      assert.equal((await fetch(`${instance.url}${path}`, { headers: { 'x-pilotmeter-instance': instance.instanceId } })).status, 200);
+    }
+  } finally {
+    if (instance && await instanceAt(dir)) await request(instance, '/api/shutdown', 'POST');
+    await new Promise(resolve => setTimeout(resolve, 200));
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('background service: concurrent start, authentication, isolation, restart, graceful stop', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'pilotmeter-daemon-'));
   let instance;

@@ -1,6 +1,6 @@
 # Windows 打包与发布
 
-Windows x64、Node.js 24.14+、npm 和系统 .NET Framework 4.8 编译器即可构建。成品不要求用户安装 Node、npm 或 WebView。
+Windows x64、Node.js 24.14+、npm 和系统 .NET Framework 4.8 编译器即可构建。成品不要求用户安装 Node 或 npm；HTML 主界面需要 Microsoft Edge WebView2 Evergreen Runtime，缺少时显示官方安装引导。构建脚本获取固定摘要的 WebView2 SDK，样式使用本地 Tailwind 编译。
 
 ## 本地一键验收与打包
 
@@ -10,7 +10,7 @@ npx --no-install playwright install chromium
 npm run release:windows
 ```
 
-该命令运行 Node 单元/集成测试、干净前缀 npm 安装验收、浏览器回归、Windows 构建、实际 EXE 隔离环境验收和发布文件校验。原生控件、账户 DTO、loopback 身份校验以及十个嵌入宠物资源由 Windows 原生测试验证。合成测试不消耗真实账户额度，也不证明组织账单已对账。
+该命令运行 Node 单元/集成测试、干净前缀 npm 安装验收、浏览器回归、Windows 构建、实际 EXE 隔离环境验收和发布文件校验。Windows 测试覆盖原生 PET、账户 DTO、loopback 身份校验以及真实 WebView2 中的页面、接口和宿主通信。需要本机已有 WebView2 Evergreen Runtime；CI 工作流会在隔离 runner 上安装 Microsoft 签名的运行时。合成测试不消耗真实账户额度，也不证明组织账单已对账。
 
 输出目录 `build/windows/`：
 
@@ -23,18 +23,20 @@ npm run release:windows
 
 仅重新构建使用 `npm run build:windows`；已有产物验收使用 `npm run test:windows` 和 `npm run release:check`。打包器从官方来源下载固定版本 Node，校验摘要，并锁定官方 Copilot CLI 和生产依赖。十个宠物 PNG 编入原生程序，不依赖设计目录或远程图片。
 
+页面使用本地 Tailwind 构建，不依赖在线 CDN。WebView2 SDK 固定为 `1.0.3537.50`，下载时核验 SHA-256；分发包包含必要的托管程序集、x64 loader 与许可证。`npm run design:export` 可另外生成 `docs/design/desktop-v3.html`，这是内联资源的离线设计稿，示例模式不执行真实账号操作，也不是 EXE 的运行依赖。
+
 ## GitHub Release
 
-1. 更新版本：`npm version 0.1.0-preview.11 --no-git-tag-version`，同步修改 `src/shared/runtime.ts` 的 `VERSION`，一起提交 package、lockfile 和运行时版本。安装包验收会拒绝版本不一致的产物。
-2. 添加对应版本的 `docs/releases/0.1.0-preview.11.md`，记录实际功能、升级方法与已知边界。
+1. 更新版本：`npm version 0.1.0-preview.12 --no-git-tag-version`，同步修改 `src/shared/runtime.ts` 的 `VERSION`，一起提交 package、lockfile 和运行时版本。安装包验收会拒绝版本不一致的产物。
+2. 添加对应版本的 `docs/releases/0.1.0-preview.12.md`，记录实际功能、升级方法与已知边界。
 3. 提交 PR，等待三平台 CI 通过后合并 main。
 4. 在最新 main 创建并推送版本标签：
 
 ```powershell
 git switch main
 git pull --ff-only
-git tag v0.1.0-preview.11
-git push origin v0.1.0-preview.11
+git tag v0.1.0-preview.12
+git push origin v0.1.0-preview.12
 ```
 
 `Windows Release` 工作流会验证标签与 package 版本一致、提交已进入 main、发布说明存在；在 Windows 上重新测试、打包、校验，然后上传 EXE、ZIP、版本清单与 SHA256SUMS。上传先进入草稿，全部成功后才公开；带 `-preview` 等后缀的版本自动标为 Pre-release。

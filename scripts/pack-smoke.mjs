@@ -177,10 +177,10 @@ try {
   assert.equal(`sha512-${createHash('sha512').update(archive).digest('base64')}`, packed.integrity);
   const packageFiles = packed.files.map(file => file.path);
   for (const file of packageFiles) {
-    assert.ok(/^(?:package\.json|README\.md|LICENSE|docs\/(?:compatibility|validation-guide|npm-package-contents|windows-exe|releasing)\.md|bin\/pilotmeter\.js|dist\/.+\.(?:js|d\.ts|js\.map)|public\/index\.html|public\/assets\/[A-Za-z0-9_.-]+\.(?:js|css|svg|ico))$/.test(file), `Unexpected archive member: ${file}`);
+    assert.ok(/^(?:package\.json|README\.md|LICENSE|docs\/(?:compatibility|validation-guide|npm-package-contents|windows-exe|releasing)\.md|bin\/pilotmeter\.js|dist\/.+\.(?:js|d\.ts|js\.map)|public\/(?:index|desktop)\.html|public\/assets\/[A-Za-z0-9_.-]+\.(?:js|css|svg|ico|png|woff2))$/.test(file), `Unexpected archive member: ${file}`);
     assert.ok(!/(?:^|\/)(?:\.env(?:\.|$)|test(?:s)?|fixtures|node_modules|\.git|\.npmrc|[^/]*(?:credentials|secrets)[^/]*)(?:\/|$)|\.(?:db|sqlite|log)(?:[.-]|$)/i.test(file), `Private/development file in archive: ${file}`);
   }
-  for (const required of ['package.json', 'bin/pilotmeter.js', 'dist/cli/main.js', 'dist/daemon/server.js', 'public/index.html', 'README.md', 'LICENSE', 'docs/compatibility.md', 'docs/validation-guide.md', 'docs/npm-package-contents.md', 'docs/windows-exe.md', 'docs/releasing.md']) assert.ok(packageFiles.includes(required), `Missing package file: ${required}`);
+  for (const required of ['package.json', 'bin/pilotmeter.js', 'dist/cli/main.js', 'dist/daemon/server.js', 'public/index.html', 'public/desktop.html', 'README.md', 'LICENSE', 'docs/compatibility.md', 'docs/validation-guide.md', 'docs/npm-package-contents.md', 'docs/windows-exe.md', 'docs/releasing.md']) assert.ok(packageFiles.includes(required), `Missing package file: ${required}`);
   assert.ok(packageFiles.some(path => /^public\/assets\/.+\.js$/.test(path)), 'Built browser script must be packed');
   assert.ok(packageFiles.some(path => /^public\/assets\/.+\.css$/.test(path)), 'Built stylesheet must be packed');
   record('Archive integrity and strict package contents');
@@ -235,19 +235,21 @@ try {
   assert.equal(status.reconciliation.state, 'unknown');
   record('Installed background service, loopback health, reuse, and unknown empty usage');
 
-  const htmlResponse = await http(instance.url, '/');
-  assert.equal(htmlResponse.status, 200);
-  assert.match(htmlResponse.headers.get('content-type'), /text\/html/);
-  assert.ok(htmlResponse.headers.get('content-security-policy')?.includes("script-src 'self'"));
-  const html = await htmlResponse.text();
-  assert.match(html, /<title>PilotMeter/);
-  assert.doesNotMatch(html, /(?:src|href)=["']\/main\.ts["']/);
-  const assetPaths = [...html.matchAll(/(?:src|href)=["'](\/assets\/[^"']+)["']/g)].map(match => match[1]);
-  assert.ok(assetPaths.some(path => path.endsWith('.js')) && assetPaths.some(path => path.endsWith('.css')));
-  for (const path of assetPaths) {
-    const response = await http(instance.url, path);
-    assert.equal(response.status, 200, `Installed static resource: ${path}`);
-    assert.ok((await response.text()).length > 100);
+  for (const page of ['/', '/desktop.html']) {
+    const htmlResponse = await http(instance.url, page);
+    assert.equal(htmlResponse.status, 200);
+    assert.match(htmlResponse.headers.get('content-type'), /text\/html/);
+    assert.ok(htmlResponse.headers.get('content-security-policy')?.includes("script-src 'self'"));
+    const html = await htmlResponse.text();
+    assert.match(html, /<title>PilotMeter/);
+    assert.doesNotMatch(html, /(?:src|href)=["'][^"']*\.ts["']/);
+    const assetPaths = [...html.matchAll(/(?:src|href)=["'](\/assets\/[^"']+)["']/g)].map(match => match[1]);
+    assert.ok(assetPaths.some(path => path.endsWith('.js')) && assetPaths.some(path => path.endsWith('.css')));
+    for (const path of assetPaths) {
+      const response = await http(instance.url, path);
+      assert.equal(response.status, 200, `Installed static resource: ${path}`);
+      assert.ok((await response.text()).length > 100);
+    }
   }
   await cli(dataDir, ['config', 'set', 'budget.monthlyCredits', '25.125']);
   assert.equal((await jsonAt(instance.url, '/api/settings')).monthlyBudget, '25.125');

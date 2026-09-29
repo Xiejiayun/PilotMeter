@@ -227,6 +227,33 @@ async function collect(instance, token, number, cost) {
   assert.equal((await api(instance, '/v1/traces', { method: 'POST', headers: { 'x-pilotmeter-token': token }, body: telemetry })).status, 200);
 }
 
+test('pending login recovery exposes only its local reauthorization target without claiming verified identity', async t => {
+  const fake = fakeAccounts(); const state = await service(t, false, fake.options);
+  const alice = await signedIn(state, fake, 'SyntheticAlice', '25');
+  const initial = (await api(state.instance, '/api/auth/accounts')).data.login;
+  assert.equal(initial.targetAccountId, null);
+  assert.equal(initial.accountId, alice.id);
+
+  fake.plans.push({ login: 'SyntheticAlice', used: '25' });
+  const started = await api(state.instance, '/api/auth/login', { method: 'POST', headers: state.browser, body: { host: 'https://github.com', accountId: alice.id } });
+  assert.equal(started.status, 200);
+  for (const pending of [started.data,
+    (await api(state.instance, `/api/auth/login/${started.data.id}`)).data,
+    (await api(state.instance, '/api/auth/accounts')).data.login,
+    (await api(state.instance, '/api/desktop')).data.login]) {
+    assert.equal(pending.targetAccountId, alice.id);
+    assert.equal(pending.accountId, null, 'the intended profile does not prove the authenticated identity');
+    assert.equal(pending.status, 'pending');
+    const json = JSON.stringify(pending);
+    assert.ok(!json.includes(fake.clients.at(-1).home));
+    assert.ok(!json.includes('private-selection'));
+  }
+  const cancelled = await api(state.instance, `/api/auth/login/${started.data.id}/cancel`, { method: 'POST', headers: state.browser });
+  assert.equal(cancelled.data.status, 'cancelled');
+  assert.equal(cancelled.data.targetAccountId, alice.id);
+  assert.equal(cancelled.data.accountId, null);
+});
+
 test('two authenticated HTTP profiles isolate live collectors, sessions, personal quotas and budgets', async t => {
   const fake = fakeAccounts(); const state = await service(t, false, fake.options);
   const { instance, browser, management } = state;
