@@ -29,13 +29,14 @@ export interface PersonalQuotaBucketView {
   usedPercentage: string | null;
   /** Confirmed-unit quantities; unspecified-unit values remain available in raw. */
   used: string | null;
+  usageSource: 'remaining' | 'quota-rpc';
   limit: string | null;
   remaining: string | null;
   remainingSource: 'calculated' | null;
   remainingPercentage: string | null;
   /** Amount above the fixed allowance, not a claim about billed overage charges. */
   overage: string | null;
-  /** Exact source quantities; callers must explicitly label unverified units. */
+  /** Quantities without unit conversion; used may be calculated from remaining quota. */
   raw: { used: string | null; limit: string | null; remainingPercentage: string | null };
   unlimited: boolean;
   nextResetAt: string | null;
@@ -67,6 +68,7 @@ function projectBucket(bucket: AccountQuotaBucket, fetchedAt: number, now: numbe
   const unit = bucket.unit === 'ai-credits' || bucket.unit === 'premium-requests' ? bucket.unit : 'unspecified';
   const unitLabel = unit === 'ai-credits' ? 'AI Credits' : unit === 'premium-requests' ? 'Premium Requests' : '单位未确认';
   const rawUsed = quantity(bucket.used); const rawLimit = quantity(bucket.limit);
+  const usageSource = bucket.usageSource === 'remaining' ? 'remaining' : 'quota-rpc';
   const unlimited = bucket.unlimited === true;
   const used = unit === 'unspecified' ? null : rawUsed;
   const limit = unit === 'unspecified' || unlimited ? null : rawLimit;
@@ -78,14 +80,14 @@ function projectBucket(bucket: AccountQuotaBucket, fetchedAt: number, now: numbe
   const percent = unlimited || rawLimit === '0' || overage ? null : ratio(bucket.usedPercentage);
   const numeric = used === null ? '已用未知' : `${used}${limit === null ? '' : ` / ${limit}`}`;
   const value = unlimited ? '无固定上限' : percent?.text ?? numeric;
-  const quantityDetail = unit === 'unspecified' ? '数量单位未确认；原始数值不做换算'
+  const quantityDetail = unit === 'unspecified' ? '数量单位未确认；数值未换算计量单位'
     : used === null ? `已用数量未知${limit === null ? '' : `；固定额度 ${limit} ${unitLabel}`}`
       : `已用 ${used}${limit === null ? ` ${unitLabel}` : ` / ${limit} ${unitLabel}`}`;
-  const detail = `${unlimited ? '无固定上限；' : ''}${quantityDetail}${overage ? '；已超出固定额度' : !unlimited && rawLimit === '0' ? unit === 'unspecified' ? '；比例不可用' : '；固定额度为 0，比例不可用' : ''}。`;
+  const detail = `${unlimited ? '无固定上限；' : ''}${quantityDetail}${usageSource === 'remaining' ? '；已用按总额减剩余量计算' : ''}${overage ? '；已超出固定额度' : !unlimited && rawLimit === '0' ? unit === 'unspecified' ? '；比例不可用' : '；固定额度为 0，比例不可用' : ''}。`;
   const reset = timestamp(bucket.resetAt);
   return {
     key: bucket.key, label: quotaBucketLabel(bucket.key), unit, unitLabel, value, detail,
-    percentage: percent?.percentage ?? null, usedPercentage: percent?.exact ?? null, used, limit, remaining, remainingSource: remaining === null ? null : 'calculated',
+    percentage: percent?.percentage ?? null, usedPercentage: percent?.exact ?? null, used, usageSource, limit, remaining, remainingSource: remaining === null ? null : 'calculated',
     remainingPercentage, overage: exceeded, raw: { used: rawUsed, limit: unlimited ? null : rawLimit, remainingPercentage: rawRemainingPercentage }, unlimited,
     nextResetAt: reset !== null && reset > now && reset > fetchedAt ? new Date(reset).toISOString() : null,
   };

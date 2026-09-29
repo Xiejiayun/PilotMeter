@@ -77,12 +77,13 @@ export function initializeAccounts(options: AccountUI): { load: () => Promise<Ac
       card.append(progress);
     }
     if (bucket.unit === 'unspecified') {
-      card.append(node('p', 'quota-amount', '原始数值 · 单位未确认'));
-      if (bucket.unlimited && used !== null) card.append(node('p', 'quota-amount', `原始已用 (used)：${exactAmount(used)}`));
+      card.append(node('p', 'quota-amount', '额度数值 · 单位未确认'));
+      if (bucket.unlimited && used !== null) card.append(node('p', 'quota-amount', `已用数值 (used)：${exactAmount(used)}`));
     }
     if (bucket.unit !== 'unspecified' || !hasAmounts && !bucket.unlimited || bucket.detail.includes('；已超出固定额度') || limit === '0') {
       card.append(node('p', 'quota-amount', bucket.detail));
     }
+    card.append(node('p', 'small muted', bucket.usageSource === 'remaining' ? '已用按总额减剩余量计算；GitHub 返回的比例可能已舍入。' : 'GitHub 返回值，精度依上游。'));
     if (bucket.nextResetAt) card.append(node('p', 'small muted', `下次重置 ${time(bucket.nextResetAt)}`));
     return card;
   }

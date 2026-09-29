@@ -95,6 +95,25 @@ test('unknown quantity units preserve raw values but show remaining percentage w
   await expect(page.locator('#quota-area .quota-unit')).toContainText('单位待确认');
   await expect(page.locator('#quota-area .quota-metrics')).not.toContainText('AI Credits');
   await expect(page.locator('#quota-area .quota-metrics')).not.toContainText('Premium Requests');
+  await expect(page.locator('#quota-area .quota-metric').first()).toContainText('GitHub 返回值，精度依上游');
+  await expect(page.locator('#quota-area')).not.toContainText('保持 GitHub 原始精度');
+});
+
+test('derived usage shows its fractional quantity and source without inventing a unit from the rounded ratio', async ({ page }) => {
+  const data = desktopFixture({ unit: 'unspecified' });
+  Object.assign(data.quotas[aliceId].buckets[0], { used: '39876.6', limit: '1000000',
+    usedPercentage: '4', remainingPercentage: '96', usageSource: 'remaining' });
+  await open(page, data);
+  await expect(values(page)).toHaveText(['39,876.6', '1,000,000', '96%']);
+  await expect(page.locator('#quota-area .quota-metric').first()).toContainText('按总额减剩余量计算');
+  await expect(page.locator('#quota-area .quota-progress-label')).toContainText('4%');
+  await expect(page.locator('#quota-area .quota-unit')).toContainText('单位待确认');
+  await expect(page.locator('#quota-area .quota-metrics')).not.toContainText('AI Credits');
+  await expect(page.locator('#quota-area .quota-metrics')).not.toContainText('Premium Requests');
+  await expect(page.locator('#quota-area')).not.toContainText('40,000');
+  await expect(page.locator('#quota-area')).not.toContainText('保持 GitHub 原始精度');
+  await page.locator('#quota-explanation > summary').click();
+  await expect(page.locator('#quota-explanation')).toContainText('百分比由 GitHub 返回，可能已舍入，不能用于反算精确已用量。');
 });
 
 test('first run invites login without fabricating a zero balance or account models', async ({ page }) => {

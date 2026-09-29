@@ -15,6 +15,8 @@ export interface AccountQuotaBucket {
   label: string;
   unit: 'ai-credits' | 'premium-requests' | 'unspecified';
   used: string | null;
+  /** Missing on older snapshots. Quantities from the quota RPC may use rounded percentages. */
+  usageSource?: 'remaining' | 'quota-rpc';
   limit: string | null;
   remainingPercentage: string | null;
   usedPercentage: string | null;

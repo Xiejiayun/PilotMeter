@@ -222,7 +222,7 @@ test('account queries use only official read-only RPCs and discard credential-be
   const quota = await client.getQuota('account-two');
   assert.equal(quota.selectionId, 'account-two'); assert.equal(quota.scope, 'user');
   assert.deepEqual(quota.snapshots, [{ type: 'premium_interactions', isUnlimitedEntitlement: false, entitlementRequests: '100',
-    usedRequests: '9007199254740993.123456789', remainingPercentage: '42.5', overage: '0.123456789123456789',
+    usedRequests: '9007199254740993.123456789', usageSource: 'quota-rpc', remainingPercentage: '42.5', overage: '0.123456789123456789',
     usageAllowedWithExhaustedQuota: true, overageAllowedWithExhaustedQuota: false, resetDate: '2026-10-01T00:00:00Z', unit: null, billingMode: 'unknown' }]);
   assert.doesNotMatch(JSON.stringify({ accounts, quota }), /synthetic-private|token|sensitive/);
   const trace = await requests(home);
@@ -231,6 +231,141 @@ test('account queries use only official read-only RPCs and discard credential-be
   assert.deepEqual(trace.slice(1).map(row => row.method), ['connect', 'auth.getStatus', 'account.getAllUsers', 'account.getQuota']);
   assert.deepEqual(trace.at(-1).params, { selectionId: 'account-two' });
   await assert.rejects(client.getQuota('not-listed'), { code: 'ACCOUNT_NOT_FOUND' });
+});
+
+function metadataFixture() {
+  return {
+    accounts: { 'account-one': { quota_snapshots: { premium_interactions: {
+      entitlement: 1000000, quota_remaining: 960123.4, remaining: 960123, percent_remaining: 96,
+      unlimited: false, has_quota: true, sensitive: 'synthetic-private-metadata',
+    } } } },
+    rpc: { entitlementRequests: 1000000, usedRequests: 40000, remainingPercentage: 96, overage: 0 },
+  };
+}
+async function metadataClient(t, fixture) {
+  const result = await clientFor(t, 'quota-metadata');
+  const backing = join(result.home, 'mock-quota-metadata.json');
+  await writeFile(backing, JSON.stringify(fixture));
+  return { ...result, backing };
+}
+
+test('precise account remaining overrides rounded RPC usage without changing official percentages or inferring units', async t => {
+  for (const [name, primary, used] of [
+    ['fractional quota_remaining', 960123.4, '39876.6'],
+    ['remaining when quota_remaining is absent', undefined, '39877'],
+    ['remaining when quota_remaining is invalid', -1, '39877'],
+  ]) await t.test(name, async subtest => {
+    const fixture = metadataFixture();
+    fixture.accounts['account-one'].quota_snapshots.premium_interactions.quota_remaining = primary;
+    const { client } = await metadataClient(subtest, fixture);
+    const accounts = await client.listAccounts();
+    const quota = await client.getQuota(accounts[0].selectionId);
+    const snapshot = quota.snapshots[0];
+    assert.equal(snapshot.usedRequests, used);
+    assert.equal(snapshot.usageSource, 'remaining');
+    assert.equal(snapshot.entitlementRequests, '1000000');
+    assert.equal(snapshot.remainingPercentage, '96');
+    assert.equal(snapshot.overage, '0');
+    assert.equal(snapshot.unit, null); assert.equal(snapshot.billingMode, 'unknown');
+    assert.doesNotMatch(JSON.stringify({ accounts, quota }), /synthetic-private|sensitive|token|quota_snapshots|quota_remaining/);
+  });
+});
+
+test('raw numeric metadata tokens preserve large and fractional digits through exact subtraction', async t => {
+  for (const field of ['quota_remaining', 'remaining']) await t.test(field, async subtest => {
+    const fixture = metadataFixture();
+    Object.assign(fixture.accounts['account-one'].quota_snapshots.premium_interactions, {
+      entitlement: 'raw-number:9007199254740993.123456789', quota_remaining: undefined,
+      [field]: 'raw-number:9007199254740993.000000001', percent_remaining: 100,
+    });
+    Object.assign(fixture.rpc, { entitlementRequests: 'raw-number:9007199254740993.123456789', usedRequests: 0, remainingPercentage: 100 });
+    const { client } = await metadataClient(subtest, fixture);
+    await client.listAccounts();
+    const snapshot = (await client.getQuota('account-one')).snapshots[0];
+    assert.equal(snapshot.entitlementRequests, '9007199254740993.123456789');
+    assert.equal(snapshot.usedRequests, '0.123456788');
+    assert.equal(snapshot.usageSource, 'remaining');
+  });
+});
+
+test('remaining subtraction beyond supported decimal precision retains usable RPC usage', async t => {
+  const fixture = metadataFixture();
+  const entitlement = '9'.repeat(256);
+  Object.assign(fixture.accounts['account-one'].quota_snapshots.premium_interactions, {
+    entitlement, quota_remaining: `0.${'0'.repeat(254)}1`, percent_remaining: 100,
+  });
+  Object.assign(fixture.rpc, { entitlementRequests: entitlement, usedRequests: 0, remainingPercentage: 100 });
+  const { client } = await metadataClient(t, fixture);
+  await client.listAccounts();
+  const snapshot = (await client.getQuota('account-one')).snapshots[0];
+  assert.equal(snapshot.usedRequests, '0');
+  assert.equal(snapshot.usageSource, 'quota-rpc');
+});
+
+test('optional remaining metadata falls back to RPC usage when missing, malformed, unlimited or inconsistent', async t => {
+  const changes = [
+    ['no account metadata', fixture => { fixture.accounts = {}; }],
+    ['wrong bucket', fixture => { const user = fixture.accounts['account-one']; user.quota_snapshots.chat = user.quota_snapshots.premium_interactions; delete user.quota_snapshots.premium_interactions; }],
+    ['malformed snapshots', fixture => { fixture.accounts['account-one'].quota_snapshots = []; }],
+    ['missing entitlement', (_fixture, quota) => { delete quota.entitlement; }],
+    ['negative entitlement', (_fixture, quota) => { quota.entitlement = -1; }],
+    ['mismatched entitlement', (_fixture, quota) => { quota.entitlement = 2000000; }],
+    ['missing percentage', (_fixture, quota) => { delete quota.percent_remaining; }],
+    ['mismatched percentage', (_fixture, quota) => { quota.percent_remaining = 95; }],
+    ['percentage beyond range', (_fixture, quota) => { quota.percent_remaining = 101; }],
+    ['unlimited metadata', (_fixture, quota) => { quota.unlimited = true; }],
+    ['unconfirmed entitlement', (_fixture, quota) => { delete quota.unlimited; }],
+    ['no quota', (_fixture, quota) => { quota.has_quota = false; }],
+    ['malformed has_quota', (_fixture, quota) => { quota.has_quota = 'true'; }],
+    ['missing remaining', (_fixture, quota) => { delete quota.quota_remaining; delete quota.remaining; }],
+    ['negative remaining', (_fixture, quota) => { quota.quota_remaining = -1; quota.remaining = -1; }],
+    ['remaining beyond entitlement', (_fixture, quota) => { quota.quota_remaining = 1000001; quota.remaining = 1000001; }],
+    ['malformed remaining', (_fixture, quota) => { quota.quota_remaining = {}; quota.remaining = 'NaN'; }],
+    ['excessive decimal precision', (_fixture, quota) => { quota.quota_remaining = '1'.repeat(257); delete quota.remaining; }],
+    ['zero entitlement', (fixture, quota) => { quota.entitlement = 0; quota.quota_remaining = 0; fixture.rpc.entitlementRequests = 0; }],
+    ['unlimited RPC', fixture => { fixture.rpc.isUnlimitedEntitlement = true; }],
+  ];
+  for (const [name, change] of changes) await t.test(name, async subtest => {
+    const fixture = metadataFixture();
+    change(fixture, fixture.accounts['account-one'].quota_snapshots.premium_interactions);
+    const { client } = await metadataClient(subtest, fixture);
+    await client.listAccounts();
+    const snapshot = (await client.getQuota('account-one')).snapshots[0];
+    assert.equal(snapshot.usedRequests, '40000');
+    assert.equal(snapshot.usageSource, 'quota-rpc');
+  });
+});
+
+test('overage and already over-entitlement RPC usage are never reduced to capped remaining', async t => {
+  for (const [used, overage] of [[1000012.5, 0], [1000012.5, 12.5], [1000000, 12.5]]) await t.test(`used ${used}, overage ${overage}`, async subtest => {
+    const fixture = metadataFixture();
+    Object.assign(fixture.accounts['account-one'].quota_snapshots.premium_interactions, { quota_remaining: 0, remaining: 0, percent_remaining: 0 });
+    Object.assign(fixture.rpc, { usedRequests: used, remainingPercentage: 0, overage });
+    const { client } = await metadataClient(subtest, fixture);
+    await client.listAccounts();
+    const snapshot = (await client.getQuota('account-one')).snapshots[0];
+    assert.equal(snapshot.usedRequests, String(used));
+    assert.equal(snapshot.overage, String(overage));
+    assert.equal(snapshot.usageSource, 'quota-rpc');
+  });
+});
+
+test('remaining metadata is isolated by selected account and replaced across runtime refreshes', async t => {
+  const fixture = metadataFixture();
+  fixture.accounts['account-two'] = structuredClone(fixture.accounts['account-one']);
+  fixture.accounts['account-two'].quota_snapshots.premium_interactions.quota_remaining = 960555.5;
+  const { client, backing } = await metadataClient(t, fixture);
+  await client.listAccounts();
+  const [first, second] = await Promise.all([client.getQuota('account-one'), client.getQuota('account-two')]);
+  assert.equal(first.snapshots[0].usedRequests, '39876.6');
+  assert.equal(second.snapshots[0].usedRequests, '39444.5');
+  await assert.rejects(client.getQuota('account-one'), { code: 'ACCOUNT_NOT_FOUND' });
+  fixture.accounts = {};
+  await writeFile(backing, JSON.stringify(fixture));
+  await client.listAccounts({ fresh: true });
+  const refreshed = (await client.getQuota('account-one')).snapshots[0];
+  assert.equal(refreshed.usedRequests, '40000');
+  assert.equal(refreshed.usageSource, 'quota-rpc');
 });
 
 test('fragmented JSON-RPC headers/bodies and additional Content-Type headers remain valid', async t => {

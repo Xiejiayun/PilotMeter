@@ -156,7 +156,17 @@ internal static class NativeViewTests
                     ApplyDashboard(window, DashboardSnapshot(identity, AccountId, raw));
                     CheckMetric(window, "quotaUsed", "62,000", "62,000"); CheckMetric(window, "quotaTotal", "2,000,000", "2,000,000");
                     Check(DashboardField<Label>(window, "quotaDetail").Text.Contains("单位未确认"), "Visible source quantities must identify unconfirmed units once beside the amount rows.");
+                    Check(DashboardField<Label>(window, "quotaDetail").Text.Contains("GitHub 返回值，精度依上游"), "Snapshots without precise remaining metadata must keep the upstream precision qualification.");
+                    Check(DashboardField<Label>(window, "quotaRatios").Text.Contains("GitHub 比例可能已舍入"), "A returned quota percentage must not imply exact agreement with numeric quantities.");
                     Check(!DashboardField<Panel>(window, "rawPanel").Visible, "Source quantities must be available without opening raw details.");
+
+                    raw["usageSource"] = "remaining";
+                    NativeData.Map(raw, "raw")["used"] = "61997.25";
+                    ApplyDashboard(window, DashboardSnapshot(identity, AccountId, raw));
+                    CheckMetric(window, "quotaUsed", "61,997.25", "61,997.25");
+                    Check(DashboardField<Label>(window, "quotaDetail").Text.Contains("按总额减剩余量计算"), "Computed consumption must retain its provenance beside the visible amount.");
+                    var sourceDetails = DashboardField<TextBox>(window, "rawText").Text;
+                    Check(sourceDetails.Contains("已用数值 (used)：61,997.25") && sourceDetails.Contains("按总额减剩余量计算") && !sourceDetails.Contains("原始已用"), "Details must not label a calculated amount as an unmodified upstream value.");
 
                     var precise = Bucket(); precise["unit"] = "ai-credits"; precise["used"] = "9007199254740993.000000001";
                     precise["limit"] = "18014398509481986.000000003"; precise["usedPercentage"] = "49.999999999999999999999999999";
@@ -274,6 +284,14 @@ internal static class NativeViewTests
         var quantity = Bucket(); quantity["value"] = "3 / 10"; quantity["percentage"] = null; quantity["unit"] = "ai-credits"; quantity["unitLabel"] = "AI Credits";
         var creditView = NativeBucket.Read(quantity);
         Check(creditView.Value == "3 / 10" && creditView.UnitLabel == "AI Credits" && creditView.Unit == "ai-credits", "A quantity-only primary value must retain its explicitly known unit.");
+        Check(creditView.UsageSource == "quota-rpc", "Older snapshots without provenance must use the conservative upstream source.");
+        var sourced = Bucket(); sourced["usageSource"] = "remaining";
+        Check(NativeBucket.Read(sourced).UsageSource == "remaining", "Only the documented precise remaining source may mark consumption as calculated.");
+        foreach (var source in new object[] { "quota-rpc", "unrecognized", "remaining\r\nextra", null, 7 })
+        {
+            sourced["usageSource"] = source;
+            Check(NativeBucket.Read(sourced).UsageSource == "quota-rpc", "Unknown provenance must not become display text or an exact-quantity claim.");
+        }
         var invalidUnit = Bucket(); invalidUnit["unit"] = "inferred-from-category";
         Reject(delegate { NativeBucket.Read(invalidUnit); }, "Categories must never become inferred quantity units.");
         var exact = Bucket(); exact["unit"] = "ai-credits"; exact["unitLabel"] = "AI Credits"; exact["used"] = "0.000000001";

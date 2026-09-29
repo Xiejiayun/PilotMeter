@@ -76,6 +76,30 @@ test('unspecified units expose exact raw amounts separately from confirmed-unit 
   assert.equal(reported.usedPercentage, '3.1'); assert.equal(reported.value, '3.1%');
 });
 
+test('derived usage keeps its source and fractional amount distinct from rounded provider percentages', () => {
+  const input = bucket('premium_interactions', { used: '39876.6', limit: '1000000',
+    usedPercentage: '4', remainingPercentage: '96', usageSource: 'remaining' });
+  const result = projectPersonalQuota(quota([input]), now).primary;
+  assert.equal(result.usageSource, 'remaining');
+  assert.deepEqual(result.raw, { used: '39876.6', limit: '1000000', remainingPercentage: '96' });
+  assert.equal(result.unit, 'unspecified');
+  assert.equal(result.used, null); assert.equal(result.limit, null); assert.equal(result.remaining, null);
+  assert.equal(result.usedPercentage, '4'); assert.equal(result.remainingPercentage, '96');
+  assert.equal(result.value, '4%');
+  assert.match(result.detail, /已用按总额减剩余量计算/);
+  assert.doesNotMatch(result.detail, /AI Credits|Premium Requests|40000/);
+});
+
+test('quota projection defaults missing and unknown usage sources to quota RPC', () => {
+  for (const source of [{}, { usageSource: 'quota-rpc' }, { usageSource: null }, { usageSource: 'unsafe-source-label' }, { usageSource: { token: 'unsafe-source-label' } }]) {
+    const result = projectPersonalQuota(quota([bucket('chat', source)]), now).primary;
+    assert.equal(result.usageSource, 'quota-rpc');
+    assert.equal(result.raw.used, '25');
+    assert.doesNotMatch(result.detail, /按总额减剩余量计算/);
+    assert.doesNotMatch(JSON.stringify(result), /unsafe-source-label|token/);
+  }
+});
+
 test('remaining allowance uses exact subtraction only for explicit units and fixed known totals', () => {
   for (const [used, limit, remaining, overage] of [
     ['0', '100', '100', null], ['9007199254740993.123456789', '9007199254740994', '0.876543211', null],

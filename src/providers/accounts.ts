@@ -43,7 +43,8 @@ export function personalQuota(accountId: string, result: CopilotQuota): Personal
       const usedPercentage = snapshot.isUnlimitedEntitlement ? null : remainingPercentage !== null ? subtractDecimals('100', remainingPercentage)
         : used !== null && limit !== null ? exactPercentageOf(used, limit) : null;
       return { key: snapshot.type, label: quotaBucketLabel(snapshot.type),
-        unit, used, limit, remainingPercentage, usedPercentage, unlimited: snapshot.isUnlimitedEntitlement, resetAt: snapshot.resetDate };
+        unit, used, usageSource: snapshot.usageSource === 'remaining' ? 'remaining' : 'quota-rpc',
+        limit, remainingPercentage, usedPercentage, unlimited: snapshot.isUnlimitedEntitlement, resetAt: snapshot.resetDate };
     }),
   };
 }

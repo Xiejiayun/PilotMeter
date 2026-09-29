@@ -656,6 +656,30 @@ test('personal quota preserves percentages and never infers AI Credits from a bu
   assert.ok(!JSON.stringify(result).includes('selectionId'));
 });
 
+test('personal quota retains derived usage and its source without replacing rounded provider percentages', () => {
+  const template = quota().snapshots[0];
+  const result = personalQuota('synthetic-account', quota('25', { snapshots: [{
+    ...template, type: 'premium_interactions', unit: null, usedRequests: '39876.6', entitlementRequests: '1000000',
+    remainingPercentage: '96', usageSource: 'remaining',
+  }] })).buckets[0];
+  assert.equal(result.used, '39876.6');
+  assert.equal(result.limit, '1000000');
+  assert.equal(result.usageSource, 'remaining');
+  assert.equal(result.unit, 'unspecified');
+  assert.equal(result.remainingPercentage, '96');
+  assert.equal(result.usedPercentage, '4');
+});
+
+test('personal quota defaults legacy or invalid usage sources to quota RPC without copying source content', () => {
+  const template = quota().snapshots[0];
+  for (const source of [{}, { usageSource: 'quota-rpc' }, { usageSource: null }, { usageSource: 'unsafe-source-label' }, { usageSource: { token: 'unsafe-source-label' } }]) {
+    const result = personalQuota('synthetic-account', quota('25', { snapshots: [{ ...template, ...source }] })).buckets[0];
+    assert.equal(result.usageSource, 'quota-rpc');
+    assert.equal(result.used, '25');
+    assert.doesNotMatch(JSON.stringify(result), /unsafe-source-label|token/);
+  }
+});
+
 test('personal quota keeps explicit units, exact amounts, zero, unlimited and missing percentages distinct', () => {
   const template = quota().snapshots[0];
   const result = personalQuota('synthetic-account', quota('25', { snapshots: [

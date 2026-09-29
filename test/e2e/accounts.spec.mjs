@@ -120,7 +120,7 @@ test('device code login confirms selected identity and uses CSRF without exposin
   expect(await page.evaluate(() => ({ local: localStorage.length, session: sessionStorage.length }))).toEqual({ local: 0, session: 0 });
 });
 
-test('current quota shows exact raw quantities with unconfirmed units and keeps its own period', async ({ page }) => {
+test('current quota shows quantities with unconfirmed units and keeps its own period', async ({ page }) => {
   const data = state();
   await mock(page, data);
   await page.goto('/');
@@ -128,7 +128,8 @@ test('current quota shows exact raw quantities with unconfirmed units and keeps 
   await expect(page.locator('.quota-primary h4')).toHaveText('高级请求');
   await expect(page.locator('.quota-primary .quota-value')).toHaveText('75 / 200');
   await expect(page.locator('.quota-primary .quota-caption')).toHaveText('已用 / 总额');
-  await expect(page.locator('.quota-primary')).toContainText('原始数值 · 单位未确认');
+  await expect(page.locator('.quota-primary')).toContainText('额度数值 · 单位未确认');
+  await expect(page.locator('.quota-primary')).toContainText('GitHub 返回值，精度依上游。');
   await expect(page.locator('#quota-buckets')).not.toContainText('重置');
   await expect(page.locator('#quota-buckets')).not.toContainText('AI Credits');
   await expect(page.locator('#quota-buckets')).not.toContainText('Premium Requests');
@@ -146,7 +147,22 @@ test('source used 62000 and limit 2000000 are visible in the main quota without 
   await expect(page.locator('.quota-primary .quota-value')).toHaveText('62,000 / 2,000,000');
   await expect(page.locator('.quota-primary .quota-value')).toBeVisible();
   await expect(page.locator('.quota-primary .quota-percentage')).toHaveText('当前周期已用 3.1%');
-  await expect(page.locator('.quota-primary')).toContainText('原始数值 · 单位未确认');
+  await expect(page.locator('.quota-primary')).toContainText('额度数值 · 单位未确认');
+});
+
+test('derived account usage shows its amount and calculation source separately from the provider ratio', async ({ page }) => {
+  const data = state();
+  Object.assign(data.overview.quota.buckets[0], { used: '39876.6', limit: '1000000',
+    usedPercentage: '4', remainingPercentage: '96', usageSource: 'remaining' });
+  await mock(page, data);
+  await page.goto('/');
+  await expect(page.locator('.quota-primary .quota-value')).toHaveText('39,876.6 / 1,000,000');
+  await expect(page.locator('.quota-primary .quota-percentage')).toHaveText('当前周期已用 4%');
+  await expect(page.locator('.quota-primary')).toContainText('额度数值 · 单位未确认');
+  await expect(page.locator('.quota-primary')).toContainText('已用按总额减剩余量计算；GitHub 返回的比例可能已舍入。');
+  await expect(page.locator('.quota-primary')).not.toContainText('40,000');
+  await expect(page.locator('.quota-primary')).not.toContainText('AI Credits');
+  await expect(page.locator('.quota-primary')).not.toContainText('Premium Requests');
 });
 
 for (const unit of ['unspecified', 'ai-credits']) {

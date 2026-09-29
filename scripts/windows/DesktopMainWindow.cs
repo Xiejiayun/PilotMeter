@@ -104,7 +104,7 @@ internal sealed class NativeAccount
 
 internal sealed class NativeBucket
 {
-    internal string Key, Label, Value, Detail, NextResetAt, Unit, UnitLabel;
+    internal string Key, Label, Value, Detail, NextResetAt, Unit, UnitLabel, UsageSource;
     internal string Used, Limit, Remaining, Overage, RemainingSource, UsedPercentageText, RemainingPercentageText, RawUsed, RawLimit, RawRemainingPercentage;
     internal double? Percentage, RemainingPercentage;
     internal bool Unlimited;
@@ -118,6 +118,8 @@ internal sealed class NativeBucket
             NextResetAt = NativeData.Text(source, "nextResetAt", 80, true),
             Unit = NativeData.Text(source, "unit", 32), UnitLabel = NativeData.Clean(NativeData.Text(source, "unitLabel", 80), 80), Unlimited = NativeData.Flag(source, "unlimited")
         };
+        object usageSource;
+        result.UsageSource = source.TryGetValue("usageSource", out usageSource) && (usageSource as string) == "remaining" ? "remaining" : "quota-rpc";
         if (result.Unit != "ai-credits" && result.Unit != "premium-requests" && result.Unit != "unspecified") throw new InvalidDataException("额度单位无效。");
         result.Used = NativeDisplay.Quantity(source, "used"); result.Limit = NativeDisplay.Quantity(source, "limit");
         result.Remaining = NativeDisplay.Quantity(source, "remaining"); result.Overage = NativeDisplay.Quantity(source, "overage");

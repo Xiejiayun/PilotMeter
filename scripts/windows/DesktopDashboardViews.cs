@@ -48,6 +48,11 @@ internal static class NativeDisplay
         return value == null ? "—" : value + "%";
     }
 
+    internal static string UsageSource(NativeBucket bucket)
+    {
+        return bucket.UsageSource == "remaining" ? "按总额减剩余量计算" : "GitHub 返回值，精度依上游";
+    }
+
     internal static long Count(Dictionary<string, object> source, string key)
     {
         object value;
@@ -789,7 +794,7 @@ internal sealed class DashboardWindow : NativeForm
         FitTextRow(layout, quotaDetail, 4, quota, true);
 
         var expanders = new Panel { Height = 28, Margin = new Padding(3, 0, 0, 8) }; var expandRow = Columns(-1, -1);
-        other = Link("其他额度 ▸"); raw = Link("查看原始数据 ▸"); raw.TextAlign = ContentAlignment.MiddleRight;
+        other = Link("其他额度 ▸"); raw = Link("查看额度数值 ▸"); raw.TextAlign = ContentAlignment.MiddleRight;
         other.LinkClicked += delegate { ExpandOther(!expanded); }; raw.LinkClicked += delegate { ExpandRaw(!rawExpanded); };
         expandRow.Controls.Add(other, 0, 0); expandRow.Controls.Add(raw, 1, 0); expanders.Controls.Add(expandRow); page.Controls.Add(expanders);
         otherPanel = Card(page, 136); var categoryLayout = Rows(28, 35, 24);
@@ -803,7 +808,7 @@ internal sealed class DashboardWindow : NativeForm
         };
         categoryLayout.Controls.Add(bucketChoice, 0, 1); categoryLayout.Controls.Add(Caption("聊天、补全等无固定上限类别不视为账户总余额。"), 0, 2); otherPanel.Controls.Add(categoryLayout); otherPanel.Visible = false;
         rawPanel = Card(page, 160); rawPanel.SurfaceColor = Color.FromArgb(252, 246, 230);
-        rawText = new TextBox { Name = "RawQuotaFields", AccessibleName = "允许展示的原始额度数值", Multiline = true, ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = rawPanel.SurfaceColor, ForeColor = Ink, Dock = DockStyle.Fill, ScrollBars = ScrollBars.Vertical };
+        rawText = new TextBox { Name = "RawQuotaFields", AccessibleName = "允许展示的额度数值", Multiline = true, ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = rawPanel.SurfaceColor, ForeColor = Ink, Dock = DockStyle.Fill, ScrollBars = ScrollBars.Vertical };
         rawPanel.Controls.Add(rawText); rawPanel.Visible = false;
         var local = Card(page, 112); var localLayout = Rows(29, 39);
         var localHeader = Columns(-1, 110); localHeader.Controls.Add(Title("本机用量"), 0, 0); var history = Link("查看记录  →"); history.LinkClicked += delegate { Navigate("records"); }; localHeader.Controls.Add(history, 1, 0);
@@ -1170,9 +1175,9 @@ internal sealed class DashboardWindow : NativeForm
             quotaUsed.Text = NativeDisplay.Amount(bucket.Used ?? bucket.RawUsed); quotaTotal.Text = bucket.Unlimited ? "无固定上限" : NativeDisplay.Amount(bucket.Limit ?? bucket.RawLimit);
             progress.Percentage = bucket.Percentage;
             progress.AccessibleDescription = bucket.UsedPercentageText == null ? "比例未知" : "已用 " + NativeDisplay.ExactPercentage(bucket.UsedPercentageText);
-            quotaRatios.Text = bucket.Unlimited ? "无固定上限" : "已用比例  " + NativeDisplay.ExactPercentage(bucket.UsedPercentageText);
+            quotaRatios.Text = bucket.Unlimited ? "无固定上限" : "已用比例  " + NativeDisplay.ExactPercentage(bucket.UsedPercentageText) + (bucket.UsedPercentageText != null ? " · GitHub 比例可能已舍入" : "");
             var stale = result.Stale || networkError != null;
-            quotaDetail.Text = (stale ? "旧快照 · " + NativeDisplay.Time(result.FetchedAt) + " · " : "") + (bucket.Unit == "unspecified" ? "原始数值 · 单位未确认" : bucket.Overage != null && bucket.Overage != "0" ? "已超出固定额度 " + NativeDisplay.Amount(bucket.Overage) + " " + bucket.UnitLabel : "计量单位 · " + bucket.UnitLabel);
+            quotaDetail.Text = (stale ? "旧快照 · " + NativeDisplay.Time(result.FetchedAt) + " · " : "") + (bucket.Unit == "unspecified" ? "额度数值 · 单位未确认" : bucket.Overage != null && bucket.Overage != "0" ? "已超出固定额度 " + NativeDisplay.Amount(bucket.Overage) + " " + bucket.UnitLabel : "计量单位 · " + bucket.UnitLabel) + " · " + NativeDisplay.UsageSource(bucket);
             quotaDetail.ForeColor = stale || bucket.Unit == "unspecified" ? Color.FromArgb(145, 105, 41) : Muted; tips.SetToolTip(quotaDetail, quotaDetail.Text);
             var date = NativeData.Date(bucket.NextResetAt); reset.Text = date.HasValue && date.Value > DateTimeOffset.UtcNow ? "下次重置  " + NativeDisplay.Time(bucket.NextResetAt) : "重置时间待确认";
             raw.Visible = bucket.Unit == "unspecified"; rawText.Text = RawValues(bucket); if (!raw.Visible) ExpandRaw(false);
@@ -1186,11 +1191,11 @@ internal sealed class DashboardWindow : NativeForm
 
     private static string RawValues(NativeBucket bucket)
     {
-        return "单位待确认 · 仅展示允许公开的数值字段\r\n原始已用 (used)：" + NativeDisplay.Amount(bucket.RawUsed) + "\r\n原始总额 (limit)：" + NativeDisplay.Amount(bucket.RawLimit) + "\r\n返回剩余比例 (remainingPercentage)：" + (bucket.RawRemainingPercentage ?? "—") + "\r\n这些原始数值不能标作 AI Credits 或请求次数。";
+        return "单位待确认 · 仅展示允许公开的数值字段\r\n已用数值 (used)：" + NativeDisplay.Amount(bucket.RawUsed) + "\r\n总额数值 (limit)：" + NativeDisplay.Amount(bucket.RawLimit) + "\r\n用量来源：" + NativeDisplay.UsageSource(bucket) + "\r\nGitHub 剩余比例 (remainingPercentage)：" + (bucket.RawRemainingPercentage ?? "—") + "\r\nGitHub 比例可能已舍入，不一定与数量计算的比例一致。\r\n这些额度数值不能标作 AI Credits 或请求次数。";
     }
 
     private void ExpandOther(bool show) { expanded = show; otherPanel.Visible = show; other.Text = (overview != null && overview.Primary == null ? "选择额度类别" : "其他额度") + (show ? " ▾" : " ▸"); }
-    private void ExpandRaw(bool show) { rawExpanded = show; rawPanel.Visible = show; raw.Text = "查看原始数据" + (show ? " ▾" : " ▸"); }
+    private void ExpandRaw(bool show) { rawExpanded = show; rawPanel.Visible = show; raw.Text = "查看额度数值" + (show ? " ▾" : " ▸"); }
 
     private void RenderModels()
     {
@@ -1330,8 +1335,9 @@ internal sealed class DashboardWindow : NativeForm
         if (overview == null || !overview.CanDisplaySnapshot || overview.Primary == null) { ShowDetails("额度明细", "当前没有可展示的额度快照。请连接账号并同步。"); return; }
         var bucket = overview.Primary;
         var text = "账户：" + overview.Active.Login + "\r\n类别：" + bucket.Label + "\r\n单位：" + bucket.UnitLabel + "\r\n总额：" + (bucket.Unlimited ? "无固定上限" : NativeDisplay.Amount(bucket.Limit ?? bucket.RawLimit)) + "\r\n已用：" + NativeDisplay.Amount(bucket.Used ?? bucket.RawUsed) + "\r\n剩余：" + NativeDisplay.Amount(bucket.Remaining) + "\r\n已用比例：" + NativeDisplay.ExactPercentage(bucket.UsedPercentageText) + "\r\n剩余比例：" + NativeDisplay.ExactPercentage(bucket.RemainingPercentageText) + "\r\n同步时间：" + NativeDisplay.Time(overview.FetchedAt) + "\r\n状态：" + (overview.Stale || networkError != null ? "旧快照，等待同步" : "已同步") + "\r\n\r\n" + bucket.Detail;
+        text += "\r\n用量来源：" + NativeDisplay.UsageSource(bucket) + "\r\nGitHub 比例可能已舍入，不一定与数量计算的比例一致。";
         if (bucket.Unit == "unspecified") text += "\r\n\r\n" + RawValues(bucket);
-        text += "\r\n\r\n绝对剩余量仅由同一快照、同一额度池的精确数量相减得出，不由百分比倒推。组织付费不代表此值是整个组织的总额度。";
+        text += "\r\n\r\n绝对剩余量仅由同一快照、同一额度池的数量相减得出，精度依用量来源。组织付费不代表此值是整个组织的总额度。";
         ShowDetails("额度明细", text);
     }
 

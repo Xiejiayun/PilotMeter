@@ -1,6 +1,6 @@
 # Windows 单 EXE
 
-`PilotMeter-0.1.0-preview.14-win-x64.exe` 将 Node.js 24.14.0、PilotMeter、桌面 PET、HTML + Tailwind CSS 工作台和生产依赖放在一个文件中，适用于 Windows 10/11 x64。无需安装 Node.js 或 npm；桌面宿主需要 .NET Framework 4.8，主界面使用 Microsoft Edge WebView2 Evergreen Runtime。所有页面、样式和宠物资源随包提供，不使用在线 CSS 或字体。不修改 PATH。
+`PilotMeter-0.1.0-preview.15-win-x64.exe` 将 Node.js 24.14.0、PilotMeter、桌面 PET、HTML + Tailwind CSS 工作台和生产依赖放在一个文件中，适用于 Windows 10/11 x64。无需安装 Node.js 或 npm；桌面宿主需要 .NET Framework 4.8，主界面使用 Microsoft Edge WebView2 Evergreen Runtime。所有页面、样式和宠物资源随包提供，不使用在线 CSS 或字体。不修改 PATH。
 
 若设备未安装 WebView2 Runtime，PET 仍可启动，主窗口会显示 Microsoft 官方安装入口；安装后点击重试。WebView2 运行时由 Microsoft 维护和更新，应用包固定并校验 WebView2 SDK 与 x64 Loader 的版本和摘要。
 
@@ -11,7 +11,7 @@
 已发布版本的 EXE 和 `SHA256SUMS` 可从 [GitHub Releases](https://github.com/Xiejiayun/PilotMeter/releases) 下载；源码构建方式见下文。在 PowerShell 中计算文件摘要，与同一版本校验清单中对应文件的一行比较：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\PilotMeter-0.1.0-preview.14-win-x64.exe
+Get-FileHash -Algorithm SHA256 .\PilotMeter-0.1.0-preview.15-win-x64.exe
 Get-Content .\SHA256SUMS
 ```
 
@@ -31,26 +31,26 @@ Get-Content .\SHA256SUMS
 
 ```powershell
 # 查看运行环境；核对内置 Copilot 版本；不会自动登录
-.\PilotMeter-0.1.0-preview.14-win-x64.exe doctor
+.\PilotMeter-0.1.0-preview.15-win-x64.exe doctor
 
 # 显示桌面挂件（也可以直接双击 EXE）
-.\PilotMeter-0.1.0-preview.14-win-x64.exe desktop
+.\PilotMeter-0.1.0-preview.15-win-x64.exe desktop
 
 # 直接显示独立主窗口，适合快捷方式或键盘启动
-.\PilotMeter-0.1.0-preview.14-win-x64.exe desktop --open
+.\PilotMeter-0.1.0-preview.15-win-x64.exe desktop --open
 
 # 也可在主窗口登录后点击“启动 Copilot 会话”，选择项目文件夹
 # 以下保留终端方式：用所选账号启动内置 Copilot，采集本次会话
-Start-Process .\PilotMeter-0.1.0-preview.14-win-x64.exe -ArgumentList 'run -- --no-auto-update' -NoNewWindow -Wait
+Start-Process .\PilotMeter-0.1.0-preview.15-win-x64.exe -ArgumentList 'run -- --no-auto-update' -NoNewWindow -Wait
 
 # 另一个终端或分屏查看状态
-Start-Process .\PilotMeter-0.1.0-preview.14-win-x64.exe -ArgumentList 'watch' -NoNewWindow -Wait
-.\PilotMeter-0.1.0-preview.14-win-x64.exe status --json
-.\PilotMeter-0.1.0-preview.14-win-x64.exe open
-.\PilotMeter-0.1.0-preview.14-win-x64.exe stop
+Start-Process .\PilotMeter-0.1.0-preview.15-win-x64.exe -ArgumentList 'watch' -NoNewWindow -Wait
+.\PilotMeter-0.1.0-preview.15-win-x64.exe status --json
+.\PilotMeter-0.1.0-preview.15-win-x64.exe open
+.\PilotMeter-0.1.0-preview.15-win-x64.exe stop
 ```
 
-`watch` 中按 `o` 打开页面、`q` 退出观察。所有 CLI 命令保留，参数用法见 [README](../README.md#命令)；将文档中的 `pilotmeter` 替换为 EXE 路径即可。路径含空格时使用 PowerShell 的调用运算符，例如 `& 'C:\我的工具\PilotMeter-0.1.0-preview.14-win-x64.exe' status`。
+`watch` 中按 `o` 打开页面、`q` 退出观察。所有 CLI 命令保留，参数用法见 [README](../README.md#命令)；将文档中的 `pilotmeter` 替换为 EXE 路径即可。路径含空格时使用 PowerShell 的调用运算符，例如 `& 'C:\我的工具\PilotMeter-0.1.0-preview.15-win-x64.exe' status`。
 
 EXE 使用 Windows GUI 子系统以避免双击时弹出控制台。交互式 PowerShell 可能不会等待这种 EXE；`watch` 和 `run` 使用上方 `Start-Process -NoNewWindow -Wait`，让终端保持输入归属。重定向与脚本调用的 stdout、stderr 和退出码另有 EXE 回归覆盖。`Start-Process -ArgumentList` 接受命令行文本，自定义参数含空格时须在该文本中加双引号。
 
@@ -59,8 +59,8 @@ EXE 使用 Windows GUI 子系统以避免双击时弹出控制台。交互式 Po
 需要独立账本时，把 `--data-dir` 放在命令之前。相对路径按当前终端工作目录解析：
 
 ```powershell
-.\PilotMeter-0.1.0-preview.14-win-x64.exe --data-dir 'D:\PilotMeter 数据' desktop
-.\PilotMeter-0.1.0-preview.14-win-x64.exe --data-dir 'D:\PilotMeter 数据' stop
+.\PilotMeter-0.1.0-preview.15-win-x64.exe --data-dir 'D:\PilotMeter 数据' desktop
+.\PilotMeter-0.1.0-preview.15-win-x64.exe --data-dir 'D:\PilotMeter 数据' stop
 ```
 
 ## 缓存、数据与升级
@@ -81,9 +81,11 @@ EXE 使用 Windows GUI 子系统以避免双击时弹出控制台。交互式 Po
 
 EXE 已包含官方 Copilot CLI。首次启动解压文件并显示挂件；登录操作创建应用账号配置目录，凭据由官方 CLI 管理，不替换普通 Copilot 配置。`init --statusline` 才会备份并修改相关设置；已有其他 statusline 时仍需按命令给出的变更说明显式使用 `--replace`。
 
-总览优先展示 GitHub 的“高级请求”类别，聊天、代码补全等放在“其他额度”；没有高级请求时，只有唯一有限类别可作为默认主指标，多个有限类别需要明确选择，不相加。单位明确时展示总额、已用、剩余；单位未说明时，主额度区域直接显示原始已用和总额，并标注“单位未确认”，同时保留可靠比例。例如接口返回已用 `62000`、总额 `2000000`，界面直接显示 `62,000` 和 `2,000,000`，无需展开原始字段。过去的重置时间不作为下次重置日期。模型页按当前账号的官方 CLI 返回目录和策略展示状态，记录页按账号及月份查看本机消耗；本机明细不代表所有设备或组织共享池的总量。
+总览优先展示 GitHub 的“高级请求”类别，聊天、代码补全等放在“其他额度”；没有高级请求时，只有唯一有限类别可作为默认主指标，多个有限类别需要明确选择，不相加。单位明确时展示总额、已用、剩余；单位未说明时，主额度区域直接显示已用数值和总额，并标注“单位未确认”，同时保留上游返回的比例。例如接口返回已用 `62000`、总额 `2000000`，界面直接显示 `62,000` 和 `2,000,000`，无需展开原始字段。过去的重置时间不作为下次重置日期。模型页按当前账号的官方 CLI 返回目录和策略展示状态，记录页按账号及月份查看本机消耗；本机明细不代表所有设备或组织共享池的总量。
 
-所有额度数量和百分比按完整十进制数值展示，不四舍五入，不转换为科学计数法或 K/M 缩写，也不以 `<0.1%` 等阈值代替精确比例。已用、总额、剩余在空间充足时并列，窄窗口调整排列；数值保持单行，极长数值可横向滚动查看。主界面和详情均保留全部小数位，千位分隔符只影响排版。单位不明时第三项明确显示为剩余比例。
+已用数值优先按同一账号快照的总额减有效剩余量计算，保留剩余量的小数；没有有效剩余量时沿用额度接口返回值。界面会标注来源。GitHub 返回的百分比可能已经舍入，不能用它反算精确的已用数量。
+
+所有额度数量和百分比按完整十进制数值展示，不额外四舍五入，不转换为科学计数法或 K/M 缩写，也不以 `<0.1%` 等阈值代替返回比例。已用、总额、剩余在空间充足时并列，窄窗口调整排列；数值保持单行，极长数值可横向滚动查看。主界面和详情均保留全部小数位，千位分隔符只影响排版。单位不明时第三项明确显示为剩余比例。
 
 右上角显示当前账号与切换入口，侧栏提供“账户管理”和连接状态。切换账号后同步更新额度、模型与本机记录。桌面宠物的选择和设置在账户页，侧栏保留宠物预览入口。
 
@@ -105,9 +107,9 @@ npm run release:check
 构建输出：
 
 ```text
-build/windows/PilotMeter-0.1.0-preview.14-win-x64.exe
-build/windows/PilotMeter-0.1.0-preview.14-win-x64.exe.json
-build/windows/PilotMeter-0.1.0-preview.14-win-x64.zip
+build/windows/PilotMeter-0.1.0-preview.15-win-x64.exe
+build/windows/PilotMeter-0.1.0-preview.15-win-x64.exe.json
+build/windows/PilotMeter-0.1.0-preview.15-win-x64.zip
 build/windows/SHA256SUMS
 ```
 
