@@ -70,7 +70,10 @@ async function mockApi(page, state) {
       body = state.detail;
     }
     else if (url.pathname === '/api/settings') {
-      if (request.method() === 'PATCH') state.settings.monthlyBudget = request.postDataJSON().monthlyBudget;
+      if (request.method() === 'PATCH') {
+        if (state.budgetPatchGate) await state.budgetPatchGate;
+        state.settings.monthlyBudget = request.postDataJSON().monthlyBudget;
+      } else if (state.budgetSettingsGate) await state.budgetSettingsGate;
       body = state.settings;
     } else if (url.pathname === '/api/diagnostics') body = { items: state.diagnostics };
     else if (url.pathname === '/api/refresh') body = { refreshed: true };
@@ -146,6 +149,71 @@ test('budget is validated, saved with CSRF and can be cleared with keyboard', as
   await input.press('Enter');
   await expect(page.locator('#budget-feedback')).toHaveText('已清除自定义预算。');
   expect(state.settings.monthlyBudget).toBeNull();
+});
+
+test('budget success waits for dashboard refresh and is ready for keyboard clearing', async ({ page }) => {
+  const state = fixture();
+  await mockApi(page, state);
+  await page.goto('/');
+  await expect(page.locator('#primary-value')).toHaveText('105,250,000,000');
+  const input = page.getByRole('textbox', { name: '预算 AI Credits / 月' });
+  const save = page.getByRole('button', { name: '保存', exact: true });
+  const feedback = page.locator('#budget-feedback');
+  const refreshGate = Promise.withResolvers();
+  state.budgetSettingsGate = refreshGate.promise;
+  const settingsRead = page.waitForRequest(request => new URL(request.url()).pathname === '/api/settings' && request.method() === 'GET');
+  try {
+    await input.fill('0');
+    await input.press('Enter');
+    await settingsRead;
+    await expect(save).toBeDisabled();
+    await expect(feedback).toHaveText('正在保存…');
+  } finally {
+    delete state.budgetSettingsGate;
+    refreshGate.resolve();
+  }
+  await expect(feedback).toHaveText('已保存 · 预算为 0，不计算百分比。');
+  await expect(save).toBeEnabled();
+  await input.fill('');
+  await input.press('Enter');
+  await expect(feedback).toHaveText('已清除自定义预算。');
+  await expect(save).toBeEnabled();
+  expect(state.settings.monthlyBudget).toBeNull();
+});
+
+test('budget preserves a newer draft while a previous save is pending', async ({ page }) => {
+  const state = fixture();
+  const requests = await mockApi(page, state);
+  await page.goto('/');
+  await expect(page.locator('#primary-value')).toHaveText('105,250,000,000');
+  const input = page.getByRole('textbox', { name: '预算 AI Credits / 月' });
+  const save = page.getByRole('button', { name: '保存', exact: true });
+  const feedback = page.locator('#budget-feedback');
+  const patchGate = Promise.withResolvers();
+  state.budgetPatchGate = patchGate.promise;
+  const patchStarted = page.waitForRequest(request => new URL(request.url()).pathname === '/api/settings' && request.method() === 'PATCH');
+  try {
+    await input.fill('0');
+    await input.press('Enter');
+    await patchStarted;
+    await expect(save).toBeDisabled();
+    await expect(feedback).toHaveText('正在保存…');
+    await input.fill('250.5');
+  } finally {
+    delete state.budgetPatchGate;
+    patchGate.resolve();
+  }
+  await expect(save).toBeEnabled();
+  await expect(input).toHaveValue('250.5');
+  await expect(feedback).toHaveText('上次提交已保存；当前输入尚未保存。');
+  expect(state.settings.monthlyBudget).toBe('0');
+  await input.press('Enter');
+  await expect(feedback).toHaveText('预算已保存。');
+  await expect(save).toBeEnabled();
+  expect(requests.filter(request => request.method === 'PATCH').map(request => request.body)).toEqual([
+    { monthlyBudget: '0' }, { monthlyBudget: '250.5' },
+  ]);
+  expect(state.settings.monthlyBudget).toBe('250.5');
 });
 
 test('session modal separates monthly and lifetime usage and never executes metadata', async ({ page }) => {
