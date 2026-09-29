@@ -4,11 +4,52 @@ import { access, mkdtemp, rm, writeFile, mkdir, readFile } from 'node:fs/promise
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { telemetryEnvironment } from '../../dist/cli/run.js';
-import { instanceAt, request } from '../../dist/daemon/client.js';
+import { ensureService, instanceAt, request } from '../../dist/daemon/client.js';
 const exec = promisify(execFile);
 const bin = resolve('bin/pilotmeter.js');
+
+test('guarded stop refuses a replaced instance and preserves settings through a graceful restart', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'pilotmeter-guarded-stop-'));
+  const waitStopped = async () => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const locked = await access(join(directory, 'writer.lock')).then(() => true, error => {
+        if (error.code === 'ENOENT') return false;
+        throw error;
+      });
+      if (!locked && !await instanceAt(directory)) return;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    assert.fail('The isolated service did not release its writer lock after shutdown.');
+  };
+  t.after(async () => {
+    const running = await instanceAt(directory);
+    if (running) await request(running, '/api/shutdown', 'POST');
+    await waitStopped();
+    assert.ok(resolve(directory).startsWith(resolve(tmpdir(), 'pilotmeter-guarded-stop-')));
+    await rm(directory, { recursive: true, force: true });
+  });
+  const instance = await ensureService(directory);
+  await request(instance, '/api/settings', 'PATCH', { monthlyBudget: '123.45' });
+  const stop = args => exec(process.execPath, [bin, '--data-dir', directory, 'stop', ...args], { timeout: 10000, windowsHide: true });
+  for (const [expected, message] of [[randomUUID(), /后台服务已发生变化，未停止任何服务/], ['invalid-id', /服务实例标识无效/]]) {
+    await assert.rejects(stop(['--if-instance', expected]), error => {
+      assert.equal(error.code, 1); assert.match(error.stderr, message);
+      assert.ok(!`${error.stdout}${error.stderr}`.includes(instance.managementToken)); return true;
+    });
+    assert.equal((await instanceAt(directory)).instanceId, instance.instanceId);
+    assert.equal((await request(instance, '/api/settings')).monthlyBudget, '123.45');
+  }
+  assert.match((await stop(['--if-instance', instance.instanceId])).stdout, /正在正常停止/);
+  await waitStopped();
+  const restarted = await ensureService(directory);
+  assert.notEqual(restarted.instanceId, instance.instanceId);
+  assert.equal((await request(restarted, '/api/settings')).monthlyBudget, '123.45');
+  assert.match((await stop([])).stdout, /正在正常停止/);
+  await waitStopped();
+});
 
 test('telemetry overrides signal-specific endpoints only after explicit replacement', () => {
   const original = { PATH: 'unchanged', PILOTMETER_GITHUB_TOKEN: 'fake-billing-secret', OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'https://existing.invalid', OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: 'http/protobuf', COPILOT_OTEL_FILE_EXPORTER_PATH: 'private.jsonl', OTEL_SDK_DISABLED: 'true', OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: 'true' };

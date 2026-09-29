@@ -1,5 +1,5 @@
 import type { AccountQuotaBucket, PersonalQuota } from '../shared/accounts.js';
-import { compareDecimals, nonNegativeDecimal, normalizeDecimal, percentageOf, subtractDecimals } from './decimal.js';
+import { compareDecimals, nonNegativeDecimal, subtractDecimals } from './decimal.js';
 import { timestamp } from './period.js';
 
 // Fixed SDK v1.0.14 generated rpc.ts distinguishes Chat, Completions and
@@ -23,8 +23,11 @@ export interface PersonalQuotaBucketView {
   unitLabel: string;
   value: string;
   detail: string;
+  /** Floating-point value for decorative progress only; never format it as quantity text. */
   percentage: number | null;
-  /** Raw quantities are displayable only when their unit was explicitly returned. */
+  /** Exact source percentage for visible text, with no display rounding. */
+  usedPercentage: string | null;
+  /** Confirmed-unit quantities; unspecified-unit values remain available in raw. */
   used: string | null;
   limit: string | null;
   remaining: string | null;
@@ -32,7 +35,7 @@ export interface PersonalQuotaBucketView {
   remainingPercentage: string | null;
   /** Amount above the fixed allowance, not a claim about billed overage charges. */
   overage: string | null;
-  /** Explicitly unverified source quantities for a separate, read-only details panel. */
+  /** Exact source quantities; callers must explicitly label unverified units. */
   raw: { used: string | null; limit: string | null; remainingPercentage: string | null };
   unlimited: boolean;
   nextResetAt: string | null;
@@ -51,29 +54,13 @@ function quantity(value: unknown): string | null {
   try { return nonNegativeDecimal(nonNegativeDecimal(value)); } catch { return null; }
 }
 
-/** Keep exact small quantities and explicitly mark lossy compact displays. */
-function amount(value: string): string {
-  if (value.length <= 12) return value;
-  const [integer = '0', fraction = ''] = value.split('.');
-  const all = `${integer}${fraction}`;
-  const start = all.search(/[1-9]/);
-  if (start < 0) return '0';
-  const significant = all.slice(start);
-  const mantissa = `${significant[0]}${significant.length > 1 ? `.${significant.slice(1, 3)}` : ''}`.replace(/\.?0+$/, '');
-  return `${/[1-9]/.test(significant.slice(3)) ? '≈' : ''}${mantissa}×10^${integer.length - start - 1}`;
-}
-
-function ratio(value: unknown): { percentage: number | null; text: string } | null {
+function ratio(value: unknown): { exact: string; percentage: number | null; text: string } | null {
   const exact = quantity(value);
   if (exact === null || compareDecimals(exact, '100') > 0) return null;
-  const rounded = normalizeDecimal(percentageOf(exact, '100', 1)!);
-  const different = compareDecimals(exact, rounded) !== 0;
-  const text = different && rounded === '0' ? '<0.1%' : different && rounded === '100' ? '>99.9%'
-    : `${different ? '≈' : ''}${rounded}%`;
   const number = Number(exact);
   // A floating-point progress control must not imply exactly full or empty when it is not.
   const percentage = number === 100 && exact !== '100' || number === 0 && exact !== '0' ? null : number;
-  return { percentage, text };
+  return { exact, percentage, text: `${exact}%` };
 }
 
 function projectBucket(bucket: AccountQuotaBucket, fetchedAt: number, now: number): PersonalQuotaBucketView {
@@ -89,16 +76,16 @@ function projectBucket(bucket: AccountQuotaBucket, fetchedAt: number, now: numbe
   const rawRemainingPercentage = ratio(bucket.remainingPercentage) ? quantity(bucket.remainingPercentage) : null;
   const remainingPercentage = unlimited || rawLimit === '0' || overage ? null : rawRemainingPercentage;
   const percent = unlimited || rawLimit === '0' || overage ? null : ratio(bucket.usedPercentage);
-  const numeric = used === null ? '已用未知' : `${amount(used)}${limit === null ? '' : ` / ${amount(limit)}`}`;
+  const numeric = used === null ? '已用未知' : `${used}${limit === null ? '' : ` / ${limit}`}`;
   const value = unlimited ? '无固定上限' : percent?.text ?? numeric;
-  const quantityDetail = unit === 'unspecified' ? '数量单位未确认，仅展示已确认比例或额度状态'
-    : used === null ? `已用数量未知${limit === null ? '' : `；固定额度 ${amount(limit)} ${unitLabel}`}`
-      : `已用 ${amount(used)}${limit === null ? ` ${unitLabel}` : ` / ${amount(limit)} ${unitLabel}`}`;
+  const quantityDetail = unit === 'unspecified' ? '数量单位未确认；原始数值不做换算'
+    : used === null ? `已用数量未知${limit === null ? '' : `；固定额度 ${limit} ${unitLabel}`}`
+      : `已用 ${used}${limit === null ? ` ${unitLabel}` : ` / ${limit} ${unitLabel}`}`;
   const detail = `${unlimited ? '无固定上限；' : ''}${quantityDetail}${overage ? '；已超出固定额度' : !unlimited && rawLimit === '0' ? unit === 'unspecified' ? '；比例不可用' : '；固定额度为 0，比例不可用' : ''}。`;
   const reset = timestamp(bucket.resetAt);
   return {
     key: bucket.key, label: quotaBucketLabel(bucket.key), unit, unitLabel, value, detail,
-    percentage: percent?.percentage ?? null, used, limit, remaining, remainingSource: remaining === null ? null : 'calculated',
+    percentage: percent?.percentage ?? null, usedPercentage: percent?.exact ?? null, used, limit, remaining, remainingSource: remaining === null ? null : 'calculated',
     remainingPercentage, overage: exceeded, raw: { used: rawUsed, limit: unlimited ? null : rawLimit, remainingPercentage: rawRemainingPercentage }, unlimited,
     nextResetAt: reset !== null && reset > now && reset > fetchedAt ? new Date(reset).toISOString() : null,
   };

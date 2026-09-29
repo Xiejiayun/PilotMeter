@@ -25,16 +25,16 @@ npm run release:windows
 
 ## GitHub Release
 
-1. 更新版本：`npm version 0.1.0-preview.9 --no-git-tag-version`，同步修改 `src/shared/runtime.ts` 的 `VERSION`，一起提交 package、lockfile 和运行时版本。安装包验收会拒绝版本不一致的产物。
-2. 添加对应版本的 `docs/releases/0.1.0-preview.9.md`，记录实际功能、升级方法与已知边界。
+1. 更新版本：`npm version 0.1.0-preview.11 --no-git-tag-version`，同步修改 `src/shared/runtime.ts` 的 `VERSION`，一起提交 package、lockfile 和运行时版本。安装包验收会拒绝版本不一致的产物。
+2. 添加对应版本的 `docs/releases/0.1.0-preview.11.md`，记录实际功能、升级方法与已知边界。
 3. 提交 PR，等待三平台 CI 通过后合并 main。
 4. 在最新 main 创建并推送版本标签：
 
 ```powershell
 git switch main
 git pull --ff-only
-git tag v0.1.0-preview.9
-git push origin v0.1.0-preview.9
+git tag v0.1.0-preview.11
+git push origin v0.1.0-preview.11
 ```
 
 `Windows Release` 工作流会验证标签与 package 版本一致、提交已进入 main、发布说明存在；在 Windows 上重新测试、打包、校验，然后上传 EXE、ZIP、版本清单与 SHA256SUMS。上传先进入草稿，全部成功后才公开；带 `-preview` 等后缀的版本自动标为 Pre-release。
@@ -45,4 +45,4 @@ git push origin v0.1.0-preview.9
 
 ## 升级
 
-从旧宠物右键菜单退出桌面程序，再使用旧 EXE 执行 `stop`，然后启动新 EXE。账户、账本和宠物选择仍保存在原数据目录，升级不清空。关闭主窗口或隐藏宠物并不退出旧实例；同一数据目录重复启动会唤回已经运行的版本。
+从旧宠物右键菜单退出桌面程序，然后启动新 EXE。若提示后台版本冲突，先结束采集中的会话，再点击“重启本机服务”。账户、账本和宠物选择仍保存在原数据目录，升级不清空。关闭主窗口或隐藏宠物并不退出旧实例；同一数据目录重复启动会唤回已经运行的版本。可继续使用 EXE 的 `stop` 命令停止指定数据目录的后台。

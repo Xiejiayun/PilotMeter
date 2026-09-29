@@ -11,6 +11,11 @@ using System.Web.Script.Serialization;
 
 // Native account controls use the same limited CSRF capability as the optional
 // browser UI. No daemon management or collector token enters this client.
+internal sealed class DesktopServiceChangedException : IOException
+{
+    internal DesktopServiceChangedException() : base("本机服务已更换，请重新连接。") { }
+}
+
 internal sealed class DesktopNativeApi : IDisposable
 {
     private readonly DesktopInstance instance;
@@ -87,7 +92,7 @@ internal sealed class DesktopNativeApi : IDisposable
     private async Task VerifyAsync(CancellationToken cancellation)
     {
         var health = await SendAsync("/health", "GET", null, null, cancellation);
-        if (!instance.Matches(health)) throw new InvalidDataException("本机服务已更换，请重新连接。");
+        if (!instance.Matches(health)) throw new DesktopServiceChangedException();
     }
 
     private async Task<Dictionary<string, object>> SendAsync(string path, string method, Dictionary<string, object> payload, string csrf, CancellationToken cancellation)
@@ -126,6 +131,8 @@ internal sealed class DesktopNativeApi : IDisposable
                     {
                         object message;
                         var description = result.TryGetValue("error", out message) && message is string ? (string)message : "操作暂时无法完成，请重试。";
+                        if (response.StatusCode == HttpStatusCode.Conflict && description == "本机服务已更换，请重新连接。")
+                            throw new DesktopServiceChangedException();
                         throw new InvalidOperationException(description.Length > 240 ? description.Substring(0, 240) : description);
                     }
                     return result;

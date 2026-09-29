@@ -255,6 +255,8 @@ internal sealed class DesktopContext : ApplicationContext
     private readonly RegisteredWaitHandle wake;
     private readonly RegisteredWaitHandle openWake;
     private DesktopInstance instance;
+    private DesktopInstance recoveryInstance;
+    private bool recoveringService;
     private DashboardWindow dashboard;
     private DesktopNativeApi pendingAction;
     private bool refreshing;
@@ -346,14 +348,16 @@ internal sealed class DesktopContext : ApplicationContext
         }
     }
 
-    private async Task StartServiceAsync()
+    private Task StartServiceAsync() { return RunServiceCommandAsync("start --background", "本机服务启动失败，请重试。"); }
+
+    private async Task RunServiceCommandAsync(string command, string failure)
     {
         await Task.Run(delegate {
             lifetime.Token.ThrowIfCancellationRequested();
             var executable = Path.Combine(runtimeRoot, "runtime", "node.exe");
             var start = new ProcessStartInfo {
                 FileName = executable,
-                Arguments = DesktopApp.Quote(Path.Combine(runtimeRoot, "app", "bin", "pilotmeter.js")) + " --data-dir " + DesktopApp.Quote(directory) + " start --background",
+                Arguments = DesktopApp.Quote(Path.Combine(runtimeRoot, "app", "bin", "pilotmeter.js")) + " --data-dir " + DesktopApp.Quote(directory) + " " + command,
                 WorkingDirectory = directory,
                 UseShellExecute = false,
                 CreateNoWindow = true
@@ -370,10 +374,10 @@ internal sealed class DesktopContext : ApplicationContext
                     {
                         try { child.Kill(); } catch (InvalidOperationException) { }
                         lifetime.Token.ThrowIfCancellationRequested();
-                        throw new IOException("本机服务启动超时。");
+                        throw new IOException("本机服务操作超时，请稍后重试。");
                     }
                 }
-                if (child.ExitCode != 0) throw new IOException("本机服务启动失败。");
+                if (child.ExitCode != 0) throw new IOException(failure);
             }
         }, lifetime.Token);
     }
@@ -384,7 +388,61 @@ internal sealed class DesktopContext : ApplicationContext
         widget.SetAccounts(null, null, false);
         unavailable = message;
         SetSnapshot(state, "PilotMeter", state == "loading" ? "连接中" : "未连接", message);
-        if (dashboard != null && !dashboard.IsDisposed) dashboard.SetService(null, message);
+        if (dashboard != null && !dashboard.IsDisposed)
+        {
+            dashboard.SetService(null, message);
+            dashboard.SetServiceRecovery(recoveryInstance != null, recoveringService);
+        }
+    }
+
+    // Only the explicit recovery button may replace a running service. Timer
+    // probes never stop it, and the CLI pins shutdown to the observed instance.
+    private async Task RefreshRequestedAsync()
+    {
+        if (exiting || actionBusy || recoveringService || DashboardChangingAccount) return;
+        var expected = recoveryInstance;
+        if (expected == null) { await RefreshAsync(true); return; }
+        actionBusy = recoveringService = true; snapshotGate.BeginMutation(); widget.SetActionBusy(true);
+        var recovered = false;
+        try
+        {
+            Disconnect("loading", "正在重启本机服务，完成后即可登录…");
+            var current = await ProbeAsync();
+            if (current != null && !expected.SameAs(current)) recovered = true;
+            else
+            {
+                if (current != null)
+                {
+                    await RunServiceCommandAsync("stop --if-instance " + DesktopApp.Quote(expected.InstanceId), "后台状态已变化，未执行重启。请重试连接。");
+                    var deadline = Stopwatch.StartNew();
+                    while (Directory.Exists(Path.Combine(directory, "writer.lock")))
+                    {
+                        lifetime.Token.ThrowIfCancellationRequested();
+                        if (deadline.ElapsedMilliseconds > 30000) throw new IOException("后台仍在结束操作，请稍后点击“重启本机服务”。");
+                        await Task.Delay(100, lifetime.Token);
+                    }
+                }
+                // With no live service, normal startup handles stale lock
+                // recovery using the lock owner's identity and process liveness.
+                await StartServiceAsync(); recovered = true;
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception error)
+        {
+            if (error is OutOfMemoryException || error is StackOverflowException) throw;
+            if (!exiting) Disconnect("error", NativeData.Error(error));
+        }
+        finally
+        {
+            actionBusy = recoveringService = false; snapshotGate.EndMutation();
+            if (!exiting)
+            {
+                widget.SetActionBusy(DashboardChangingAccount);
+                if (dashboard != null && !dashboard.IsDisposed) dashboard.SetServiceRecovery(recoveryInstance != null, false);
+            }
+        }
+        if (!exiting && recovered) { recoveryInstance = null; await RefreshAsync(true); }
     }
 
     private async Task RefreshAsync(bool allowStart)
@@ -407,9 +465,11 @@ internal sealed class DesktopContext : ApplicationContext
             if (candidate == null) { Disconnect("offline", "本机服务已断开。点击挂件打开主程序后重试。"); return; }
             if (candidate.Version != version)
             {
-                Disconnect("error", "其他版本的 PilotMeter 正在使用此数据目录。请先退出该版本的后台服务，再重试。");
+                recoveryInstance = candidate;
+                Disconnect("error", "后台仍在运行 " + candidate.Version + "，当前窗口为 " + version + "。请点击右上角“重启本机服务”恢复登录。若有采集中的会话，请先结束会话再重启。");
                 return;
             }
+            recoveryInstance = null;
             if (!candidate.SameAs(instance))
             {
                 Disconnect("loading", "正在重新读取当前账号…");
@@ -447,7 +507,7 @@ internal sealed class DesktopContext : ApplicationContext
                 UnitLabel = DesktopJson.OptionalString(snapshot, "unitLabel", 40), UnitUnspecified = snapshot.TryGetValue("unitUnspecified", out raw) && raw is bool && (bool)raw
             });
             widget.SetAccounts(accounts.Accounts, accounts.ActiveId, accounts.Enabled);
-            if (dashboard != null && !dashboard.IsDisposed) dashboard.SetService(candidate, null);
+            if (dashboard != null && !dashboard.IsDisposed) { dashboard.SetService(candidate, null); dashboard.SetServiceRecovery(false, false); }
         }
         catch (OperationCanceledException) { if (!exiting && snapshotGate.Accepts(generation)) Disconnect("offline", "本机服务响应超时。点击挂件重试。"); }
         catch (Exception error)
@@ -505,12 +565,13 @@ internal sealed class DesktopContext : ApplicationContext
         if (exiting) return;
         if (dashboard == null || dashboard.IsDisposed)
         {
-            dashboard = new DashboardWindow(directory, async delegate { await RefreshAsync(true); });
+            dashboard = new DashboardWindow(directory, RefreshRequestedAsync);
             dashboard.SetPetPreferences(petPreferences);
             Icon dashboardIcon = DesktopBrand.CreateIcon();
             dashboard.Icon = dashboardIcon;
             dashboard.Disposed += delegate { dashboardIcon.Dispose(); };
             dashboard.SetService(instance, unavailable);
+            dashboard.SetServiceRecovery(recoveryInstance != null, recoveringService);
             dashboard.RestoreQuotaSelection(selectedQuotaAccountId, selectedQuotaKey);
             dashboard.QuotaSelectionChanged += async delegate(object sender, NativeQuotaSelectionEventArgs choice)
             {

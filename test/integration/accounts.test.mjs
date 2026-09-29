@@ -9,6 +9,7 @@ import test from 'node:test';
 import { ensureService, instanceAt, request } from '../../dist/daemon/client.js';
 import { serve } from '../../dist/daemon/server.js';
 import { month } from '../../dist/shared/runtime.js';
+import { subtractDecimals } from '../../dist/domain/decimal.js';
 import { envelope, nanos, span } from '../fixtures/synthetic-otlp.mjs';
 
 async function service(t, demo = false, accounts) {
@@ -182,7 +183,7 @@ function fakeAccounts() {
       async getQuota(selectionId) {
         assert.equal(selectionId, `private-selection-${plan.login}`);
         return { selectionId, scope: 'user', fetchedAt: new Date().toISOString(), snapshots: [{ type: 'chat', unit: null, billingMode: 'unknown',
-          usedRequests: plan.used, entitlementRequests: '100', remainingPercentage: 100 - Number(plan.used), overage: '0', isUnlimitedEntitlement: false,
+          usedRequests: plan.used, entitlementRequests: '100', remainingPercentage: subtractDecimals('100', plan.used), overage: '0', isUnlimitedEntitlement: false,
           usageAllowedWithExhaustedQuota: false, overageAllowedWithExhaustedQuota: false, resetDate: null }] };
       },
       async listModels(selectionId) {

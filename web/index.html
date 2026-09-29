@@ -102,9 +102,13 @@
     </dialog>
     <dialog id="github-login-dialog" aria-labelledby="login-title" aria-describedby="login-description">
       <div class="dialog-heading"><div><p class="eyebrow">CONNECT GITHUB</p><h2 id="login-title">登录 GitHub</h2></div><button id="close-github-login" class="icon-button" type="button" aria-label="关闭 GitHub 登录">×</button></div>
-      <p id="login-description" class="login-description">在 GitHub 完成授权后，账号会显示在 PilotMeter。添加其他账号时，请在 GitHub 授权页确认当前登录的是目标账号。</p>
+      <p id="login-description" class="login-description">使用一次性验证码连接账号，无需在 PilotMeter 输入 GitHub 密码。授权完成后，这里会自动显示账号和额度。</p>
       <form id="github-host-form"><label for="github-host">GitHub 地址</label><input id="github-host" type="url" value="https://github.com" required autocomplete="url" aria-describedby="github-host-help" /><p id="github-host-help" class="small muted">一般使用 github.com；企业托管账号可填写 https://你的企业.ghe.com。</p><button id="start-github-login" class="button primary" type="submit">获取登录验证码</button></form>
-      <div id="device-login" hidden><p>1. 复制这次登录验证码</p><div class="device-code-row"><code id="github-user-code" tabindex="0"></code><button id="copy-github-code" class="button secondary" type="button">复制验证码</button></div><p id="copy-code-feedback" class="form-feedback" role="status"></p><p>2. 打开 GitHub，输入验证码并确认账号</p><a id="github-verification-link" class="button primary" target="_blank" rel="noopener noreferrer">前往 GitHub 授权</a><p id="login-expiry" class="small muted"></p></div>
+      <ol id="device-login" class="login-steps" hidden>
+        <li><div class="login-step-body"><h3>复制验证码</h3><p class="login-step-help">稍后在 GitHub 页面粘贴这次的验证码。</p><div class="device-code-row"><code id="github-user-code" tabindex="0" aria-label="本次登录验证码"></code><button id="copy-github-code" class="button secondary" type="button">复制验证码</button></div><p id="copy-code-feedback" class="form-feedback" role="status"></p><p id="login-expiry" class="small muted"></p></div></li>
+        <li><div class="login-step-body"><h3>在 GitHub 确认授权</h3><p id="login-account-hint" class="login-step-help">在新标签页输入验证码，确认要连接的 GitHub 账号，再同意授权。</p><a id="github-verification-link" class="button primary" target="_blank" rel="noopener noreferrer">前往 GitHub 授权 <span aria-hidden="true">↗</span></a></div></li>
+        <li><div class="login-step-body"><h3>回到此窗口</h3><p class="login-step-help">授权后会自动完成登录，无需再次点击登录按钮。请保留此窗口。</p></div></li>
+      </ol>
       <p id="login-status" class="login-status" role="status" aria-live="polite"></p>
       <div class="login-footer"><button id="retry-github-login" class="button secondary" type="button" hidden>重新获取验证码</button><button id="cancel-github-login" class="button secondary" type="button">取消登录</button></div>
     </dialog>

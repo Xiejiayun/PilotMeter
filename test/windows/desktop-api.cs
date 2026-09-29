@@ -29,10 +29,18 @@ internal static class DesktopApiTests
                 await Reject(async delegate { await api.RequestAsync(bad); });
             await api.RequestAsync("/api/auth/select", "POST", new Dictionary<string, object> { { "accountId", "medium" } });
             Check(DesktopJson.String(await api.RequestAsync("/api/auth/accounts"), "content", 70000).Length == 70000);
-            foreach (var scenario in new[] { "redirect", "oversized", "error", "foreign" })
+            foreach (var scenario in new[] { "redirect", "oversized", "error" })
             {
                 await api.RequestAsync("/api/auth/select", "POST", new Dictionary<string, object> { { "accountId", scenario } });
                 await Reject(async delegate { await api.RequestAsync("/api/auth/accounts"); });
+            }
+            foreach (var scenario in new[] { "foreign", "foreign-conflict" })
+            {
+                await api.RequestAsync("/api/auth/select", "POST", new Dictionary<string, object> { { "accountId", scenario } });
+                var changed = false;
+                try { await api.RequestAsync("/api/auth/accounts"); }
+                catch (DesktopServiceChangedException) { changed = true; }
+                Check(changed);
             }
             await api.RequestAsync("/api/auth/select", "POST", new Dictionary<string, object> { { "accountId", "pending" } });
             var pending = api.RequestAsync("/api/auth/accounts");

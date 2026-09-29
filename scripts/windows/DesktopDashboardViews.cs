@@ -14,7 +14,9 @@ internal static class NativeDisplay
 {
     internal static string Quantity(Dictionary<string, object> source, string key)
     {
-        var value = NativeData.Text(source, key, 256, true);
+        // Two bounded source decimals can produce a longer exact difference
+        // when one has many integer digits and the other many fraction digits.
+        var value = NativeData.Text(source, key, 512, true);
         if (value != null && !Regex.IsMatch(value, @"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$"))
             throw new InvalidDataException("用量数值无效，请重新同步。");
         return value;
@@ -26,20 +28,6 @@ internal static class NativeDisplay
         var parts = value.Split('.');
         var whole = Regex.Replace(parts[0], @"\B(?=(?:[0-9]{3})+(?![0-9]))", ",");
         return whole + (parts.Length == 2 ? "." + parts[1] : "");
-    }
-
-    internal static string CompactAmount(string value)
-    {
-        if (value == null) return "—";
-        var formatted = Amount(value);
-        if (formatted.Length <= 9) return formatted;
-        var parts = value.Split('.'); var digits = parts[0] + (parts.Length == 2 ? parts[1] : "");
-        var start = digits.IndexOfAny("123456789".ToCharArray()); if (start < 0) return "0";
-        var significant = digits.Substring(start); var count = Math.Min(3, significant.Length);
-        var mantissa = significant.Substring(0, 1) + (count > 1 ? "." + significant.Substring(1, count - 1).TrimEnd('0') : "");
-        mantissa = mantissa.TrimEnd('.');
-        var approximate = significant.Length > count && Regex.IsMatch(significant.Substring(count), "[1-9]");
-        return (approximate ? "≈" : "") + mantissa + "e" + (parts[0].Length - start - 1).ToString(CultureInfo.InvariantCulture);
     }
 
     internal static double? Percent(Dictionary<string, object> source, string key)
@@ -55,22 +43,9 @@ internal static class NativeDisplay
         return number;
     }
 
-    internal static string Percentage(double? value)
-    {
-        if (!value.HasValue) return "—";
-        if (value.Value > 0 && value.Value < .1) return "<0.1%";
-        if (value.Value < 100 && value.Value > 99.9) return ">99.9%";
-        return value.Value.ToString("0.#", CultureInfo.InvariantCulture) + "%";
-    }
-
     internal static string ExactPercentage(string value)
     {
-        if (value == null) return "—";
-        var normalized = value.Contains(".") ? value.TrimEnd('0').TrimEnd('.') : value;
-        var number = Double.Parse(value, CultureInfo.InvariantCulture);
-        if (number == 100 && normalized != "100") return ">99.9%";
-        if (number == 0 && normalized != "0") return "<0.1%";
-        return Percentage(number);
+        return value == null ? "—" : value + "%";
     }
 
     internal static long Count(Dictionary<string, object> source, string key)
@@ -282,10 +257,55 @@ internal sealed class NativeSurface : Panel
     }
 }
 
+// Preserve exact text. Amount rows keep numbers intact in a scrolling viewport;
+// explanatory text can wrap without changing the text used by accessibility.
+internal sealed class NativeExactLabel : Label
+{
+    internal bool KeepOnOneLine;
+    private const TextFormatFlags Flags = TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
+    private List<string> Lines(int width)
+    {
+        if (KeepOnOneLine) return new List<string> { Text };
+        var lines = new List<string>();
+        foreach (var paragraph in Text.Replace("\r", "").Split('\n'))
+        {
+            if (paragraph.Length == 0) { lines.Add(""); continue; }
+            for (var start = 0; start < paragraph.Length; )
+            {
+                var length = 1;
+                while (start + length < paragraph.Length && TextRenderer.MeasureText(paragraph.Substring(start, length + 1), Font, Size.Empty, Flags).Width <= width) length++;
+                lines.Add(paragraph.Substring(start, length)); start += length;
+            }
+        }
+        return lines;
+    }
+
+    public override Size GetPreferredSize(Size proposedSize)
+    {
+        var width = Math.Max(1, proposedSize.Width - Padding.Horizontal);
+        var height = TextRenderer.MeasureText("0", Font, Size.Empty, Flags).Height;
+        var lines = Lines(width); var measuredWidth = 0;
+        foreach (var line in lines) measuredWidth = Math.Max(measuredWidth, TextRenderer.MeasureText(line, Font, Size.Empty, Flags).Width);
+        return new Size(measuredWidth + Padding.Horizontal, lines.Count * height + Padding.Vertical);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var lines = Lines(Math.Max(1, ClientSize.Width - Padding.Horizontal));
+        var height = TextRenderer.MeasureText("0", Font, Size.Empty, Flags).Height;
+        var top = Padding.Top + Math.Max(0, (ClientSize.Height - Padding.Vertical - lines.Count * height) / 2);
+        foreach (var line in lines)
+        {
+            TextRenderer.DrawText(e.Graphics, line, Font, new Point(Padding.Left, top), ForeColor, Flags);
+            top += height;
+        }
+    }
+}
+
 internal sealed class NativeUsageBar : Control
 {
     private double? percentage;
-    internal double? Percentage { get { return percentage; } set { percentage = value; AccessibleDescription = value.HasValue ? "已用 " + NativeDisplay.Percentage(value) : "比例未知"; Invalidate(); } }
+    internal double? Percentage { get { return percentage; } set { percentage = value; AccessibleDescription = "比例未知"; Invalidate(); } }
     internal NativeUsageBar() { DoubleBuffered = true; SetStyle(ControlStyles.ResizeRedraw, true); Height = 8; AccessibleRole = AccessibleRole.ProgressBar; AccessibleName = "当前类别已用额度"; }
     protected override void OnPaint(PaintEventArgs e)
     {
@@ -314,6 +334,7 @@ internal sealed class DashboardWindow : NativeForm
     private readonly List<Image> petImages = new List<Image>();
     private readonly List<Button> petButtons = new List<Button>();
     private readonly List<NativeUsageRecord> recordItems = new List<NativeUsageRecord>();
+    private readonly List<Action> fitTextRows = new List<Action>();
     private readonly ToolTip tips = new ToolTip { AutoPopDelay = 15000 };
     private readonly System.Windows.Forms.Timer timer;
     private readonly ContextMenuStrip accountMenu;
@@ -321,7 +342,8 @@ internal sealed class DashboardWindow : NativeForm
     private Panel pageHost;
     private ComboBox accounts, bucketChoice, modelFilter, recordSort;
     private Button add, refresh, accountSettings, accountReauth, accountRemove, loadMore;
-    private Label pageTitle, pageSubtitle, breadcrumb, accountStatus, feedback, synced, category, quotaCaption, quotaValue, quotaUnit, quotaUsed, quotaUsedUnit, quotaTotal, quotaTotalUnit, quotaRatios, quotaDetail, reset, localSummary, modelSummary, modelState, recordScope, recordState, accountHint, petHint, petSizeLabel;
+    private Label pageTitle, pageSubtitle, breadcrumb, accountStatus, feedback, synced, category, quotaCaption, quotaValue, quotaUsed, quotaTotal, quotaRatios, quotaDetail, reset, localSummary, modelSummary, modelState, recordScope, recordState, accountHint, petHint, petSizeLabel;
+    private Label sidebarAccountLogin, sidebarAccountHost, sidebarAccountState;
     private LinkLabel other, raw;
     private NativeSurface otherPanel, rawPanel;
     private TextBox rawText, modelSearch;
@@ -330,7 +352,6 @@ internal sealed class DashboardWindow : NativeForm
     private DateTimePicker recordMonth;
     private TrackBar petSize;
     private CheckBox petMotion, petTop;
-    private PictureBox petPreview;
     private DesktopPetPreferences petPreferences;
     private DesktopInstance service;
     private DesktopNativeApi api;
@@ -338,7 +359,7 @@ internal sealed class DashboardWindow : NativeForm
     private NativeLoginDialog loginDialog;
     private string currentPage = "overview", quotaKey, quotaAccount, accountSignature, accountsGridSignature, modelsSignature, recordsAccount, recordsCursor, networkError, publishedAccount, publishedKey;
     private int generation, recordsGeneration;
-    private bool suppress, suppressPets, loading, busy, expanded, rawExpanded, disposed, recordsLoading, recordsLoaded;
+    private bool suppress, suppressPets, loading, busy, expanded, rawExpanded, disposed, recordsLoading, recordsLoaded, serviceRecoveryAvailable, serviceRecoveryWorking, layoutReady;
     private DateTime nextRefresh = DateTime.MinValue;
     internal event EventHandler<NativeQuotaSelectionEventArgs> QuotaSelectionChanged;
     internal bool AccountMutationPending { get; private set; }
@@ -351,8 +372,16 @@ internal sealed class DashboardWindow : NativeForm
         ClientSize = new Size(1280, 850); MinimumSize = new Size(880, 640);
         DoubleBuffered = true;
         var shell = Columns(190, -1); shell.BackColor = BackColor;
-        var sidebar = Rows(62, 28, 50, 50, 50, 50, -1, 178, 34);
-        sidebar.Padding = new Padding(20, 24, 18, 18); sidebar.BackColor = Color.FromArgb(242, 246, 234);
+        var sidebarScroll = new Panel { Name = "SidebarScroll", Dock = DockStyle.Fill, AutoScroll = true, Margin = Padding.Empty, BackColor = Color.FromArgb(242, 246, 234) };
+        var sidebar = Rows(62, 28, 50, 50, 50, 50, -1, 120, 34);
+        sidebar.Name = "SidebarContent"; sidebar.Dock = DockStyle.Top; sidebar.MinimumSize = new Size(0, 486);
+        sidebar.Padding = new Padding(16, 24, 10, 18); sidebar.BackColor = sidebarScroll.BackColor;
+        Action fitSidebar = delegate {
+            if (!LayoutStable) return;
+            var height = Math.Max(sidebar.MinimumSize.Height, sidebarScroll.ClientSize.Height);
+            if (sidebar.Height != height) sidebar.Height = height;
+        };
+        sidebarScroll.SizeChanged += delegate { fitSidebar(); }; sidebarScroll.Layout += delegate { fitSidebar(); };
         var brand = LabelFor("PilotMeter", Ink); brand.Font = Typeface(17, FontStyle.Bold); sidebar.Controls.Add(brand, 0, 0);
         var edition = LabelFor("YOUR QUIET COPILOT", Muted); edition.Font = Typeface(7.2F, FontStyle.Regular); sidebar.Controls.Add(edition, 0, 1);
         var names = new[] { "总览", "可用模型", "用量记录", "账户" }; var keys = new[] { "overview", "models", "records", "accounts" };
@@ -367,33 +396,36 @@ internal sealed class DashboardWindow : NativeForm
                 var next = (navigationIndex + (e.KeyCode == Keys.Down ? 1 : 3)) % 4; navigation[keys[next]].Focus(); Navigate(keys[next]); e.Handled = true;
             };
         }
-        var companion = Rows(92, 28, 38); companion.Padding = new Padding(8); companion.BackColor = Color.FromArgb(233, 240, 222);
-        petPreview = new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, AccessibleName = "当前桌面宠物", TabStop = false };
-        companion.Controls.Add(petPreview, 0, 0);
-        companion.Controls.Add(LabelFor("陪你专注的小伙伴", Muted), 0, 1);
-        var customize = ButtonFor("更换桌面宠物"); customize.Click += delegate { Navigate("accounts"); if (petButtons.Count > 0) petButtons[0].Focus(); }; companion.Controls.Add(customize, 0, 2);
-        sidebar.Controls.Add(companion, 0, 7);
-        var bottom = LabelFor("关闭窗口后，宠物继续陪伴。", Muted); bottom.Font = Typeface(7.6F, FontStyle.Regular); sidebar.Controls.Add(bottom, 0, 8);
-        shell.Controls.Add(sidebar, 0, 0);
+        var identity = Rows(25, 21, 24, 34); identity.Name = "SidebarAccount"; identity.Padding = new Padding(8); identity.BackColor = Color.FromArgb(233, 240, 222);
+        sidebarAccountLogin = LabelFor("未登录 GitHub", Ink); sidebarAccountLogin.Name = "SidebarAccountLogin"; sidebarAccountLogin.Font = Typeface(9.5F, FontStyle.Bold);
+        sidebarAccountHost = Caption("个人或工作账号"); sidebarAccountHost.Name = "SidebarAccountHost";
+        sidebarAccountState = Caption("正在连接本机服务…"); sidebarAccountState.Name = "SidebarAccountState";
+        identity.Controls.Add(sidebarAccountLogin, 0, 0); identity.Controls.Add(sidebarAccountHost, 0, 1); identity.Controls.Add(sidebarAccountState, 0, 2);
+        var manageAccount = ButtonFor("账号管理"); manageAccount.Name = "ManageSidebarAccount"; manageAccount.Click += delegate { Navigate("accounts"); }; identity.Controls.Add(manageAccount, 0, 3);
+        sidebar.Controls.Add(identity, 0, 7);
+        var bottom = LabelFor("关闭窗口后，后台继续运行。", Muted); bottom.Name = "SidebarFooter"; bottom.Font = Typeface(7.6F, FontStyle.Regular); sidebar.Controls.Add(bottom, 0, 8);
+        sidebarScroll.Controls.Add(sidebar); shell.Controls.Add(sidebarScroll, 0, 0);
 
-        var content = Rows(54, 100, -1, 42); content.Padding = new Padding(28, 22, 28, 10);
-        var topbar = Columns(-1, 310, 42, 118);
+        var content = Rows(54, 70, -1, 42); content.Padding = new Padding(28, 18, 28, 10);
+        var topbar = Columns(-1, 260, 42, 136);
         accountStatus = LabelFor("正在连接本机服务…", Muted); topbar.Controls.Add(accountStatus, 0, 0);
         accounts = new ComboBox { Name = "AccountSelector", AccessibleName = "当前 GitHub 账号", Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, IntegralHeight = false, DropDownHeight = 250, Margin = new Padding(10, 9, 8, 0) };
         accountSettings = ButtonFor("···"); accountSettings.AccessibleName = "当前账号操作"; accountSettings.Margin = new Padding(0, 3, 6, 9);
         refresh = ButtonFor("刷新数据"); refresh.Name = "RefreshQuota"; refresh.Margin = new Padding(5, 3, 0, 9);
         topbar.Controls.Add(accounts, 1, 0); topbar.Controls.Add(accountSettings, 2, 0); topbar.Controls.Add(refresh, 3, 0); content.Controls.Add(topbar, 0, 0);
-        var heading = Rows(22, 43, 30); breadcrumb = LabelFor("YOUR COPILOT, AT A GLANCE", Muted); breadcrumb.Font = Typeface(7.5F, FontStyle.Regular);
-        pageTitle = LabelFor("用量概览", Ink); pageTitle.Font = Typeface(23, FontStyle.Bold);
+        var heading = Rows(0, 38, 28); breadcrumb = LabelFor("", Muted); breadcrumb.Visible = false;
+        pageTitle = LabelFor("用量概览", Ink); pageTitle.Font = Typeface(20, FontStyle.Bold);
         pageSubtitle = LabelFor("了解当前额度，找到适合下一项任务的模型。", Muted);
         heading.Controls.Add(breadcrumb, 0, 0); heading.Controls.Add(pageTitle, 0, 1); heading.Controls.Add(pageSubtitle, 0, 2); content.Controls.Add(heading, 0, 1);
         pageHost = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty }; content.Controls.Add(pageHost, 0, 2);
         var footer = Columns(-1, 190); feedback = LabelFor("", Muted); feedback.Font = Typeface(8, FontStyle.Regular); synced = LabelFor("尚未同步", Muted); synced.TextAlign = ContentAlignment.MiddleRight; synced.Font = Typeface(8, FontStyle.Regular);
         footer.Controls.Add(feedback, 0, 0); footer.Controls.Add(synced, 1, 0); content.Controls.Add(footer, 0, 3);
+        FitTextRow(content, feedback, 3, null);
         shell.Controls.Add(content, 1, 0); Controls.Add(shell);
 
         BuildOverview(); BuildModels(); BuildRecords(); BuildAccounts();
         FollowTextDescription(localSummary); FollowTextDescription(modelState); FollowTextDescription(feedback); FollowTextDescription(recordState);
+        FollowTextDescription(sidebarAccountLogin); FollowTextDescription(sidebarAccountHost); FollowTextDescription(sidebarAccountState);
         accountMenu = new ContextMenuStrip();
         reauthenticate = new ToolStripMenuItem("重新登录当前账号", null, delegate { OpenLogin(true); });
         remove = new ToolStripMenuItem("移除当前账号…", null, async delegate { await RemoveAsync(); });
@@ -420,6 +452,8 @@ internal sealed class DashboardWindow : NativeForm
         };
         VisibleChanged += delegate { UpdatePolling(); }; Resize += delegate { UpdatePolling(); };
         Navigate("overview"); ClearQuota("连接 GitHub 账号后，查看当前账户的额度。"); UpdateControls();
+        ResumeLayout(true);
+        layoutReady = true; fitSidebar(); RefreshAdaptiveLayout();
     }
 
     private static TableLayoutPanel Rows(params int[] heights)
@@ -445,9 +479,19 @@ internal sealed class DashboardWindow : NativeForm
         pageHost.Controls.Add(page); pages.Add(key, page); return page;
     }
 
-    private static void SizeCards(FlowLayoutPanel page)
+    private void SizeCards(FlowLayoutPanel page)
     {
+        if (!LayoutStable) return;
         foreach (Control control in page.Controls) control.Width = Math.Max(180, page.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 2);
+    }
+
+    private bool LayoutStable { get { return layoutReady && (AutoScaleMode != AutoScaleMode.Dpi || Math.Abs(AutoScaleDimensions.Width - CurrentAutoScaleDimensions.Width) < .5F); } }
+
+    private void RefreshAdaptiveLayout()
+    {
+        if (!LayoutStable) return;
+        foreach (var page in pages.Values) SizeCards((FlowLayoutPanel)page);
+        foreach (var fit in fitTextRows) fit();
     }
 
     private NativeSurface Card(FlowLayoutPanel page, int height)
@@ -475,14 +519,14 @@ internal sealed class DashboardWindow : NativeForm
         return grid;
     }
 
-    private Label Metric(TableLayoutPanel container, int column, string caption, float size)
+    private Label Metric(TableLayoutPanel container, int row, string caption, float size)
     {
-        var metric = Rows(28, -1, 26); metric.Padding = new Padding(column == 0 ? 0 : 20, 5, 0, 5);
+        var metric = Columns(76, -1);
         var title = Caption(caption); metric.Controls.Add(title, 0, 0);
-        var amount = LabelFor("—", Ink); amount.Font = Typeface(size, FontStyle.Bold); metric.Controls.Add(amount, 0, 1);
-        var unit = Caption(""); metric.Controls.Add(unit, 0, 2); container.Controls.Add(metric, column, 0);
-        if (column == 0) { quotaCaption = title; quotaUnit = unit; }
-        else if (column == 1) quotaUsedUnit = unit; else quotaTotalUnit = unit;
+        var viewport = new Panel { Name = "ExactMetricViewport" + row, AutoScroll = true, Dock = DockStyle.Fill, Margin = Padding.Empty, BackColor = Color.Transparent };
+        var amount = new NativeExactLabel { KeepOnOneLine = true, Text = "—", ForeColor = Ink, BackColor = Color.Transparent, Margin = Padding.Empty, Font = Typeface(size, row == 0 ? FontStyle.Bold : FontStyle.Regular) };
+        viewport.Controls.Add(amount); metric.Controls.Add(viewport, 1, 0); container.Controls.Add(metric, 0, row);
+        if (row == 2) quotaCaption = title;
         amount.TextChanged += delegate { tips.SetToolTip(amount, amount.Text); amount.AccessibleDescription = amount.Text; };
         return amount;
     }
@@ -493,22 +537,91 @@ internal sealed class DashboardWindow : NativeForm
         tips.SetToolTip(control, control.Text); control.AccessibleDescription = control.Text;
     }
 
+    // Text can change after a sync, and a narrow window or larger system font
+    // can need more lines. Grow the row and its scrolling card together so the
+    // next section never paints over the message. Reclaim that space on resize.
+    private void FitTextRow(TableLayoutPanel layout, Label label, int row, NativeSurface card)
+    {
+        var minimum = layout.RowStyles[row].Height;
+        var initialFontSize = label.Font.Size;
+        var fitting = false;
+        Action fit = delegate {
+            if (!LayoutStable || fitting || label.Width < 100 || disposed) return;
+            fitting = true;
+            try
+            {
+                var dpi = CurrentAutoScaleDimensions.Width;
+                if (dpi < 48) { using (var graphics = label.CreateGraphics()) dpi = graphics.DpiY; }
+                var scale = label.Font.Size / initialFontSize * dpi / 96F;
+                var measured = label is NativeExactLabel ? label.GetPreferredSize(new Size(label.ClientSize.Width, Int32.MaxValue))
+                    : TextRenderer.MeasureText(label.Text, label.Font, new Size(label.ClientSize.Width, Int32.MaxValue), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+                var height = Math.Max((int)Math.Ceiling(minimum * scale), measured.Height + (int)Math.Ceiling(4 * scale));
+                var difference = height - (int)Math.Round(layout.RowStyles[row].Height);
+                if (difference == 0) return;
+                layout.RowStyles[row].SizeType = SizeType.Absolute; layout.RowStyles[row].Height = height;
+                if (card != null) card.Height += difference;
+            }
+            finally { fitting = false; }
+        };
+        label.AutoEllipsis = false;
+        fitTextRows.Add(fit);
+        label.TextChanged += delegate { fit(); }; label.SizeChanged += delegate { fit(); }; label.FontChanged += delegate { fit(); };
+    }
+
+    private void FitMetrics(TableLayoutPanel layout, TableLayoutPanel metrics, NativeSurface card)
+    {
+        var initialFontSize = quotaUsed.Font.Size;
+        var fitting = false;
+        Action fit = delegate {
+            if (!LayoutStable || fitting || metrics.Width < 100 || disposed) return;
+            fitting = true;
+            try
+            {
+                var scale = quotaUsed.Font.Size / initialFontSize * CurrentAutoScaleDimensions.Width / 96F;
+                var height = 0; var row = 0;
+                foreach (var label in new[] { quotaUsed, quotaTotal, quotaValue })
+                {
+                    var viewport = (Panel)label.Parent;
+                    var measured = label.GetPreferredSize(new Size(Int32.MaxValue, Int32.MaxValue));
+                    var lineHeight = measured.Height + (int)Math.Ceiling(4 * scale);
+                    var needsScroll = measured.Width + 4 * scale > viewport.ClientSize.Width;
+                    var rowHeight = Math.Max((int)Math.Ceiling((row == 0 ? 56 : 46) * scale), lineHeight + (needsScroll ? SystemInformation.HorizontalScrollBarHeight : 0) + (int)Math.Ceiling(8 * scale));
+                    metrics.RowStyles[row++].Height = rowHeight; height += rowHeight;
+                    label.SetBounds(viewport.AutoScrollPosition.X, Math.Max(0, (rowHeight - (needsScroll ? SystemInformation.HorizontalScrollBarHeight : 0) - lineHeight) / 2), Math.Max(viewport.ClientSize.Width, measured.Width + (int)Math.Ceiling(4 * scale)), lineHeight);
+                }
+                var difference = height - (int)Math.Round(layout.RowStyles[1].Height);
+                if (difference == 0) return;
+                layout.RowStyles[1].Height = height; card.Height += difference;
+            }
+            finally { fitting = false; }
+        };
+        fitTextRows.Add(fit);
+        foreach (var label in new[] { quotaValue, quotaUsed, quotaTotal })
+        {
+            label.TextChanged += delegate { ((Panel)label.Parent).AutoScrollPosition = Point.Empty; fit(); };
+            label.Parent.SizeChanged += delegate { fit(); }; label.FontChanged += delegate { fit(); };
+        }
+    }
+
     private void BuildOverview()
     {
         var page = Page("overview");
-        var quota = Card(page, 310); quota.SurfaceColor = Color.FromArgb(246, 249, 238);
-        var layout = Rows(32, 136, 8, 30, 38, 22); var top = Columns(-1, 100);
+        var quota = Card(page, 322); quota.SurfaceColor = Color.FromArgb(246, 249, 238);
+        var layout = Rows(32, 148, 14, 30, 28, 22); var top = Columns(-1, 100);
         category = Title("当前账户额度"); top.Controls.Add(category, 0, 0);
         var details = Link("额度明细  →"); details.LinkClicked += delegate { ShowQuotaDetails(); }; top.Controls.Add(details, 1, 0); layout.Controls.Add(top, 0, 0);
-        var metrics = Columns(-1, -1, -1);
-        quotaValue = Metric(metrics, 0, "剩余可用", 32); quotaValue.Name = "QuotaValue";
-        quotaUsed = Metric(metrics, 1, "已经使用", 23); quotaUsed.Name = "QuotaUsed";
-        quotaTotal = Metric(metrics, 2, "当前总额", 23); quotaTotal.Name = "QuotaTotal";
+        var metrics = Rows(56, 46, 46);
+        quotaUsed = Metric(metrics, 0, "已用", 19); quotaUsed.Name = "QuotaUsed";
+        quotaTotal = Metric(metrics, 1, "总额", 16); quotaTotal.Name = "QuotaTotal";
+        quotaValue = Metric(metrics, 2, "剩余", 16); quotaValue.Name = "QuotaValue";
         layout.Controls.Add(metrics, 0, 1);
-        progress = new NativeUsageBar { Name = "QuotaProgress", Dock = DockStyle.Fill, Margin = Padding.Empty }; layout.Controls.Add(progress, 0, 2);
-        quotaRatios = Caption("额度比例待同步"); layout.Controls.Add(quotaRatios, 0, 3);
-        quotaDetail = LabelFor("", Muted); quotaDetail.Font = Typeface(8.4F, FontStyle.Regular); layout.Controls.Add(quotaDetail, 0, 4);
+        progress = new NativeUsageBar { Name = "QuotaProgress", Dock = DockStyle.Fill, Margin = new Padding(0, 8, 0, 0) }; layout.Controls.Add(progress, 0, 2);
+        quotaRatios = new NativeExactLabel { Text = "额度比例待同步", ForeColor = Muted, BackColor = Color.Transparent, Dock = DockStyle.Fill, Margin = Padding.Empty, Font = Typeface(8, FontStyle.Regular) }; layout.Controls.Add(quotaRatios, 0, 3);
+        quotaDetail = new NativeExactLabel { ForeColor = Muted, BackColor = Color.Transparent, Dock = DockStyle.Fill, Margin = Padding.Empty, Font = Typeface(8.4F, FontStyle.Regular) }; layout.Controls.Add(quotaDetail, 0, 4);
         reset = Caption(""); layout.Controls.Add(reset, 0, 5); quota.Controls.Add(layout);
+        FitMetrics(layout, metrics, quota);
+        FitTextRow(layout, quotaRatios, 3, quota);
+        FitTextRow(layout, quotaDetail, 4, quota);
 
         var expanders = new Panel { Height = 34, Margin = new Padding(3, 0, 0, 8) }; var expandRow = Columns(-1, -1);
         other = Link("其他额度 ▸"); raw = Link("原始数值（单位待确认） ▸"); raw.TextAlign = ContentAlignment.MiddleRight;
@@ -527,9 +640,10 @@ internal sealed class DashboardWindow : NativeForm
         rawPanel = Card(page, 160); rawPanel.SurfaceColor = Color.FromArgb(252, 246, 230);
         rawText = new TextBox { Name = "RawQuotaFields", AccessibleName = "允许展示的原始额度数值", Multiline = true, ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = rawPanel.SurfaceColor, ForeColor = Ink, Dock = DockStyle.Fill, ScrollBars = ScrollBars.Vertical };
         rawPanel.Controls.Add(rawText); rawPanel.Visible = false;
-        var local = Card(page, 124); var localLayout = Rows(29, -1);
+        var local = Card(page, 124); var localLayout = Rows(29, 51);
         var localHeader = Columns(-1, 110); localHeader.Controls.Add(Title("本机用量"), 0, 0); var history = Link("查看记录  →"); history.LinkClicked += delegate { Navigate("records"); }; localHeader.Controls.Add(history, 1, 0);
         localSummary = LabelFor("尚未读取本机会话。", Muted); localSummary.AutoEllipsis = false; localLayout.Controls.Add(localHeader, 0, 0); localLayout.Controls.Add(localSummary, 0, 1); local.Controls.Add(localLayout);
+        FitTextRow(localLayout, localSummary, 1, local);
         var modelCard = Card(page, 295); var modelsLayout = Rows(32, 33, -1);
         var modelHeader = Columns(-1, 110); modelHeader.Controls.Add(Title("账户可用模型"), 0, 0); var all = Link("查看全部  →"); all.LinkClicked += delegate { Navigate("models"); }; modelHeader.Controls.Add(all, 1, 0);
         modelSummary = Caption("模型权限待验证；登录成功不会自动授予模型权限。"); overviewModels = Grid("模型", "访问状态", "能力"); overviewModels.Name = "OverviewModels";
@@ -552,6 +666,7 @@ internal sealed class DashboardWindow : NativeForm
         modelsGrid.CellDoubleClick += delegate(object sender, DataGridViewCellEventArgs e) { ShowModelFrom(modelsGrid, e.RowIndex); };
         modelsGrid.KeyDown += delegate(object sender, KeyEventArgs e) { if (e.KeyCode == Keys.Enter && modelsGrid.CurrentRow != null) { e.Handled = true; ShowModelFrom(modelsGrid, modelsGrid.CurrentRow.Index); } };
         layout.Controls.Add(modelsGrid, 0, 2); layout.Controls.Add(Caption("双击或按 Enter 查看来源、策略和验证时间。模型共享账户额度，没有独立模型余额。"), 0, 3); card.Controls.Add(layout);
+        FitTextRow(layout, modelState, 1, card);
     }
 
     private void BuildRecords()
@@ -567,6 +682,7 @@ internal sealed class DashboardWindow : NativeForm
         recordsGrid.KeyDown += delegate(object sender, KeyEventArgs e) { if (e.KeyCode == Keys.Enter && recordsGrid.CurrentRow != null) { e.Handled = true; ShowRecord(recordsGrid.CurrentRow.Index); } };
         layout.Controls.Add(recordsGrid, 0, 2); recordState = Caption("尚未读取记录。"); layout.Controls.Add(recordState, 0, 3);
         loadMore = ButtonFor("加载更多记录"); loadMore.Name = "LoadMoreRecords"; loadMore.Enabled = false; layout.Controls.Add(loadMore, 0, 4); card.Controls.Add(layout);
+        FitTextRow(layout, recordScope, 1, card); FitTextRow(layout, recordState, 3, card);
         loadMore.Click += async delegate { await LoadRecordsAsync(true); };
         recordMonth.ValueChanged += async delegate { ResetRecords(); await LoadRecordsAsync(false); };
         recordSort.SelectedIndexChanged += async delegate { ResetRecords(); await LoadRecordsAsync(false); };
@@ -586,6 +702,7 @@ internal sealed class DashboardWindow : NativeForm
         actions.Controls.Add(Caption("双击账号或按 Enter 切换"), 0, 0); accountReauth = ButtonFor("重新登录当前账号"); accountRemove = ButtonFor("移除当前账号…");
         accountReauth.Click += delegate { OpenLogin(true); }; accountRemove.Click += async delegate { await RemoveAsync(); };
         actions.Controls.Add(accountReauth, 1, 0); actions.Controls.Add(accountRemove, 3, 0); layout.Controls.Add(actions, 0, 3); card.Controls.Add(layout);
+        FitTextRow(layout, accountHint, 1, card);
 
         var pets = Card(page, 444); var petLayout = Rows(34, 40, 234, 58, 28); petLayout.Controls.Add(Title("选择你的桌面伙伴"), 0, 0);
         petHint = LabelFor("10 个角色，选择后立即更新桌面宠物。", Muted); petLayout.Controls.Add(petHint, 0, 1);
@@ -606,6 +723,7 @@ internal sealed class DashboardWindow : NativeForm
         petMotion = new CheckBox { Name = "PetMotion", Text = "轻微动效", Dock = DockStyle.Fill, ForeColor = Ink }; petTop = new CheckBox { Name = "PetAlwaysOnTop", Text = "保持置顶", Dock = DockStyle.Fill, ForeColor = Ink };
         settings.Controls.Add(petSizeLabel, 0, 0); settings.Controls.Add(petSize, 1, 0); settings.Controls.Add(petMotion, 2, 0); settings.Controls.Add(petTop, 3, 0); petLayout.Controls.Add(settings, 0, 3);
         petLayout.Controls.Add(Caption("拖动宠物可调整位置，点击宠物打开主窗口。关闭此窗口后，宠物和服务继续运行。"), 0, 4); pets.Controls.Add(petLayout);
+        FitTextRow(petLayout, petHint, 1, pets);
         petSize.ValueChanged += delegate { if (!suppressPets && petPreferences != null) petPreferences.SetSize(petSize.Value); };
         petMotion.CheckedChanged += delegate { if (!suppressPets && petPreferences != null) petPreferences.SetMotion(petMotion.Checked); };
         petTop.CheckedChanged += delegate { if (!suppressPets && petPreferences != null) petPreferences.SetAlwaysOnTop(petTop.Checked); };
@@ -672,7 +790,6 @@ internal sealed class DashboardWindow : NativeForm
             foreach (var pet in DesktopPetCatalog.All) if (pet.Id == petPreferences.PetId) name = pet.Name;
             petHint.Text = "当前伙伴：" + name + "。" + (String.IsNullOrEmpty(petPreferences.PersistenceWarning) ? "选择已保存在本机，立即生效。" : NativeData.Clean(petPreferences.PersistenceWarning, 300));
             tips.SetToolTip(petHint, petHint.Text);
-            var old = petPreview.Image; petPreview.Image = PetThumbnail(petPreferences.PetId, 100); if (old != null) old.Dispose();
         }
         finally { suppressPets = false; }
     }
@@ -706,15 +823,22 @@ internal sealed class DashboardWindow : NativeForm
         suppress = true; accounts.Items.Clear(); suppress = false; accountsGrid.Rows.Clear();
         ResetRecords(); RenderModels(); ClearQuota(instance == null ? explanation ?? "本机服务未连接。" : "正在读取当前账号…");
         accountStatus.Text = instance == null ? "本机服务离线" : "正在连接…"; synced.Text = "尚未同步"; feedback.Text = ""; localSummary.Text = "尚未读取本机会话。";
+        RenderSidebarAccount(null, instance == null ? "本机服务未连接" : "正在读取账号…");
         nextRefresh = DateTime.MinValue;
         if (instance != null) api = new DesktopNativeApi(instance);
         UpdateControls(); UpdatePolling();
         if (CanRead) BeginInvoke(new Action(async delegate { await LoadAsync(true); }));
     }
 
+    internal void SetServiceRecovery(bool available, bool working)
+    {
+        serviceRecoveryAvailable = available; serviceRecoveryWorking = working;
+        UpdateControls();
+    }
+
     private void ClearQuota(string description)
     {
-        category.Text = "当前账户额度"; quotaCaption.Text = "剩余可用"; quotaValue.Text = quotaUsed.Text = quotaTotal.Text = "—"; quotaUnit.Text = quotaUsedUnit.Text = quotaTotalUnit.Text = "";
+        category.Text = "当前账户额度"; quotaCaption.Text = "剩余"; quotaValue.Text = quotaUsed.Text = quotaTotal.Text = "—";
         progress.Percentage = null; quotaRatios.Text = "额度比例待同步"; quotaDetail.Text = NativeData.Clean(description, 400); reset.Text = "";
         tips.SetToolTip(quotaDetail, quotaDetail.Text); rawText.Text = ""; raw.Visible = other.Visible = false;
         ExpandRaw(false); ExpandOther(false);
@@ -724,6 +848,7 @@ internal sealed class DashboardWindow : NativeForm
     private void ClearAccountPresentation(string description)
     {
         ClearQuota(description); ResetRecords(); modelsSignature = null; modelsGrid.Rows.Clear(); overviewModels.Rows.Clear();
+        RenderSidebarAccount(null, "正在更新账号…");
         modelState.Text = modelSummary.Text = localSummary.Text = description;
     }
 
@@ -736,7 +861,8 @@ internal sealed class DashboardWindow : NativeForm
         var selected = ready && overview.Active != null;
         accountSettings.Enabled = selected; accountReauth.Enabled = selected && !(overview.Login != null && overview.Login.Active); accountRemove.Enabled = selected;
         if (reauthenticate != null) { reauthenticate.Enabled = accountReauth.Enabled; remove.Enabled = selected; }
-        refresh.Enabled = !busy && !loading && loginDialog == null; refresh.Text = api == null ? "重试连接" : busy ? "同步中…" : "刷新数据";
+        refresh.Enabled = !busy && !loading && !serviceRecoveryWorking && loginDialog == null;
+        refresh.Text = api == null ? serviceRecoveryWorking ? "正在重连…" : serviceRecoveryAvailable ? "重启本机服务" : "重试连接" : busy ? "同步中…" : "刷新数据";
         bucketChoice.Enabled = !busy && !loading; accountsGrid.Enabled = ready;
         loadMore.Enabled = !busy && !recordsLoading && recordsCursor != null && api != null;
     }
@@ -801,7 +927,7 @@ internal sealed class DashboardWindow : NativeForm
             if (current != generation || disposed) return;
             networkError = NativeData.Error(error);
             if (refreshOnly && overview != null) ApplyOverview(overview);
-            else { overview = null; ClearQuota("操作尚未确认，请刷新后重试。"); RenderModels(); }
+            else { overview = null; ClearQuota("操作尚未确认，请刷新后重试。"); RenderModels(); RenderSidebarAccount(null, "账号状态待确认"); }
             feedback.Text = "操作未完成 · " + networkError; tips.SetToolTip(feedback, feedback.Text);
         }
         finally {
@@ -829,7 +955,9 @@ internal sealed class DashboardWindow : NativeForm
         for (var index = 1; index < accounts.Items.Count; index++) if (((NativeAccount)accounts.Items[index]).Id == result.ActiveId) accounts.SelectedIndex = index;
         suppress = false;
         var active = result.Active;
-        accountStatus.Text = active == null ? "连接你的个人或工作账号" : active.Status == "reauth-required" ? "登录已失效 · 请重新登录" : active.Status == "error" ? "账号连接异常" : "当前账号 · " + active.Login;
+        RenderSidebarAccount(active, !result.Enabled ? "账号功能未启用" : networkError != null ? "同步失败" : null);
+        accountStatus.Text = active == null ? "尚未连接账号" : active.Status == "reauth-required" ? "需要重新登录" : active.Status == "error" ? "账号连接异常" : "账号已连接";
+        tips.SetToolTip(accountStatus, active == null ? "请到账户页登录 GitHub。" : "当前账号：" + active.Login);
         synced.Text = "上次同步  " + NativeDisplay.Time(result.FetchedAt);
         feedback.Text = networkError != null ? "同步失败 · 当前展示上次读取的数据" : result.Refreshing ? "正在同步额度与模型权限…" : result.Stale ? "旧快照 · 等待最新数据" : "";
         accountHint.Text = !result.Enabled ? "当前服务未启用真实账号操作。" : active == null ? "连接 GitHub 后分别验证身份、额度和模型权限。" : "当前账号：" + active.Login + "。切换账号后，额度、模型与记录同步切换。";
@@ -852,23 +980,29 @@ internal sealed class DashboardWindow : NativeForm
         RenderModels(); UpdateControls();
     }
 
+    private void RenderSidebarAccount(NativeAccount account, string state = null)
+    {
+        sidebarAccountLogin.Text = account == null ? "未登录 GitHub" : "@" + account.Login;
+        sidebarAccountHost.Text = account == null ? "个人或工作账号" : new Uri(account.Host).Host;
+        sidebarAccountState.Text = state ?? (account == null ? "到账户页连接账号" : account.Status == "connected" ? "已连接" : account.Status == "reauth-required" ? "需要重新登录" : "连接异常");
+        sidebarAccountState.ForeColor = state == null && account != null && account.Status == "connected" ? Accent : Muted;
+    }
+
     private void RenderQuota(NativeOverview result)
     {
         var bucket = result.Primary;
         if (bucket == null) { ClearQuota("请选择要查看的额度类别。各类别独立计量。"); }
         else
         {
-            category.Text = bucket.Label + " · 当前账户额度"; quotaUnit.Text = quotaUsedUnit.Text = quotaTotalUnit.Text = bucket.UnitLabel;
-            quotaCaption.Text = bucket.Unlimited ? "当前额度" : bucket.Remaining != null ? "剩余可用" : bucket.RemainingPercentage.HasValue ? "剩余比例" : "已用比例";
-            quotaValue.Text = bucket.Unlimited ? "无固定上限" : bucket.Remaining != null ? NativeDisplay.CompactAmount(bucket.Remaining) : bucket.RemainingPercentage.HasValue ? NativeDisplay.ExactPercentage(bucket.RemainingPercentageText) : NativeDisplay.Percentage(bucket.Percentage);
-            quotaUsed.Text = NativeDisplay.CompactAmount(bucket.Used); quotaTotal.Text = bucket.Unlimited ? "无固定上限" : NativeDisplay.CompactAmount(bucket.Limit);
-            if (bucket.Remaining != null) { tips.SetToolTip(quotaValue, NativeDisplay.Amount(bucket.Remaining)); quotaValue.AccessibleDescription = NativeDisplay.Amount(bucket.Remaining); }
-            tips.SetToolTip(quotaUsed, NativeDisplay.Amount(bucket.Used)); quotaUsed.AccessibleDescription = NativeDisplay.Amount(bucket.Used);
-            tips.SetToolTip(quotaTotal, bucket.Unlimited ? "无固定上限" : NativeDisplay.Amount(bucket.Limit)); quotaTotal.AccessibleDescription = bucket.Unlimited ? "无固定上限" : NativeDisplay.Amount(bucket.Limit);
+            category.Text = bucket.Label;
+            quotaCaption.Text = bucket.Unlimited ? "额度" : bucket.Remaining != null ? "剩余" : bucket.RemainingPercentage.HasValue ? "剩余比例" : "已用比例";
+            quotaValue.Text = bucket.Unlimited ? "无固定上限" : bucket.Remaining != null ? NativeDisplay.Amount(bucket.Remaining) : bucket.RemainingPercentageText != null ? NativeDisplay.ExactPercentage(bucket.RemainingPercentageText) : NativeDisplay.ExactPercentage(bucket.UsedPercentageText);
+            quotaUsed.Text = NativeDisplay.Amount(bucket.Used ?? bucket.RawUsed); quotaTotal.Text = bucket.Unlimited ? "无固定上限" : NativeDisplay.Amount(bucket.Limit ?? bucket.RawLimit);
             progress.Percentage = bucket.Percentage;
-            quotaRatios.Text = bucket.Unlimited ? "此类别无固定上限，不与其他额度相加。" : "已用 " + NativeDisplay.Percentage(bucket.Percentage) + "    ·    剩余 " + NativeDisplay.ExactPercentage(bucket.RemainingPercentageText);
+            progress.AccessibleDescription = bucket.UsedPercentageText == null ? "比例未知" : "已用 " + NativeDisplay.ExactPercentage(bucket.UsedPercentageText);
+            quotaRatios.Text = bucket.Unlimited ? "无固定上限" : "已用比例  " + NativeDisplay.ExactPercentage(bucket.UsedPercentageText);
             var stale = result.Stale || networkError != null;
-            quotaDetail.Text = (stale ? "旧快照 · " + NativeDisplay.Time(result.FetchedAt) + " · " : "") + (bucket.Unit == "unspecified" ? "单位待确认；可展开 GitHub 返回的原始计量值。" : bucket.Overage != null && bucket.Overage != "0" ? "已超出固定额度 " + NativeDisplay.Amount(bucket.Overage) + " " + bucket.UnitLabel : "同一账户、同一额度类别；与组织／企业月度账单独立。");
+            quotaDetail.Text = (stale ? "旧快照 · " + NativeDisplay.Time(result.FetchedAt) + " · " : "") + (bucket.Unit == "unspecified" ? "原始数值 · 单位未确认" : bucket.Overage != null && bucket.Overage != "0" ? "已超出固定额度 " + NativeDisplay.Amount(bucket.Overage) + " " + bucket.UnitLabel : "计量单位 · " + bucket.UnitLabel);
             quotaDetail.ForeColor = stale || bucket.Unit == "unspecified" ? Color.FromArgb(145, 105, 41) : Muted; tips.SetToolTip(quotaDetail, quotaDetail.Text);
             var date = NativeData.Date(bucket.NextResetAt); reset.Text = date.HasValue && date.Value > DateTimeOffset.UtcNow ? "下次重置  " + NativeDisplay.Time(bucket.NextResetAt) : "重置时间待确认";
             raw.Visible = bucket.Unit == "unspecified"; rawText.Text = RawValues(bucket); if (!raw.Visible) ExpandRaw(false);
@@ -988,7 +1122,7 @@ internal sealed class DashboardWindow : NativeForm
     {
         if (overview == null || !overview.CanDisplaySnapshot || overview.Primary == null) { ShowDetails("额度明细", "当前没有可展示的额度快照。请连接账号并同步。"); return; }
         var bucket = overview.Primary;
-        var text = "账户：" + overview.Active.Login + "\r\n类别：" + bucket.Label + "\r\n单位：" + bucket.UnitLabel + "\r\n总额：" + (bucket.Unlimited ? "无固定上限" : NativeDisplay.Amount(bucket.Limit)) + "\r\n已用：" + NativeDisplay.Amount(bucket.Used) + "\r\n剩余：" + NativeDisplay.Amount(bucket.Remaining) + "\r\n已用比例：" + NativeDisplay.Percentage(bucket.Percentage) + "\r\n剩余比例：" + NativeDisplay.ExactPercentage(bucket.RemainingPercentageText) + "\r\n同步时间：" + NativeDisplay.Time(overview.FetchedAt) + "\r\n状态：" + (overview.Stale || networkError != null ? "旧快照，等待同步" : "已同步") + "\r\n\r\n" + bucket.Detail;
+        var text = "账户：" + overview.Active.Login + "\r\n类别：" + bucket.Label + "\r\n单位：" + bucket.UnitLabel + "\r\n总额：" + (bucket.Unlimited ? "无固定上限" : NativeDisplay.Amount(bucket.Limit ?? bucket.RawLimit)) + "\r\n已用：" + NativeDisplay.Amount(bucket.Used ?? bucket.RawUsed) + "\r\n剩余：" + NativeDisplay.Amount(bucket.Remaining) + "\r\n已用比例：" + NativeDisplay.ExactPercentage(bucket.UsedPercentageText) + "\r\n剩余比例：" + NativeDisplay.ExactPercentage(bucket.RemainingPercentageText) + "\r\n同步时间：" + NativeDisplay.Time(overview.FetchedAt) + "\r\n状态：" + (overview.Stale || networkError != null ? "旧快照，等待同步" : "已同步") + "\r\n\r\n" + bucket.Detail;
         if (bucket.Unit == "unspecified") text += "\r\n\r\n" + RawValues(bucket);
         text += "\r\n\r\n绝对剩余量仅由同一快照、同一额度池的精确数量相减得出，不由百分比倒推。组织付费不代表此值是整个组织的总额度。";
         ShowDetails("额度明细", text);
@@ -1019,7 +1153,6 @@ internal sealed class DashboardWindow : NativeForm
             disposed = true; generation++; recordsGeneration++;
             if (timer != null) { timer.Stop(); timer.Dispose(); } if (accountMenu != null) accountMenu.Dispose(); tips.Dispose();
             if (petPreferences != null) petPreferences.Changed -= PetPreferencesChanged;
-            if (petPreview != null && petPreview.Image != null) { petPreview.Image.Dispose(); petPreview.Image = null; }
             foreach (var image in petImages) image.Dispose(); petImages.Clear();
             if (loginDialog != null) loginDialog.Disconnect(); if (api != null) api.Dispose();
         }
@@ -1039,5 +1172,6 @@ internal sealed class NativeDetailsDialog : NativeForm
         var body = new TextBox { Text = description, AccessibleName = title + "详细信息", Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BackColor = BackColor, ForeColor = Ink, BorderStyle = BorderStyle.None, Margin = new Padding(0, 8, 0, 12) };
         layout.Controls.Add(body, 0, 1); var close = ButtonFor("完成"); close.DialogResult = DialogResult.OK; close.Dock = DockStyle.Right; close.Width = 110; layout.Controls.Add(close, 0, 2);
         AcceptButton = close; CancelButton = close; Controls.Add(layout);
+        ResumeLayout(true);
     }
 }

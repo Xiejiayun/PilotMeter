@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Compiles shipping native sources and exercises contracts without showing any forms.
+// Compiles shipping native sources. Layout forms render at zero opacity; no visible windows.
 const workspace = resolve(fileURLToPath(new URL('..', import.meta.url)));
 if (process.argv.includes('--help')) { console.log('Usage: node scripts/test-windows-desktop.mjs\nWindows x64 native contracts and isolated loopback transport checks. No visible windows or external network.'); process.exit(0); }
 assert.equal(process.argv.length, 2, 'This test takes no arguments.');
@@ -60,6 +60,7 @@ const fixture = createServer(async (req, res) => {
     if (scenario === 'oversized') { send({ content: 'x'.repeat(1024 * 1024 + 1) }); return; }
     if (scenario === 'error') { send({ error: 'synthetic error' }, 409); return; }
     if (scenario === 'pending') { res.writeHead(200, { 'content-type': 'application/json' }); res.write('{"result":'); return; }
+    if (scenario === 'foreign-conflict') { send({ error: '本机服务已更换，请重新连接。' }, 409); return; }
     if (scenario === 'foreign') foreign = true;
     send({ result: 'read' }); return;
   }
@@ -75,7 +76,7 @@ try {
   const alias = join(temporary, 'data-junction');
   await mkdir(physical);
   await symlink(physical, alias, 'junction');
-  await run(compiler, [
+  const contractArguments = [
     '/nologo', '/target:exe', '/platform:x64', '/langversion:5', '/main:DesktopContractTests', '/out:' + executable,
     '/reference:System.Windows.Forms.dll', '/reference:System.Drawing.dll', '/reference:System.Net.Http.dll', '/reference:System.Web.Extensions.dll',
     ...['pilot', 'cat', 'shiba', 'penguin', 'slime', 'robot', 'cloud', 'sprout', 'jellyfish', 'dragon'].map((name, index) => {
@@ -93,8 +94,21 @@ try {
     join(workspace, 'test', 'windows', 'native-view.cs'),
     join(workspace, 'test', 'windows', 'desktop-contracts.cs'),
     join(workspace, 'test', 'windows', 'desktop-pets.cs'),
-  ]);
+  ];
+  await run(compiler, contractArguments);
   console.log(await run(executable, [physical, alias, fixtureOrigin]));
+  const nativeArguments = contractArguments.filter(argument => !/^\/(?:main|out):/u.test(argument));
+  const layoutExecutable = join(temporary, 'DesktopLayoutTests.exe');
+  await copyFile(join(workspace, 'scripts', 'windows', 'DesktopApp.config'), layoutExecutable + '.config');
+  await run(compiler, ['/main:DesktopLayoutTests', '/out:' + layoutExecutable, ...nativeArguments,
+    '/win32manifest:' + join(workspace, 'scripts', 'windows', 'app.manifest'),
+    join(workspace, 'test', 'windows', 'desktop-layout.cs')]);
+  console.log(await run(layoutExecutable, [join(workspace, '.tmp', 'ui-review')], 90_000));
+  const recoveryExecutable = join(temporary, 'DesktopRecoveryTests.exe');
+  await copyFile(join(workspace, 'scripts', 'windows', 'DesktopApp.config'), recoveryExecutable + '.config');
+  await run(compiler, ['/main:DesktopRecoveryTests', '/out:' + recoveryExecutable, ...nativeArguments,
+    join(workspace, 'test', 'windows', 'desktop-recovery.cs')]);
+  console.log(await run(recoveryExecutable, [join(temporary, 'recovery')], 45_000));
   passed = true;
 } finally {
   fixture.closeAllConnections();

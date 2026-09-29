@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { CopilotClient, copilotEnvironment, copilotHost } from '../../dist/providers/copilot-client.js';
+import { personalQuota } from '../../dist/providers/accounts.js';
 
 const command = fileURLToPath(new URL('../fixtures/copilot-runtime.mjs', import.meta.url));
 async function clientFor(t, mode = 'normal', options = {}) {
@@ -210,7 +211,7 @@ test('account queries use only official read-only RPCs and discard credential-be
   const quota = await client.getQuota('account-two');
   assert.equal(quota.selectionId, 'account-two'); assert.equal(quota.scope, 'user');
   assert.deepEqual(quota.snapshots, [{ type: 'premium_interactions', isUnlimitedEntitlement: false, entitlementRequests: '100',
-    usedRequests: '9007199254740993.123456789', remainingPercentage: 42.5, overage: '0.123456789123456789',
+    usedRequests: '9007199254740993.123456789', remainingPercentage: '42.5', overage: '0.123456789123456789',
     usageAllowedWithExhaustedQuota: true, overageAllowedWithExhaustedQuota: false, resetDate: '2026-10-01T00:00:00Z', unit: null, billingMode: 'unknown' }]);
   assert.doesNotMatch(JSON.stringify({ accounts, quota }), /synthetic-private|token|sensitive/);
   const trace = await requests(home);
@@ -283,7 +284,7 @@ test('idle runtimes close after queries, preserve in-flight quota requests, and 
   await new Promise(resolve => setTimeout(resolve, 150));
   await assert.rejects(client.getQuota('account-one'), { code: 'ACCOUNT_NOT_FOUND' });
   await client.listAccounts();
-  assert.equal((await client.getQuota('account-one')).snapshots[0].remainingPercentage, 42.5);
+  assert.equal((await client.getQuota('account-one')).snapshots[0].remainingPercentage, '42.5');
   assert.equal((await requests(home)).filter(row => row.method === 'connect').length, 2);
 });
 
@@ -295,6 +296,29 @@ test('quota unit remains unknown unless explicitly declared by upstream', async 
   const invalid = await clientFor(t, 'quota-invalid');
   await invalid.client.listAccounts();
   await assert.rejects(invalid.client.getQuota('account-one'), { code: 'QUOTA_INVALID' });
+});
+
+test('raw JSON percentage digits survive RPC parsing and exact account complement subtraction', async t => {
+  for (const [mode, remaining, used] of [
+    ['quota-percentage-nearly-full', '99.999999999999999999', '0.000000000000000001'],
+    ['quota-percentage-tiny', '0.000000000000000001', '99.999999999999999999'],
+    ['quota-percentage-zero', '0', '100'], ['quota-percentage-full', '100', '0'],
+  ]) {
+    const { client } = await clientFor(t, mode);
+    await client.listAccounts();
+    const result = await client.getQuota('account-one');
+    assert.equal(result.snapshots[0].remainingPercentage, remaining);
+    const projected = personalQuota('synthetic-percentage-account', result).buckets[0];
+    assert.equal(projected.remainingPercentage, remaining); assert.equal(projected.usedPercentage, used);
+  }
+});
+
+test('exact percentage range checks reject values immediately beyond 0 or 100 without rounding them into range', async t => {
+  for (const mode of ['quota-percentage-overfull', 'quota-percentage-negative', 'quota-percentage-unbounded', 'quota-percentage-missing']) {
+    const { client } = await clientFor(t, mode);
+    await client.listAccounts();
+    await assert.rejects(client.getQuota('account-one'), { code: 'QUOTA_INVALID' });
+  }
 });
 
 test('RPC errors and malformed responses produce only safe errors; stalled processes time out', async t => {
@@ -349,6 +373,39 @@ test('invalid device output, nonzero exits, and local expiry never report succes
     assert.equal(state.status, expected, mode); assert.equal(state.userCode, null); assert.equal(state.verificationUri, null);
     assert.doesNotMatch(JSON.stringify(state), /synthetic-private|ABCD-EFGH/);
   }
+});
+
+test('known device-login failures explain recovery without forwarding CLI diagnostics', async t => {
+  for (const [mode, code, message] of [
+    ['login-network-error', 'LOGIN_NETWORK_ERROR', /网络或代理/],
+    ['login-certificate-error', 'LOGIN_NETWORK_ERROR', /网络或代理/],
+    ['login-denied', 'LOGIN_DENIED', /确认允许访问/],
+    ['login-expired', 'LOGIN_EXPIRED', /获取新验证码/],
+  ]) {
+    const { client } = await clientFor(t, mode);
+    const login = await client.startLogin();
+    const state = await waitFor(client, login.id, state => !['starting', 'pending'].includes(state.status));
+    assert.equal(state.status, code === 'LOGIN_EXPIRED' ? 'expired' : 'failed');
+    assert.equal(state.error.code, code); assert.match(state.error.message, message);
+    assert.equal(state.userCode, null); assert.equal(state.verificationUri, null);
+    assert.doesNotMatch(JSON.stringify(state), /synthetic-private|credential|login\/device\/code|Login failed:/);
+  }
+});
+
+test('device-code generation has a short deadline that stops once the code is ready', async t => {
+  const silent = await clientFor(t, 'login-silent', { loginCodeTimeoutMs: 150, loginTimeoutMs: 2000 });
+  const starting = await silent.client.startLogin();
+  const failed = await waitFor(silent.client, starting.id, state => state.status === 'failed');
+  assert.equal(failed.error.code, 'LOGIN_CODE_TIMEOUT');
+  assert.match(failed.error.message, /暂未获取到.*验证码/);
+  assert.equal(failed.userCode, null); assert.equal(failed.verificationUri, null);
+
+  const ready = await clientFor(t, 'login-pending', { loginCodeTimeoutMs: 500, loginTimeoutMs: 2000 });
+  const login = await ready.client.startLogin();
+  await waitFor(ready.client, login.id, state => state.status === 'pending');
+  await new Promise(resolve => setTimeout(resolve, 550));
+  assert.equal(ready.client.getLogin(login.id).status, 'pending', 'Browser authorization retains its separate waiting period.');
+  ready.client.cancelLogin(login.id);
 });
 
 test('closing a client cancels its device process and prevents further operations', async t => {

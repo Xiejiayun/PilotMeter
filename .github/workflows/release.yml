@@ -89,5 +89,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.RELEASE_TAG }}-failure-evidence
-          path: test-results/
+          path: |
+            test-results/
+            .tmp/ui-review/
+          include-hidden-files: true
           if-no-files-found: ignore
