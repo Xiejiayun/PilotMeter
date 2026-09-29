@@ -55,6 +55,7 @@ export function initializeAccounts(options: AccountUI): { load: () => Promise<Ac
     element<HTMLButtonElement>('github-login').disabled = !enabled;
     select.disabled = !enabled;
     for (const id of ['github-refresh', 'github-reauth', 'github-remove']) element<HTMLButtonElement>(id).disabled = !enabled || !activeProfile();
+    element<HTMLButtonElement>('github-refresh').disabled ||= !!overview?.refreshing;
     element('github-accounts').setAttribute('aria-busy', String(busy));
   }
 
@@ -337,13 +338,13 @@ export function initializeAccounts(options: AccountUI): { load: () => Promise<Ac
   element('copy-run-command').addEventListener('click', () => { if (overview) void copy(overview.runCommand, 'copy-command-feedback'); });
   select.addEventListener('change', () => { const accountId = select.value || null; void changeScope(() => options.mutate<AccountsOverview>('/api/auth/select', 'POST', { accountId })); });
   element('github-refresh').addEventListener('click', async () => {
-    if (busy) return;
+    if (busy || overview?.refreshing || !overview?.activeAccountId) return;
     const generation = ++viewGeneration;
     const expectedAccount = overview?.activeAccountId;
     element<HTMLButtonElement>('github-refresh').disabled = true;
     text('quota-status', '正在同步当前账号的 Copilot 额度…');
     try {
-      const result = await options.mutate<AccountsOverview>('/api/auth/refresh', 'POST');
+      const result = await options.mutate<AccountsOverview>(`/api/auth/refresh?accountId=${encodeURIComponent(expectedAccount)}`, 'POST');
       if (generation !== viewGeneration || expectedAccount !== overview?.activeAccountId) return;
       overview = result; render();
     } catch (error) { if (generation === viewGeneration) text('quota-status', `同步未完成：${message(error)}`); }

@@ -232,6 +232,25 @@ test('only a future reset is presented as the next reset and quota from a differ
   await expect(page.locator('#quota-status')).toContainText('尚未取得');
 });
 
+test('manual quota sync is pinned to its account and stays disabled until the refreshed values arrive', async ({ page }) => {
+  const data = state();
+  await page.clock.install();
+  await mock(page, data);
+  await page.goto('/');
+  await expect(page.locator('.quota-primary .quota-value')).toHaveText('75 / 200');
+  data.overview.refreshing = true;
+  await page.getByRole('button', { name: '同步额度', exact: true }).click();
+  await expect(page.locator('#github-refresh')).toBeDisabled();
+  await expect(page.locator('#quota-status')).toContainText('正在同步');
+  const request = data.requests.find(item => item.path === '/api/auth/refresh');
+  expect(new URLSearchParams(request.query).get('accountId')).toBe(alice.id);
+  Object.assign(data.overview.quota.buckets[0], { used: '100', usedPercentage: '50', remainingPercentage: '50' });
+  data.overview.refreshing = false;
+  await page.clock.runFor(5_100);
+  await expect(page.locator('.quota-primary .quota-value')).toHaveText('100 / 200');
+  await expect(page.locator('#github-refresh')).toBeEnabled();
+});
+
 test('switch clears old sessions and dialog immediately and ignores late old snapshot', async ({ page }) => {
   const data = state();
   await mock(page, data);

@@ -228,10 +228,12 @@ export class AccountsManager {
     if (!attempt || attempt.view.id !== id) throw new AccountError(404, '登录不存在。');
     await this.#cancel(attempt); return structuredClone(attempt.view);
   }
-  async refresh(id = this.#registry.activeAccountId): Promise<void> {
+  async refresh(id = this.#registry.activeAccountId, options: { manual?: boolean } = {}): Promise<void> {
     if (!id || this.#closed) return;
     const profile = this.#find(id); const pending = this.#refreshes.get(id); if (pending) return pending;
-    if (this.#now() < (this.#nextRefresh.get(id) ?? 0)) return;
+    // Explicit syncs must request a snapshot even just after login or an automatic refresh.
+    // Keep overlapping requests coalesced, and reserve the interval for background polling.
+    if (!options.manual && this.#now() < (this.#nextRefresh.get(id) ?? 0)) return;
     this.#nextRefresh.set(id, this.#now() + 60_000);
     const client = this.#client(profile);
     const task = (async () => {
@@ -248,7 +250,7 @@ export class AccountsManager {
       };
       const requiresLogin = (error: unknown) => ['AUTH_REQUIRED', 'AUTHENTICATION_FAILED', 'ACCOUNT_NOT_FOUND'].includes(safeError(error).code);
       try {
-        const accounts = await client.listAccounts();
+        const accounts = await client.listAccounts({ fresh: true });
         const matches = accounts.filter(a => a.host === profile.host && a.login.toLowerCase() === profile.login.toLowerCase());
         if (matches.length !== 1) throw new CopilotClientError('AUTH_REQUIRED', '该账号的授权已失效，请重新登录。');
         // Both read-only RPCs bind to the same selection in the same verified runtime.

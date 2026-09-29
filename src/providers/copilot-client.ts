@@ -301,11 +301,14 @@ export class CopilotClient {
   readonly #env: NodeJS.ProcessEnv;
   #runtime: Promise<Runtime> | null = null;
   #closingRuntime: Promise<void> | null = null;
+  #resettingRuntime: Promise<void> | null = null;
+  #queriesDrained: (() => void) | null = null;
   #login: LoginOperation | null = null;
   #startingLogin: Promise<void> | null = null;
   #closed = false;
   #accounts = new Set<string>();
   #accountRuntime: Runtime | null = null;
+  #retireRuntime: Runtime | null = null;
   #activeQueries = 0;
   #idleTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -338,19 +341,40 @@ export class CopilotClient {
     this.#idleTimer = null;
   }
   async #query<T>(action: (runtime: Runtime) => Promise<T>): Promise<T> {
+    while (this.#resettingRuntime) await this.#resettingRuntime;
     this.#clearIdle(); this.#activeQueries++;
     try { return await action(await this.#openRuntime()); }
     finally {
       this.#activeQueries--;
-      if (this.#activeQueries === 0 && this.#runtime && !this.#closed && !this.#loginActive()) {
-        const expected = this.#runtime;
-        this.#idleTimer = setTimeout(() => {
-          this.#idleTimer = null;
-          if (this.#activeQueries === 0 && this.#runtime === expected) void this.#closeRuntime().catch(() => {});
-        }, this.#options.idleTimeoutMs ?? 60_000);
-        this.#idleTimer.unref();
+      if (this.#activeQueries === 0) { this.#queriesDrained?.(); this.#queriesDrained = null; }
+      if (this.#activeQueries === 0 && this.#runtime && !this.#resettingRuntime && !this.#closed && !this.#loginActive()) {
+        // Quota snapshots can stay cached for the lifetime of the official runtime.
+        // Let parallel account/model reads finish, then make the next sync reconnect.
+        if (this.#retireRuntime) await this.#closeRuntime();
+        else {
+          const expected = this.#runtime;
+          this.#idleTimer = setTimeout(() => {
+            this.#idleTimer = null;
+            if (this.#activeQueries === 0 && this.#runtime === expected) void this.#closeRuntime().catch(() => {});
+          }, this.#options.idleTimeoutMs ?? 60_000);
+          this.#idleTimer.unref();
+        }
       }
     }
+  }
+
+  async #resetRuntime(): Promise<void> {
+    this.#assertQueryAvailable();
+    if (this.#resettingRuntime) return this.#resettingRuntime;
+    const resetting = (async () => {
+      if (this.#activeQueries > 0) await new Promise<void>(resolveDrain => { this.#queriesDrained = resolveDrain; });
+      this.#assertQueryAvailable();
+      await this.#closeRuntime();
+      this.#assertQueryAvailable();
+    })();
+    this.#resettingRuntime = resetting;
+    try { await resetting; }
+    finally { if (this.#resettingRuntime === resetting) this.#resettingRuntime = null; }
   }
 
   async #openRuntime(): Promise<Runtime> {
@@ -367,7 +391,7 @@ export class CopilotClient {
       if (!current.closed) return current;
       this.#runtime = null;
     }
-    this.#accounts.clear(); this.#accountRuntime = null;
+    this.#accounts.clear(); this.#accountRuntime = null; this.#retireRuntime = null;
     const opening = (async () => {
       await this.#prepareHome();
       this.#assertQueryAvailable();
@@ -390,7 +414,7 @@ export class CopilotClient {
 
   async #closeRuntime(): Promise<void> {
     this.#clearIdle();
-    const runtime = this.#runtime; this.#runtime = null; this.#accounts.clear(); this.#accountRuntime = null;
+    const runtime = this.#runtime; this.#runtime = null; this.#accounts.clear(); this.#accountRuntime = null; this.#retireRuntime = null;
     if (!runtime) {
       if (this.#closingRuntime) await this.#closingRuntime;
       return;
@@ -407,7 +431,10 @@ export class CopilotClient {
     finally { if (this.#closingRuntime === closing) this.#closingRuntime = null; }
   }
 
-  async listAccounts(): Promise<CopilotAccount[]> {
+  async listAccounts(options: { fresh?: boolean } = {}): Promise<CopilotAccount[]> {
+    // Authentication metadata can initialize the quota cache before getQuota runs.
+    // A fresh sync must replace that runtime before enumerating its opaque selections.
+    if (options.fresh) await this.#resetRuntime();
     return this.#query(async runtime => {
     const auth = object(await runtime.request('auth.getStatus', {}));
     const currentHost = accountHost(auth?.host);
@@ -438,6 +465,7 @@ export class CopilotClient {
     if (!safeText(selectionId, 4096)) throw fail('ACCOUNT_INVALID', 'Copilot 账号标识无效');
     return this.#query(async runtime => {
     if (this.#accountRuntime !== runtime || !this.#accounts.has(selectionId)) throw fail('ACCOUNT_NOT_FOUND', '请重新获取账号列表后选择账号');
+    this.#retireRuntime = runtime;
     const result = object(await runtime.request('account.getQuota', { selectionId }));
     const rawSnapshots = object(result?.quotaSnapshots);
     if (!rawSnapshots || Object.keys(rawSnapshots).length > 64) throw fail('QUOTA_INVALID', 'Copilot 额度响应格式无法识别');
@@ -599,6 +627,7 @@ export class CopilotClient {
     this.#closed = true;
     if (this.#login) this.#finishLogin(this.#login, 'cancelled');
     await this.#closeRuntime();
+    if (this.#resettingRuntime) await this.#resettingRuntime.catch(() => {});
     if (this.#startingLogin) await this.#startingLogin;
     if (this.#login) await waitForExit(this.#login.exited);
   }

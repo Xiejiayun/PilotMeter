@@ -47,7 +47,7 @@ let mutationOwner: string | null = null;
 let mutationQueue: Promise<void> = Promise.resolve();
 let mutationAck: { id: string; epoch: number; resolve: () => void; reject: (error: Error) => void; timer: number } | null = null;
 let refreshTimer: number | undefined;
-let refreshRequested = false;
+let refreshRequested: string | null = null;
 let removeProfile: GitHubProfile | null = null;
 let sessionLaunch: { requestId: string; accountId: string; epoch: number } | null = null;
 
@@ -407,10 +407,13 @@ async function loadDesktop(): Promise<void> {
     render();
     void loadRecent();
     if (!recordsLoading) void loadRecords(false, true);
-    if (refreshRequested && !value.refreshing) {
-      refreshRequested = false;
+    if (refreshRequested && refreshRequested !== value.activeAccountId) {
+      refreshRequested = null;
+      feedback('当前账号已切换，请在当前账号重新同步。', true);
+    } else if (refreshRequested && !value.refreshing) {
+      refreshRequested = null;
       const failure = value.quota?.error ?? value.models?.error;
-      feedback(failure ? `同步未完成：${failure.message}` : value.presentation.fetchedAt ? '已读取最新可用的额度和模型快照。' : '尚未取得额度。可以稍后重试，或在账户页重新登录。', !!failure);
+      feedback(failure ? `同步未完成：${failure.message}` : value.presentation.fetchedAt ? '已读取 GitHub 返回的额度和模型快照。GitHub 用量可能延迟更新。' : '尚未取得额度。可以稍后重试，或在账户页重新登录。', !!failure);
     }
     if (!demo && value.refreshing) refreshTimer = window.setTimeout(() => { if (!busy()) void loadDesktop(); }, 1500);
   } catch (error) {
@@ -450,7 +453,7 @@ async function refresh(): Promise<void> {
     feedback('正在同步账号额度与模型…');
     await mutate(`/api/auth/refresh?accountId=${encodeURIComponent(account)}`, 'POST');
     if (currentEpoch !== epoch()) return;
-    refreshRequested = true;
+    refreshRequested = account;
   } catch (error) { if (currentEpoch === epoch()) feedback(`同步未完成：${errorMessage(error)}`, true); }
   finally { release?.(); if (currentEpoch === epoch()) await loadDesktop(); }
 }
@@ -568,7 +571,7 @@ bridge?.addEventListener('message', event => {
   service = value;
   if (selectionChanged) quotaKey = value.quotaKey ?? null;
   if (changed) {
-    viewGeneration++; resetRecords(); desktop = null; loading = false; quotaKey = value.quotaKey ?? null;
+    viewGeneration++; resetRecords(); desktop = null; loading = false; refreshRequested = null; quotaKey = value.quotaKey ?? null;
     login.invalidate();
     if (mutationAck) { window.clearTimeout(mutationAck.timer); mutationAck.reject(new Error('本机服务已变化，请重试。')); mutationAck = null; }
     element('quota-area').innerHTML = `<div class="card">${emptyState('正在重新连接本机服务', '连接完成后自动读取当前账号。', '', false, 'activity')}</div>`;

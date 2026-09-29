@@ -1,5 +1,5 @@
 // Synthetic CLI process for account protocol and device-flow tests. Never contacts GitHub.
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const mode = process.env.MOCK_COPILOT_MODE ?? 'normal';
@@ -47,6 +47,9 @@ if (isLogin) {
   }
   setInterval(() => {}, 1000);
 } else {
+  // Authentication itself may initialize quota before the first quota RPC.
+  let cachedQuota;
+  const selection = id => mode === 'cached-quota' ? `${id}-${process.pid}` : id;
   const send = (id, value, error = false) => {
     let body = JSON.stringify({ jsonrpc: '2.0', id, [error ? 'error' : 'result']: value });
     body = body.replace('"exact-large"', '9007199254740993.123456789').replace('"exact-fraction"', '0.123456789123456789');
@@ -58,6 +61,12 @@ if (isLogin) {
       setTimeout(() => process.stdout.write(frame.subarray(8, 51)), 5);
       setTimeout(() => process.stdout.write(frame.subarray(51)), 10);
     } else if (mode === 'slow-quota' && value?.quotaSnapshots) setTimeout(() => process.stdout.write(frame), 250);
+    else if (mode === 'cached-quota' && value?.models || mode === 'held-quota' && value?.quotaSnapshots) {
+      const timer = setInterval(() => {
+        if (!existsSync(join(process.env.COPILOT_HOME, value?.models ? 'mock-release-models' : 'mock-release-quota'))) return;
+        clearInterval(timer); process.stdout.write(frame);
+      }, 10);
+    }
     else process.stdout.write(frame);
   };
   let buffer = Buffer.alloc(0);
@@ -73,23 +82,29 @@ if (isLogin) {
       if (mode === 'stall') continue;
       if (mode === 'bad-frame') { process.stdout.write('Content-Length: 999999999\r\n\r\n'); continue; }
       if (request.method === 'connect') send(request.id, { ok: true, protocolVersion: 3, version: mode === 'wrong-version' ? '9.0.0' : '1.0.88' });
-      else if (request.method === 'auth.getStatus') send(request.id, { isAuthenticated: true, host: mode === 'bare-hosts' ? 'GITHUB.COM' : 'https://github.com', login: 'test-user', token: secret });
+      else if (request.method === 'auth.getStatus') {
+        if (mode === 'cached-quota') cachedQuota ??= JSON.parse(readFileSync(join(process.env.COPILOT_HOME, 'mock-quota.json'), 'utf8'));
+        send(request.id, { isAuthenticated: true, host: mode === 'bare-hosts' ? 'GITHUB.COM' : 'https://github.com', login: 'test-user', token: secret });
+      }
       else if (request.method === 'account.getAllUsers') {
         if (mode === 'rpc-error' || mode === 'unsupported') send(request.id, { code: mode === 'unsupported' ? -32601 : -32603, message: secret, data: { token: secret } }, true);
         else { send(request.id, [
-          { selectionId: 'account-one', token: secret, authInfo: { type: 'user', login: 'test-user', host: mode === 'bare-hosts' ? 'github.com' : 'https://github.com', token: secret, copilotUser: { sensitive: secret } } },
-          { selectionId: 'account-two', authInfo: { type: 'user', login: 'another-user', host: mode === 'bare-hosts' ? 'company.ghe.com' : 'https://company.ghe.com' } },
+          { selectionId: selection('account-one'), token: secret, authInfo: { type: 'user', login: 'test-user', host: mode === 'bare-hosts' ? 'github.com' : 'https://github.com', token: secret, copilotUser: { sensitive: secret } } },
+          { selectionId: selection('account-two'), authInfo: { type: 'user', login: 'another-user', host: mode === 'bare-hosts' ? 'company.ghe.com' : 'https://company.ghe.com' } },
           { authInfo: { type: 'user', login: 'missing-selection', host: 'https://github.com' } },
           { selectionId: 'wrong-host', authInfo: { type: 'user', login: 'bad-user', host: 'https://github.com.attacker.invalid' } },
         ]); if (mode === 'exit-after-list') setTimeout(() => process.exit(0), 30); }
-      } else if (request.method === 'account.getQuota') send(request.id, { quotaSnapshots: { premium_interactions: {
+      } else if (request.method === 'account.getQuota') {
+        send(request.id, { quotaSnapshots: { premium_interactions: {
         isUnlimitedEntitlement: false, entitlementRequests: 100, usedRequests: 'exact-large', remainingPercentage: 'exact-percentage',
         overage: 'exact-fraction', usageAllowedWithExhaustedQuota: true, overageAllowedWithExhaustedQuota: false,
         resetDate: '2026-10-01T00:00:00Z', token: secret,
         ...(mode === 'quota-unit' ? { unit: 'ai-credits', billingMode: 'ai-credits' } : {}),
         ...(mode === 'quota-invalid' ? { usedRequests: -1 } : {}),
         ...(mode === 'quota-percentage-nearly-full' ? { usedRequests: '0.000000000000000001' } : {}),
+        ...(cachedQuota ?? {}),
       } } });
+      }
       else if (request.method === 'models.list') {
         const enabled = { id: 'synthetic-model', name: 'Synthetic Model', policy: { state: 'enabled', terms: secret },
           capabilities: { supports: { vision: true, reasoningEffort: false }, limits: { max_context_window_tokens: 128000 } },

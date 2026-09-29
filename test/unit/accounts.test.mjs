@@ -32,7 +32,7 @@ async function until(predicate) {
 class FakeClient {
   constructor(home, login) {
     this.home = home; this.accounts = [identity(login)]; this.data = quota(); this.modelData = models();
-    this.listCalls = 0; this.quotaCalls = []; this.closeCalls = 0; this.cancelCalls = [];
+    this.listCalls = 0; this.listOptions = []; this.quotaCalls = []; this.closeCalls = 0; this.cancelCalls = [];
     this.listImpl = null; this.quotaImpl = null; this.startError = null; this.modelsImpl = null; this.modelsCalls = [];
   }
   async startLogin(loginHost) {
@@ -47,7 +47,7 @@ class FakeClient {
     if (this.state?.id === id) this.state = { ...this.state, status: 'cancelled', userCode: null, verificationUri: null };
     return this.getLogin(id);
   }
-  async listAccounts() { this.listCalls++; return this.listImpl ? this.listImpl() : structuredClone(this.accounts); }
+  async listAccounts(options) { this.listCalls++; this.listOptions.push(options); return this.listImpl ? this.listImpl() : structuredClone(this.accounts); }
   async getQuota(selectionId) { this.quotaCalls.push(selectionId); return this.quotaImpl ? this.quotaImpl(selectionId) : structuredClone(this.data); }
   async listModels(selectionId) { this.modelsCalls.push(selectionId); return this.modelsImpl ? this.modelsImpl(selectionId) : structuredClone(this.modelData); }
   async close() { this.closeCalls++; }
@@ -136,7 +136,46 @@ test('models are account-bound, cloned, coalesced and stale after five minutes w
   assert.equal(manager.overview().models.stale, false); assert.equal(manager.overview().models.refreshing, false);
   assert.equal(manager.overview().models.items[0].id, 'refreshed');
   await manager.refresh(a.profile.id);
-  assert.equal(a.client.modelsCalls.length, 2, 'manual refresh stays subject to per-account throttle');
+  assert.equal(a.client.modelsCalls.length, 2, 'background refresh stays subject to per-account throttle');
+});
+
+test('manual refresh bypasses the background interval, shares in-flight work and retries failures immediately', async t => {
+  const f = fixture(t); const manager = f.create(); await manager.initialize();
+  const a = await login(f, manager, 'Alice');
+  f.now += 1000;
+  a.client.data = quota('35', { fetchedAt: new Date(f.now).toISOString() });
+  await manager.refresh(a.profile.id);
+  assert.equal(a.client.quotaCalls.length, 1);
+  assert.equal(manager.overview().quota.buckets[0].used, '25');
+
+  const gate = f.gate(a.client.data);
+  a.client.quotaImpl = () => gate.promise;
+  const first = manager.refresh(a.profile.id, { manual: true });
+  const repeat = manager.refresh(a.profile.id, { manual: true });
+  const background = manager.refresh(a.profile.id);
+  await until(() => a.client.quotaCalls.length === 2);
+  assert.deepEqual(a.client.listOptions.at(-1), { fresh: true }, 'A refresh must not reuse account metadata from an earlier launch check.');
+  assert.equal(manager.overview().refreshing, true);
+  gate.resolve(a.client.data);
+  await Promise.all([first, repeat, background]);
+  assert.equal(a.client.quotaCalls.length, 2);
+  assert.equal(a.client.modelsCalls.length, 2);
+  assert.equal(manager.overview().quota.buckets[0].used, '35');
+  assert.equal(manager.overview().quota.fetchedAt, new Date(f.now).toISOString());
+  assert.equal(manager.overview().refreshing, false);
+  await manager.refresh(a.profile.id);
+  assert.equal(a.client.quotaCalls.length, 2);
+
+  a.client.quotaImpl = () => { throw new CopilotClientError('RPC_FAILED', 'Synthetic network failure'); };
+  await manager.refresh(a.profile.id, { manual: true });
+  assert.equal(manager.overview().quota.state, 'error');
+  assert.equal(manager.overview().quota.stale, true);
+  assert.equal(manager.overview().quota.buckets[0].used, '35');
+  a.client.quotaImpl = null; a.client.data = quota('40');
+  await manager.refresh(a.profile.id, { manual: true });
+  assert.equal(a.client.quotaCalls.length, 4);
+  assert.equal(manager.overview().quota.state, 'available');
+  assert.equal(manager.overview().quota.buckets[0].used, '40');
 });
 
 test('model and quota refresh failures retain only their own snapshots independently', async t => {

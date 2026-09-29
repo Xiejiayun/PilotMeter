@@ -1,6 +1,6 @@
 # Windows 单 EXE
 
-`PilotMeter-0.1.0-preview.13-win-x64.exe` 将 Node.js 24.14.0、PilotMeter、桌面 PET、HTML + Tailwind CSS 工作台和生产依赖放在一个文件中，适用于 Windows 10/11 x64。无需安装 Node.js 或 npm；桌面宿主需要 .NET Framework 4.8，主界面使用 Microsoft Edge WebView2 Evergreen Runtime。所有页面、样式和宠物资源随包提供，不使用在线 CSS 或字体。不修改 PATH。
+`PilotMeter-0.1.0-preview.14-win-x64.exe` 将 Node.js 24.14.0、PilotMeter、桌面 PET、HTML + Tailwind CSS 工作台和生产依赖放在一个文件中，适用于 Windows 10/11 x64。无需安装 Node.js 或 npm；桌面宿主需要 .NET Framework 4.8，主界面使用 Microsoft Edge WebView2 Evergreen Runtime。所有页面、样式和宠物资源随包提供，不使用在线 CSS 或字体。不修改 PATH。
 
 若设备未安装 WebView2 Runtime，PET 仍可启动，主窗口会显示 Microsoft 官方安装入口；安装后点击重试。WebView2 运行时由 Microsoft 维护和更新，应用包固定并校验 WebView2 SDK 与 x64 Loader 的版本和摘要。
 
@@ -11,7 +11,7 @@
 已发布版本的 EXE 和 `SHA256SUMS` 可从 [GitHub Releases](https://github.com/Xiejiayun/PilotMeter/releases) 下载；源码构建方式见下文。在 PowerShell 中计算文件摘要，与同一版本校验清单中对应文件的一行比较：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\PilotMeter-0.1.0-preview.13-win-x64.exe
+Get-FileHash -Algorithm SHA256 .\PilotMeter-0.1.0-preview.14-win-x64.exe
 Get-Content .\SHA256SUMS
 ```
 
@@ -31,26 +31,26 @@ Get-Content .\SHA256SUMS
 
 ```powershell
 # 查看运行环境；核对内置 Copilot 版本；不会自动登录
-.\PilotMeter-0.1.0-preview.13-win-x64.exe doctor
+.\PilotMeter-0.1.0-preview.14-win-x64.exe doctor
 
 # 显示桌面挂件（也可以直接双击 EXE）
-.\PilotMeter-0.1.0-preview.13-win-x64.exe desktop
+.\PilotMeter-0.1.0-preview.14-win-x64.exe desktop
 
 # 直接显示独立主窗口，适合快捷方式或键盘启动
-.\PilotMeter-0.1.0-preview.13-win-x64.exe desktop --open
+.\PilotMeter-0.1.0-preview.14-win-x64.exe desktop --open
 
 # 也可在主窗口登录后点击“启动 Copilot 会话”，选择项目文件夹
 # 以下保留终端方式：用所选账号启动内置 Copilot，采集本次会话
-Start-Process .\PilotMeter-0.1.0-preview.13-win-x64.exe -ArgumentList 'run -- --no-auto-update' -NoNewWindow -Wait
+Start-Process .\PilotMeter-0.1.0-preview.14-win-x64.exe -ArgumentList 'run -- --no-auto-update' -NoNewWindow -Wait
 
 # 另一个终端或分屏查看状态
-Start-Process .\PilotMeter-0.1.0-preview.13-win-x64.exe -ArgumentList 'watch' -NoNewWindow -Wait
-.\PilotMeter-0.1.0-preview.13-win-x64.exe status --json
-.\PilotMeter-0.1.0-preview.13-win-x64.exe open
-.\PilotMeter-0.1.0-preview.13-win-x64.exe stop
+Start-Process .\PilotMeter-0.1.0-preview.14-win-x64.exe -ArgumentList 'watch' -NoNewWindow -Wait
+.\PilotMeter-0.1.0-preview.14-win-x64.exe status --json
+.\PilotMeter-0.1.0-preview.14-win-x64.exe open
+.\PilotMeter-0.1.0-preview.14-win-x64.exe stop
 ```
 
-`watch` 中按 `o` 打开页面、`q` 退出观察。所有 CLI 命令保留，参数用法见 [README](../README.md#命令)；将文档中的 `pilotmeter` 替换为 EXE 路径即可。路径含空格时使用 PowerShell 的调用运算符，例如 `& 'C:\我的工具\PilotMeter-0.1.0-preview.13-win-x64.exe' status`。
+`watch` 中按 `o` 打开页面、`q` 退出观察。所有 CLI 命令保留，参数用法见 [README](../README.md#命令)；将文档中的 `pilotmeter` 替换为 EXE 路径即可。路径含空格时使用 PowerShell 的调用运算符，例如 `& 'C:\我的工具\PilotMeter-0.1.0-preview.14-win-x64.exe' status`。
 
 EXE 使用 Windows GUI 子系统以避免双击时弹出控制台。交互式 PowerShell 可能不会等待这种 EXE；`watch` 和 `run` 使用上方 `Start-Process -NoNewWindow -Wait`，让终端保持输入归属。重定向与脚本调用的 stdout、stderr 和退出码另有 EXE 回归覆盖。`Start-Process -ArgumentList` 接受命令行文本，自定义参数含空格时须在该文本中加双引号。
 
@@ -59,8 +59,8 @@ EXE 使用 Windows GUI 子系统以避免双击时弹出控制台。交互式 Po
 需要独立账本时，把 `--data-dir` 放在命令之前。相对路径按当前终端工作目录解析：
 
 ```powershell
-.\PilotMeter-0.1.0-preview.13-win-x64.exe --data-dir 'D:\PilotMeter 数据' desktop
-.\PilotMeter-0.1.0-preview.13-win-x64.exe --data-dir 'D:\PilotMeter 数据' stop
+.\PilotMeter-0.1.0-preview.14-win-x64.exe --data-dir 'D:\PilotMeter 数据' desktop
+.\PilotMeter-0.1.0-preview.14-win-x64.exe --data-dir 'D:\PilotMeter 数据' stop
 ```
 
 ## 缓存、数据与升级
@@ -105,9 +105,9 @@ npm run release:check
 构建输出：
 
 ```text
-build/windows/PilotMeter-0.1.0-preview.13-win-x64.exe
-build/windows/PilotMeter-0.1.0-preview.13-win-x64.exe.json
-build/windows/PilotMeter-0.1.0-preview.13-win-x64.zip
+build/windows/PilotMeter-0.1.0-preview.14-win-x64.exe
+build/windows/PilotMeter-0.1.0-preview.14-win-x64.exe.json
+build/windows/PilotMeter-0.1.0-preview.14-win-x64.zip
 build/windows/SHA256SUMS
 ```
 

@@ -40,6 +40,51 @@ test('desktop shows all source digits in used, total and remaining quantities', 
   await page.screenshot({ path: testInfo.outputPath('desktop-overview.png'), fullPage: true });
 });
 
+test('manual sync waits for the provider snapshot and updates quota, models and fetch time', async ({ page }) => {
+  const data = desktopFixture();
+  data.quotas[aliceId].fetchedAt = new Date(Date.now() - 120_000).toISOString();
+  await page.clock.install();
+  await open(page, data);
+  await expect(values(page)).toHaveText(exact);
+  const previousTime = await page.locator('#last-sync').textContent();
+  data.refreshing = true;
+  await page.locator('#refresh-button').click();
+  await expect(page.locator('#refresh-button')).toHaveText('同步中');
+  await expect(page.locator('#refresh-button')).toBeDisabled();
+  await expect(page.locator('#feedback')).toContainText('正在同步');
+  await expect(values(page)).toHaveText(exact);
+  expect(new URLSearchParams(data.requests.find(item => item.path === '/api/auth/refresh').query).get('accountId')).toBe(aliceId);
+
+  Object.assign(data.quotas[aliceId].buckets[0], { used: '200', limit: '1000', usedPercentage: '20', remainingPercentage: '80' });
+  data.quotas[aliceId].fetchedAt = new Date().toISOString();
+  data.modelSets[aliceId].items[0].name = 'Updated Alpha Vision';
+  data.refreshing = false;
+  await page.clock.runFor(1_600);
+  await expect(values(page)).toHaveText(['200', '1,000', '800']);
+  await expect(page.locator('#last-sync')).not.toHaveText(previousTime);
+  await expect(page.locator('#model-preview-list')).toContainText('Updated Alpha Vision');
+  await expect(page.locator('#feedback')).toContainText('已读取 GitHub 返回的额度和模型快照');
+  await expect(page.locator('#feedback')).not.toContainText('最新');
+  await expect(page.locator('#refresh-button')).toBeEnabled();
+});
+
+test('a sync completion for another account cannot report success for the current account', async ({ page }) => {
+  const data = desktopFixture();
+  await page.clock.install();
+  await open(page, data);
+  data.refreshing = true;
+  await page.locator('#refresh-button').click();
+  await expect(page.locator('#refresh-button')).toHaveText('同步中');
+  // Another window selects a different account while this one waits for sync.
+  data.activeAccountId = bobId;
+  data.refreshing = false;
+  await page.clock.runFor(1_600);
+  await expect(page.locator('#account-select')).toHaveValue(bobId);
+  await expect(values(page)).toHaveText(['44', '100', '56']);
+  await expect(page.locator('#feedback')).toContainText('当前账号已切换');
+  await expect(page.locator('#feedback')).not.toContainText('已读取');
+});
+
 test('unknown quantity units preserve raw values but show remaining percentage without inventing a balance', async ({ page }) => {
   const data = desktopFixture({ unit: 'unspecified' });
   Object.assign(data.quotas[aliceId].buckets[0], { used: '62000', limit: '2000000', usedPercentage: '3.1', remainingPercentage: '96.9' });

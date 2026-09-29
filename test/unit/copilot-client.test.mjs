@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import childProcess from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -27,6 +27,13 @@ async function waitFor(client, id, predicate) {
   assert.fail('Mock login did not reach expected state');
 }
 async function requests(home) { return (await readFile(join(home, 'mock-requests.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line)); }
+async function waitForRequest(home, method) {
+  for (let attempt = 0; attempt < 160; attempt++) {
+    if ((await requests(home)).some(row => row.method === method)) return;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.fail(`Synthetic ${method} request did not start`);
+}
 const realSpawn = childProcess.spawn;
 function mockSpawn(t, implementation) {
   const mocked = t.mock.method(childProcess, 'spawn', implementation);
@@ -155,9 +162,9 @@ test('concurrent queries cannot reopen a runtime while device login is starting'
   assert.equal(trace[0].args.includes('login'), true);
 });
 
-test('close and login wait for a runtime whose idle shutdown has already started', async t => {
-  for (const action of ['close', 'startLogin']) {
-    await t.test(action, async subtest => {
+test('queries, close and login wait for an idle shutdown or quota retirement already in progress', async t => {
+  for (const trigger of ['idle', 'quota']) for (const action of ['listAccounts', 'close', 'startLogin']) {
+    await t.test(`${trigger}: ${action}`, async subtest => {
       let shutdownStarted;
       const shuttingDown = new Promise(resolve => { shutdownStarted = resolve; });
       let exited = false;
@@ -170,19 +177,23 @@ test('close and login wait for a runtime whose idle shutdown has already started
           const kill = child.kill.bind(child);
           releaseShutdown = () => kill();
           child.kill = () => { shutdownStarted(); return true; };
-        } else assert.equal(exited, true, 'The next login process must wait for the previous account runtime to exit.');
+        } else assert.equal(exited, true, 'The next process must wait for the previous account runtime to exit.');
         return child;
       });
       const { client } = await clientFor(subtest, 'login-pending', { idleTimeoutMs: 30 });
       await client.listAccounts();
+      let quotaFinished = false;
+      const quota = trigger === 'quota' ? client.getQuota('account-one').then(value => { quotaFinished = true; return value; }) : null;
       await shuttingDown;
       let completed = false;
       const next = client[action]().then(value => { completed = true; return value; });
       await new Promise(resolve => setImmediate(resolve));
-      try { assert.equal(completed, false); assert.equal(attempts, 1); }
+      try { assert.equal(completed, false); assert.equal(attempts, 1); assert.equal(quotaFinished, false); }
       finally { releaseShutdown(); }
       const result = await next;
+      if (quota) assert.equal((await quota).snapshots[0].remainingPercentage, '42.5');
       assert.equal(exited, true);
+      if (action === 'listAccounts') assert.equal(result.length, 2);
       if (action === 'startLogin') await waitFor(client, result.id, state => state.status === 'pending');
     });
   }
@@ -275,17 +286,122 @@ test('opaque account selections are invalidated when the official runtime restar
   assert.equal((await requests(home)).filter(row => row.method === 'models.list').length, 0);
 });
 
-test('idle runtimes close after queries, preserve in-flight quota requests, and reconnect with fresh selections', async t => {
+test('quota reads outlive the idle deadline and retire selections as soon as the query finishes', async t => {
   const { client, home } = await clientFor(t, 'slow-quota', { idleTimeoutMs: 50 });
   await client.listAccounts();
   // This RPC takes longer than the idle timeout; an active request must stay alive.
   assert.equal((await client.getQuota('account-one')).snapshots[0].usedRequests, '9007199254740993.123456789');
   assert.equal((await requests(home)).filter(row => row.method === 'connect').length, 1);
-  await new Promise(resolve => setTimeout(resolve, 150));
   await assert.rejects(client.getQuota('account-one'), { code: 'ACCOUNT_NOT_FOUND' });
   await client.listAccounts();
   assert.equal((await client.getQuota('account-one')).snapshots[0].remainingPercentage, '42.5');
   assert.equal((await requests(home)).filter(row => row.method === 'connect').length, 2);
+});
+
+test('completed quota cycles retire process caches after parallel model reads finish', async t => {
+  const { client, home } = await clientFor(t, 'cached-quota');
+  const backing = join(home, 'mock-quota.json');
+  await writeFile(backing, JSON.stringify({ usedRequests: '10', remainingPercentage: '90' }));
+  const first = (await client.listAccounts())[0].selectionId;
+  let modelsFinished = false;
+  const models = client.listModels(first).then(value => { modelsFinished = true; return value; });
+  try {
+    assert.equal((await client.getQuota(first)).snapshots[0].usedRequests, '10');
+    assert.equal(modelsFinished, false, 'Quota must not cancel or wait for an active model read.');
+    await writeFile(backing, JSON.stringify({ usedRequests: '25', remainingPercentage: '75' }));
+    assert.equal((await client.getQuota(first)).snapshots[0].usedRequests, '10', 'The synthetic runtime freezes its authentication snapshot.');
+  } finally {
+    await writeFile(join(home, 'mock-release-models'), 'ready');
+    assert.equal((await models).items.length, 4);
+  }
+  const second = (await client.listAccounts())[0].selectionId;
+  assert.notEqual(second, first, 'A new process requires newly enumerated account selections.');
+  await assert.rejects(client.getQuota(first), { code: 'ACCOUNT_NOT_FOUND' });
+  const fresh = await client.getQuota(second);
+  assert.equal(fresh.snapshots[0].usedRequests, '25');
+  assert.equal(fresh.snapshots[0].remainingPercentage, '75');
+  assert.equal((await requests(home)).filter(row => row.method === 'connect').length, 2);
+});
+
+test('fresh account enumeration drains existing reads and replaces authentication-time quota caches', async t => {
+  const { client, home } = await clientFor(t, 'cached-quota');
+  const backing = join(home, 'mock-quota.json');
+  await writeFile(backing, JSON.stringify({ usedRequests: '10', remainingPercentage: '90' }));
+  const first = (await client.listAccounts())[0].selectionId;
+  await writeFile(backing, JSON.stringify({ usedRequests: '25', remainingPercentage: '75' }));
+  const models = client.listModels(first);
+  await waitForRequest(home, 'models.list');
+  let freshFinished = false;
+  const fresh = client.listAccounts({ fresh: true }).then(value => { freshFinished = true; return value; });
+  const repeat = client.listAccounts({ fresh: true });
+  const queued = client.listAccounts();
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(freshFinished, false);
+    assert.equal((await requests(home)).filter(row => row.method === 'connect').length, 1);
+  } finally {
+    await writeFile(join(home, 'mock-release-models'), 'ready');
+    assert.equal((await models).items.length, 4, 'Starting a fresh cycle must let the previous model read finish.');
+  }
+  const [renewed, repeated, resumed] = await Promise.all([fresh, repeat, queued]);
+  const second = renewed[0].selectionId;
+  assert.notEqual(second, first);
+  assert.equal(repeated[0].selectionId, second);
+  assert.equal(resumed[0].selectionId, second);
+  assert.equal((await client.getQuota(second)).snapshots[0].usedRequests, '25');
+  assert.equal((await requests(home)).filter(row => row.method === 'connect').length, 2);
+});
+
+test('close and login interrupt a draining fresh reset without reopening an account runtime', async t => {
+  for (const action of ['close', 'startLogin']) await t.test(action, async subtest => {
+    const { client, home } = await clientFor(subtest, 'held-quota');
+    await client.listAccounts();
+    const quota = assert.rejects(client.getQuota('account-one'), { code: 'CLI_CLOSED' });
+    await waitForRequest(home, 'account.getQuota');
+    const code = action === 'close' ? 'CLIENT_CLOSED' : 'LOGIN_IN_PROGRESS';
+    const reset = assert.rejects(client.listAccounts({ fresh: true }), { code });
+    const queued = assert.rejects(client.listAccounts(), { code });
+    const result = await client[action]();
+    await Promise.all([quota, reset, queued]);
+    if (action === 'startLogin') await waitFor(client, result.id, state => state.status === 'pending');
+    assert.equal((await requests(home)).filter(row => row.method === 'connect').length, 1);
+  });
+});
+
+test('account and model queries without quota reuse the runtime until it becomes idle', async t => {
+  const { client, home } = await clientFor(t, 'normal', { idleTimeoutMs: 50 });
+  await client.listAccounts();
+  await client.listModels('account-one');
+  await client.listAccounts();
+  assert.equal((await requests(home)).filter(row => row.method === 'connect').length, 1);
+  await new Promise(resolve => setTimeout(resolve, 150));
+  await assert.rejects(client.listModels('account-one'), { code: 'ACCOUNT_NOT_FOUND' });
+  await client.listAccounts();
+  assert.equal((await client.listModels('account-one')).items.length, 4);
+  assert.equal((await requests(home)).filter(row => row.method === 'connect').length, 2);
+});
+
+test('invalid quota snapshots retire their runtime so an immediate retry can read corrected data', async t => {
+  const { client, home } = await clientFor(t, 'cached-quota');
+  const backing = join(home, 'mock-quota.json');
+  await writeFile(backing, JSON.stringify({ usedRequests: '-1' }));
+  const first = (await client.listAccounts())[0].selectionId;
+  await assert.rejects(client.getQuota(first), { code: 'QUOTA_INVALID' });
+  await writeFile(backing, JSON.stringify({ usedRequests: '25', remainingPercentage: '75' }));
+  const second = (await client.listAccounts())[0].selectionId;
+  assert.notEqual(second, first);
+  assert.equal((await client.getQuota(second)).snapshots[0].usedRequests, '25');
+  assert.equal((await requests(home)).filter(row => row.method === 'connect').length, 2);
+});
+
+test('closing during an active quota read cancels it without opening a replacement runtime', async t => {
+  const { client, home } = await clientFor(t, 'held-quota');
+  await client.listAccounts();
+  const rejected = assert.rejects(client.getQuota('account-one'), { code: 'CLI_CLOSED' });
+  await waitForRequest(home, 'account.getQuota');
+  await client.close(); await rejected;
+  await assert.rejects(client.listAccounts(), { code: 'CLIENT_CLOSED' });
+  assert.equal((await requests(home)).filter(row => row.method === 'connect').length, 1);
 });
 
 test('quota unit remains unknown unless explicitly declared by upstream', async t => {

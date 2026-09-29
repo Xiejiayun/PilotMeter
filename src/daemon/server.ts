@@ -180,7 +180,7 @@ export async function serve(dir: string, demo = false, options: { accounts?: Pic
         if (accountRoute && req.method === 'DELETE') { const result = await accounts.remove(accountRoute[1]!); await updateCache(); json(res, 200, result); return; }
         if (route === '/api/auth/refresh' && req.method === 'POST') {
           // Start the bounded request without tying browser response latency to upstream RPC latency.
-          void accounts.refresh().catch(() => {}); json(res, 200, accounts.overview()); return;
+          void accounts.refresh(undefined, { manual: true }).catch(() => {}); json(res, 200, accounts.overview()); return;
         }
         if (route === '/api/auth/run-context' && req.method === 'POST') {
           if (!management) throw new HttpError(403, '采集启动必须通过本机 CLI。');

@@ -227,6 +227,50 @@ async function collect(instance, token, number, cost) {
   assert.equal((await api(instance, '/v1/traces', { method: 'POST', headers: { 'x-pilotmeter-token': token }, body: telemetry })).status, 200);
 }
 
+test('manual HTTP sync refreshes quota immediately after login and after a previous sync', async t => {
+  const fake = fakeAccounts(); const state = await service(t, false, fake.options);
+  const { id, client } = await signedIn(state, fake, 'SyntheticAlice', '25');
+  const originalQuota = client.getQuota.bind(client);
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let calls = 0;
+  client.getQuota = async selectionId => {
+    calls++;
+    await gate;
+    const value = await originalQuota(selectionId);
+    value.snapshots[0].usedRequests = String(25 + calls * 10);
+    value.snapshots[0].remainingPercentage = String(75 - calls * 10);
+    return value;
+  };
+  const sync = () => api(state.instance, `/api/auth/refresh?accountId=${id}`, { method: 'POST', headers: state.browser });
+  try {
+    const pending = await sync();
+    assert.equal(pending.status, 200);
+    assert.equal(pending.data.refreshing, true, 'a manual sync must not silently reuse the login snapshot');
+    assert.equal(pending.data.quota.buckets[0].used, '25');
+    assert.equal((await sync()).data.refreshing, true);
+    assert.equal(calls, 1, 'overlapping syncs share the request');
+  } finally { release(); }
+
+  async function completed(used) {
+    const end = Date.now() + 4000;
+    for (;;) {
+      const { data } = await api(state.instance, '/api/auth/accounts');
+      if (!data.refreshing) {
+        assert.equal(data.quota.buckets[0].used, used);
+        assert.equal(data.quota.stale, false);
+        return;
+      }
+      if (Date.now() >= end) assert.fail('Manual HTTP sync did not settle');
+      await delay(5);
+    }
+  }
+  await completed('35');
+  await sync();
+  await completed('45');
+  assert.equal(calls, 2, 'completed syncs must not throttle the next explicit request');
+});
+
 test('pending login recovery exposes only its local reauthorization target without claiming verified identity', async t => {
   const fake = fakeAccounts(); const state = await service(t, false, fake.options);
   const alice = await signedIn(state, fake, 'SyntheticAlice', '25');
