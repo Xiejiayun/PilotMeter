@@ -315,6 +315,12 @@
 @keyframes rotate { to { transform: rotate(360deg); } }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
 
+/* Keep page scrolling available without a permanent rail in the desktop UI. */
+@media (forced-colors: none) {
+  html, .sidebar, .dialog { scrollbar-width: none; }
+  html::-webkit-scrollbar, .sidebar::-webkit-scrollbar, .dialog::-webkit-scrollbar { display: none; }
+}
+
 @media (min-width: 1550px) { .main-content { padding-top: 44px; } .quota-metrics { padding-top: 35px; padding-bottom: 31px; } .overview-columns { grid-template-columns: 1.2fr 1fr; } }
 @media (max-width: 1150px) { .app-shell { grid-template-columns: 184px minmax(0,1fr); } .sidebar { padding-inline: 12px; } .brand { margin-inline: 9px; } .brand-word { font-size: 17px; } .brand-caption { font-size: 6px; } .topbar { padding-inline: 26px; } .main-content { padding: 30px 26px 0; } .quota-metric + .quota-metric { padding-left: 18px; } .models-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } .model-preview,.local-card { padding: 20px; } .section-heading { gap: 9px; } .section-heading h2 { font-size: 13px; } .model-cost { display: none; } .pet-shortcut img { width: 48px; height: 48px; } .pet-shortcut strong { font-size: 10px; } .pet-shortcut span span { font-size: 8px; } }
 @media (max-width: 930px) { .app-shell { grid-template-columns: 76px minmax(0,1fr); } .sidebar { padding: 25px 12px 15px; } .brand { margin: 0 auto 38px; } .brand-word,.nav-caption,.nav-label,.nav-count,.sidebar-footer,.pet-shortcut > span { display: none; } .nav-item { padding: 14px; justify-content: center; } .pet-shortcut { border: 0; padding: 0; background: none; } .pet-shortcut img { width: 50px; height: 50px; } .pet-shortcut:hover { background: #ecf3ed; } .nav-item svg { width: 20px; height: 20px; } .overview-columns { gap: 14px; } .quota-metric + .quota-metric { padding-left: 20px; } .metric-value { font-size: 30px; } .quota-metrics { gap: 14px; } }
