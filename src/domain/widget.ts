@@ -1,7 +1,7 @@
 import type { AccountsOverview } from '../shared/accounts.js';
 import type { Summary } from '../shared/types.js';
 import { WIDGET_TEXT_LIMITS, type WidgetSnapshot } from '../shared/widget.js';
-import { compareDecimals, nonNegativeDecimal, normalizeDecimal, percentageOf } from './decimal.js';
+import { compareDecimals, exactPercentageOf, nonNegativeDecimal } from './decimal.js';
 import { timestamp } from './period.js';
 import { projectPersonalQuota } from './personal-quota.js';
 
@@ -14,27 +14,11 @@ function date(value: unknown): string {
   return parsed === null ? '' : new Date(parsed).toISOString();
 }
 
-/** Preserve exact short values; mark any discarded significant digits as approximate. */
-function amount(value: string): string {
-  if (value.length <= 12) return value;
-  const [integer = '0', fraction = ''] = value.split('.');
-  const all = `${integer}${fraction}`;
-  const start = all.search(/[1-9]/);
-  if (start < 0) return '0';
-  const significant = all.slice(start);
-  const mantissa = `${significant[0]}${significant.length > 1 ? `.${significant.slice(1, 3)}` : ''}`.replace(/\.?0+$/, '');
-  const approximate = /[1-9]/.test(significant.slice(3)) ? '≈' : '';
-  return `${approximate}${mantissa}×10^${integer.length - start - 1}`;
-}
-
-function ratio(value: unknown): { number: number; text: string } | null {
+function ratio(value: unknown): { number: number | null; text: string } | null {
   const exact = quantity(value);
   if (exact === null || compareDecimals(exact, '100') > 0) return null;
-  const rounded = normalizeDecimal(percentageOf(exact, '100', 1)!);
-  const different = compareDecimals(exact, rounded) !== 0;
-  const text = different && rounded === '0' ? '<0.1%' : different && rounded === '100' ? '>99.9%'
-    : `${different ? '≈' : ''}${rounded}%`;
-  return { number: Number(exact), text };
+  const number = Number(exact);
+  return { number: number === 100 && exact !== '100' || number === 0 && exact !== '0' ? null : number, text: `${exact}%` };
 }
 
 /** A pure projection: use only selected identity and bounded quantities, never upstream free-form text. */
@@ -45,9 +29,13 @@ export function buildWidget(summary: Summary, overview: AccountsOverview, select
   let unitUnspecified = false;
   function result(state: WidgetSnapshot['state'], title: string, value: string, detail: string,
     percentage: number | null = null, updatedAt = summaryAt): WidgetSnapshot {
+    const valueFits = value.length <= WIDGET_TEXT_LIMITS.value;
+    const fullDetail = `${valueFits ? '' : '精确数值较长，请打开主窗口查看。'}${detail}`;
     return {
-      state, title: title.slice(0, WIDGET_TEXT_LIMITS.title), value: value.slice(0, WIDGET_TEXT_LIMITS.value),
-      detail: detail.slice(0, WIDGET_TEXT_LIMITS.detail),
+      state, title: title.slice(0, WIDGET_TEXT_LIMITS.title), value: valueFits ? value : '查看精确用量',
+      // A clipped number would look like a different amount. Keep the full text or refer to the main window.
+      detail: fullDetail.length <= WIDGET_TEXT_LIMITS.detail ? fullDetail
+        : '完整明细较长，请打开主窗口查看完整用量、总额和同步状态；数值不做缩写或舍入。',
       percentage: percentage !== null && Number.isFinite(percentage) && percentage >= 0 && percentage <= 100 ? percentage : null,
       accountLogin, updatedAt, unitLabel, unitUnspecified,
     };
@@ -72,9 +60,9 @@ export function buildWidget(summary: Summary, overview: AccountsOverview, select
       unitLabel = bucket.unit === 'ai-credits' ? 'AI Credits' : bucket.unit === 'premium-requests' ? 'Premium Requests' : null;
       unitUnspecified = bucket.unit === 'unspecified';
       const left = ratio(bucket.remainingPercentage);
-      const value = bucket.remaining !== null ? `${amount(bucket.remaining)} 剩余` : left ? `剩余 ${left.text}` : bucket.value;
+      const value = bucket.remaining !== null ? `${bucket.remaining} 剩余` : left ? `剩余 ${left.text}` : bucket.value;
       return result(bucket.value === '已用未知' && value === bucket.value && !error ? 'waiting' : state, `个人${bucket.label} · 当前周期`, value,
-        `${status}${bucket.remaining !== null ? `剩余 ${amount(bucket.remaining)} ${bucket.unitLabel}（总额减已用）；` : bucket.unit === 'unspecified' ? '单位未确认；' : ''}${bucket.detail}；个人额度不代表组织总池。`, state === 'ready' ? bucket.percentage : null, personal.fetchedAt);
+        `${status}${bucket.remaining !== null ? `剩余 ${bucket.remaining} ${bucket.unitLabel}（总额减已用）；` : bucket.unit === 'unspecified' ? '单位未确认；' : ''}${bucket.detail}；个人额度不代表组织总池。`, state === 'ready' ? bucket.percentage : null, personal.fetchedAt);
     }
     if (personal.selection === 'required') {
       return result(error ? 'error' : 'waiting', '个人当前周期额度', '选择额度类别',
@@ -102,16 +90,13 @@ export function buildWidget(summary: Summary, overview: AccountsOverview, select
       const budget = display.mode === 'custom' && credits !== null && display.unit === 'ai-credits'
         && quantity(display.used) === credits ? quantity(display.limit) : null;
       if (budget !== null) {
-        const computed = budget === '0' ? null : percentageOf(credits!, budget, 6);
+        const computed = exactPercentageOf(credits!, budget);
         const percent = ratio(computed);
-        // A finite display rounding must not turn a positive amount into zero, or nearly full into full.
-        const tiny = percent?.number === 0 && used !== '0';
-        const nearlyFull = percent?.number === 100 && compareDecimals(used, budget) < 0;
         return result(error ? 'error' : overview.refreshing ? 'waiting' : 'ready', '本机月度自定义预算',
-          tiny ? '<0.1%' : nearlyFull ? '>99.9%' : percent?.text ?? `${amount(used)} / ${amount(budget)}`,
-          `${detail} 自定义预算 ${amount(budget)}，不代表个人官方额度${budget === '0' ? '；预算为 0' : compareDecimals(used, budget) > 0 ? '；已超预算' : ''}。`, tiny || nearlyFull ? null : percent?.number ?? null);
+          `${used} / ${budget}`,
+          `${detail} 自定义预算 ${budget}，不代表个人官方额度${budget === '0' ? '；预算为 0' : compareDecimals(used, budget) > 0 ? '；已超预算' : ''}。`, percent?.number ?? null);
       }
-      return result(error ? 'error' : overview.refreshing ? 'waiting' : 'ready', '本机月度记录', amount(used), `${detail} 不代表个人完整用量。`);
+      return result(error ? 'error' : overview.refreshing ? 'waiting' : 'ready', '本机月度记录', used, `${detail} 不代表个人完整用量。`);
     }
   }
   return result(error ? 'error' : 'waiting', '个人当前周期额度', '用量未知', `${reason}当前账号尚无可展示的已知用量；打开主窗口查看。`);

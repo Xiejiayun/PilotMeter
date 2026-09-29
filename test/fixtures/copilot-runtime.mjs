@@ -5,6 +5,17 @@ import { join } from 'node:path';
 const mode = process.env.MOCK_COPILOT_MODE ?? 'normal';
 const isLogin = process.argv.includes('login');
 const secret = 'synthetic-private-credential-do-not-forward';
+// Replaced into the raw JSON body below so these values never pass through Number.
+const exactPercentages = {
+  'quota-percentage-nearly-full': '99.999999999999999999',
+  'quota-percentage-tiny': '0.000000000000000001',
+  'quota-percentage-zero': '0',
+  'quota-percentage-full': '100',
+  'quota-percentage-overfull': '100.000000000000000001',
+  'quota-percentage-negative': '-0.000000000000000001',
+  'quota-percentage-unbounded': '1e-256',
+  'quota-percentage-missing': 'null',
+};
 const trace = value => appendFileSync(join(process.env.COPILOT_HOME, 'mock-requests.jsonl'), `${JSON.stringify(value)}\n`);
 trace({ args: process.argv.slice(2), home: process.env.COPILOT_HOME,
   overrides: Object.keys(process.env).filter(key => /^(?:COPILOT_|PILOTMETER_|GITHUB_|GH_|OTEL_|NODE_OPTIONS$|NODE_DEBUG$)/i.test(key)).filter(key => key !== 'COPILOT_HOME') });
@@ -12,7 +23,16 @@ trace({ args: process.argv.slice(2), home: process.env.COPILOT_HOME,
 if (isLogin) {
   const hostIndex = process.argv.indexOf('--host');
   const host = process.argv[hostIndex + 1];
-  if (mode === 'login-overlong') process.stdout.write('x'.repeat(70_000));
+  const loginErrors = {
+    // Exact public diagnostic shape observed with CLI 1.0.88 behind a rejecting local proxy.
+    'login-network-error': 'Login failed: Error: request failed: error sending request for url (https://github.com/login/device/code)',
+    'login-certificate-error': 'Login failed: unable to get local issuer certificate',
+    'login-denied': 'Login failed: access_denied',
+    'login-expired': 'Login failed: expired_token',
+  };
+  if (loginErrors[mode]) { process.stderr.write(`${loginErrors[mode]}\n${secret}`); setTimeout(() => process.exit(1), 25); }
+  else if (mode === 'login-silent') { /* Simulate a stalled code request. */ }
+  else if (mode === 'login-overlong') process.stdout.write('x'.repeat(70_000));
   else if (mode === 'login-no-code') { process.stdout.write('Login complete\n'); setTimeout(() => process.exit(0), 25); }
   else {
     const target = mode === 'login-bad-url' ? 'https://github.com.attacker.invalid' : host;
@@ -30,6 +50,7 @@ if (isLogin) {
   const send = (id, value, error = false) => {
     let body = JSON.stringify({ jsonrpc: '2.0', id, [error ? 'error' : 'result']: value });
     body = body.replace('"exact-large"', '9007199254740993.123456789').replace('"exact-fraction"', '0.123456789123456789');
+    body = body.replace('"exact-percentage"', exactPercentages[mode] ?? '42.5');
     const bytes = Buffer.from(body);
     const frame = Buffer.concat([Buffer.from(`Content-Length: ${bytes.length}\r\nContent-Type: application/vscode-jsonrpc; charset=utf-8\r\n\r\n`), bytes]);
     if (mode === 'fragmented') {
@@ -62,11 +83,12 @@ if (isLogin) {
           { selectionId: 'wrong-host', authInfo: { type: 'user', login: 'bad-user', host: 'https://github.com.attacker.invalid' } },
         ]); if (mode === 'exit-after-list') setTimeout(() => process.exit(0), 30); }
       } else if (request.method === 'account.getQuota') send(request.id, { quotaSnapshots: { premium_interactions: {
-        isUnlimitedEntitlement: false, entitlementRequests: 100, usedRequests: 'exact-large', remainingPercentage: 42.5,
+        isUnlimitedEntitlement: false, entitlementRequests: 100, usedRequests: 'exact-large', remainingPercentage: 'exact-percentage',
         overage: 'exact-fraction', usageAllowedWithExhaustedQuota: true, overageAllowedWithExhaustedQuota: false,
         resetDate: '2026-10-01T00:00:00Z', token: secret,
         ...(mode === 'quota-unit' ? { unit: 'ai-credits', billingMode: 'ai-credits' } : {}),
         ...(mode === 'quota-invalid' ? { usedRequests: -1 } : {}),
+        ...(mode === 'quota-percentage-nearly-full' ? { usedRequests: '0.000000000000000001' } : {}),
       } } });
       else if (request.method === 'models.list') {
         const enabled = { id: 'synthetic-model', name: 'Synthetic Model', policy: { state: 'enabled', terms: secret },

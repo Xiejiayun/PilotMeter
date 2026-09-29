@@ -19,6 +19,11 @@ function node<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, 
 function time(value: string | null): string {
   return value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '未知';
 }
+function exactAmount(value: string | null): string {
+  if (value === null) return '未知';
+  const [integer = '0', fraction] = value.split('.');
+  return integer.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (fraction === undefined ? '' : `.${fraction}`);
+}
 function validHost(value: string): string | null {
   try {
     const url = new URL(value);
@@ -56,16 +61,27 @@ export function initializeAccounts(options: AccountUI): { load: () => Promise<Ac
   function quotaCard(bucket: PersonalQuotaBucketView, primary = false): HTMLElement {
     const card = node('article', `quota-bucket${primary ? ' quota-primary' : ''}`);
     card.dataset.quotaKey = bucket.key;
-    card.append(node('h4', '', bucket.label), node('p', 'quota-value', bucket.value));
-    if (bucket.value.endsWith('%')) card.append(node('p', 'quota-caption', '当前周期已用'));
+    const used = bucket.used ?? bucket.raw.used;
+    const limit = bucket.limit ?? bucket.raw.limit;
+    const hasAmounts = !bucket.unlimited && (used !== null || limit !== null);
+    const value = hasAmounts ? `${exactAmount(used)}${limit === null ? '' : ` / ${exactAmount(limit)}`}` : bucket.value;
+    card.append(node('h4', '', bucket.label), node('p', 'quota-value', value));
+    if (hasAmounts) card.append(node('p', 'quota-caption', limit === null ? '已用' : '已用 / 总额'));
+    if (bucket.usedPercentage !== null) card.append(node('p', 'quota-percentage', `当前周期已用 ${bucket.usedPercentage}%`));
     if (bucket.percentage !== null) {
       const progress = node('progress', 'quota-progress');
       progress.max = 100; progress.value = bucket.percentage;
       progress.setAttribute('aria-label', `${bucket.label}已用比例`);
+      if (bucket.usedPercentage !== null) progress.setAttribute('aria-valuetext', `${bucket.usedPercentage}%`);
       card.append(progress);
     }
-    if (bucket.unit !== 'unspecified') card.append(node('p', 'quota-amount', bucket.detail));
-    else if (!bucket.unlimited && !bucket.value.endsWith('%')) card.append(node('p', 'quota-amount', '数量单位未确认'));
+    if (bucket.unit === 'unspecified') {
+      card.append(node('p', 'quota-amount', '原始数值 · 单位未确认'));
+      if (bucket.unlimited && used !== null) card.append(node('p', 'quota-amount', `原始已用 (used)：${exactAmount(used)}`));
+    }
+    if (bucket.unit !== 'unspecified' || !hasAmounts && !bucket.unlimited || bucket.detail.includes('；已超出固定额度') || limit === '0') {
+      card.append(node('p', 'quota-amount', bucket.detail));
+    }
     if (bucket.nextResetAt) card.append(node('p', 'small muted', `下次重置 ${time(bucket.nextResetAt)}`));
     return card;
   }
@@ -185,7 +201,14 @@ export function initializeAccounts(options: AccountUI): { load: () => Promise<Ac
     }
   }
 
+  function loginStatus(content: string, state = 'pending'): void {
+    text('login-status', content);
+    element('login-status').dataset.state = state;
+  }
+
   function renderLogin(value: AccountLogin): void {
+    const newCode = !!value.userCode && login?.userCode !== value.userCode;
+    if (newCode) text('copy-code-feedback', '');
     login = value;
     const codeAvailable = !!value.userCode && !!value.verificationUri && active();
     const link = element<HTMLAnchorElement>('github-verification-link');
@@ -199,8 +222,18 @@ export function initializeAccounts(options: AccountUI): { load: () => Promise<Ac
     if (safeLink) link.href = safeLink.href; else link.removeAttribute('href');
     text('github-user-code', value.userCode ?? '');
     text('login-expiry', value.expiresAt ? `验证码有效至 ${time(value.expiresAt)}` : '请在 GitHub 提示的有效期内完成授权。');
-    text('login-status', ({ starting: '正在向 GitHub 请求验证码…', pending: '等待你在 GitHub 完成授权；请保留此窗口。', verifying: 'GitHub 授权已收到，正在确认账号…', complete: '登录成功，正在读取账号…', cancelled: '登录已取消。', failed: '登录失败。', expired: '验证码已过期，请重新获取。' })[value.status] + (value.error ? ` ${value.error.message}` : '') + (codeAvailable && !safeLink ? ' 授权地址无法验证，请重试。' : ''));
+    const statuses: Record<AccountLogin['status'], string> = {
+      starting: '正在向 GitHub 请求验证码…',
+      pending: '等待 GitHub 授权。请完成第 2 步，授权后这里会自动继续。',
+      verifying: 'GitHub 授权已收到，正在确认账号，请稍候…',
+      complete: '登录成功，正在读取账号…',
+      cancelled: '登录已取消。点击“重新获取验证码”可再次登录。',
+      failed: `登录未完成。${value.error?.message ? ` ${value.error.message}` : ''} 请按提示处理后，点击“重新获取验证码”再试一次。`,
+      expired: '验证码已过期。请点击“重新获取验证码”，复制新码后再到 GitHub 授权。',
+    };
+    loginStatus(codeAvailable && !safeLink ? '授权地址无法验证。请取消此次登录，然后重新获取验证码。' : statuses[value.status], codeAvailable && !safeLink ? 'failed' : value.status);
     element('retry-github-login').hidden = !['failed', 'expired', 'cancelled'].includes(value.status);
+    if (newCode && codeAvailable) element<HTMLButtonElement>('copy-github-code').focus();
   }
 
   async function pollLogin(id: string, generation: number): Promise<void> {
@@ -218,21 +251,22 @@ export function initializeAccounts(options: AccountUI): { load: () => Promise<Ac
       if (!active()) return;
     } catch (error) {
       if (generation !== loginGeneration || !loginDialog.open) return;
-      text('login-status', `登录状态暂时无法读取：${message(error)}。正在重试…`);
+      loginStatus(`暂时无法确认登录状态：${message(error)}。请检查 PilotMeter 本地服务是否运行；连接恢复后会自动重试。`, 'interrupted');
     }
     pollTimer = window.setTimeout(() => { void pollLogin(id, generation); }, 1_000);
   }
 
   async function startLogin(): Promise<void> {
     const host = validHost(hostInput.value.trim());
-    if (!host) { text('login-status', '请输入 https://github.com 或 https://你的企业.ghe.com。'); hostInput.focus(); return; }
+    if (!host) { loginStatus('请输入 https://github.com 或 https://你的企业.ghe.com。', 'failed'); hostInput.focus(); return; }
     const generation = ++loginGeneration;
     window.clearTimeout(pollTimer);
     login = null;
     element('github-host-form').hidden = true;
     element('device-login').hidden = true;
     element('retry-github-login').hidden = true;
-    text('login-status', '正在向 GitHub 请求验证码…');
+    text('copy-code-feedback', '');
+    loginStatus('正在向 GitHub 请求验证码…', 'starting');
     try {
       const result = await options.mutate<AccountLogin>('/api/auth/login', 'POST', { host, ...(retryAccountId ? { accountId: retryAccountId } : {}) });
       if (generation !== loginGeneration || !loginDialog.open) {
@@ -243,7 +277,7 @@ export function initializeAccounts(options: AccountUI): { load: () => Promise<Ac
       await pollLogin(result.id, generation);
     } catch (error) {
       if (generation !== loginGeneration || !loginDialog.open) return;
-      text('login-status', `无法开始登录：${message(error)}`);
+      loginStatus(`无法开始登录：${message(error)}。请检查网络与 GitHub 地址，然后点击“获取登录验证码”重试。`, 'failed');
       element('github-host-form').hidden = false;
     }
   }
@@ -257,7 +291,8 @@ export function initializeAccounts(options: AccountUI): { load: () => Promise<Ac
     hostInput.value = profile?.host ?? 'https://github.com';
     hostInput.disabled = !!profile;
     text('login-title', profile ? `重新登录 @${profile.login}` : overview.accounts.length ? '添加 GitHub 账号' : '登录 GitHub');
-    text('login-status', profile ? `请在 GitHub 授权页确认登录的是 ${profile.login}。` : '无需在 PilotMeter 输入 GitHub 密码。');
+    text('login-account-hint', profile ? `在新标签页输入验证码，并确认登录的是 @${profile.login}，再同意授权。` : '在新标签页输入验证码，确认要连接的 GitHub 账号，再同意授权。');
+    loginStatus(profile ? `即将重新连接 @${profile.login}。请先获取本次登录验证码。` : '点击“获取登录验证码”开始，随后按下面的步骤完成授权。', 'ready');
     text('copy-code-feedback', '');
     element('github-host-form').hidden = false;
     element('device-login').hidden = true;

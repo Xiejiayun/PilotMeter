@@ -91,7 +91,7 @@ test('first run has login and collection guidance without inventing quota or acc
   expect(data.requests.filter(item => item.method !== 'GET')).toHaveLength(0);
 });
 
-test('device code login confirms selected identity and uses CSRF without exposing credentials', async ({ page, context }) => {
+test('device code login confirms selected identity and uses CSRF without exposing credentials', async ({ page, context }, testInfo) => {
   const data = state([], null);
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   await mock(page, data);
@@ -101,7 +101,11 @@ test('device code login confirms selected identity and uses CSRF without exposin
   await expect(page.getByRole('dialog', { name: '登录 GitHub' })).toBeVisible();
   await page.getByRole('button', { name: '获取登录验证码' }).press('Enter');
   await expect(page.locator('#github-user-code')).toHaveText('ABCD-1234');
+  await expect(page.getByRole('heading', { name: '回到此窗口', exact: true })).toBeVisible();
+  await expect(page.locator('#device-login')).toContainText('会自动完成登录');
+  await expect(page.getByRole('button', { name: '复制验证码' })).toBeFocused();
   await expect(page.getByRole('link', { name: '前往 GitHub 授权' })).toHaveAttribute('href', 'https://github.com/login/device');
+  await page.screenshot({ path: testInfo.outputPath('login-steps.png') });
   await page.getByRole('button', { name: '复制验证码' }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('ABCD-1234');
   data.overview.accounts = [alice]; data.overview.activeAccountId = alice.id; data.overview.quota = quota(alice.id);
@@ -116,13 +120,15 @@ test('device code login confirms selected identity and uses CSRF without exposin
   expect(await page.evaluate(() => ({ local: localStorage.length, session: sessionStorage.length }))).toEqual({ local: 0, session: 0 });
 });
 
-test('current premium percentage is distinct from local month and hides unspecified raw quantities and past resets', async ({ page }) => {
+test('current quota shows exact raw quantities with unconfirmed units and keeps its own period', async ({ page }) => {
   const data = state();
   await mock(page, data);
   await page.goto('/');
   await expect(page.locator('#quota-buckets')).toContainText('37.5%');
   await expect(page.locator('.quota-primary h4')).toHaveText('高级请求');
-  await expect(page.locator('#quota-buckets')).not.toContainText('75 / 200');
+  await expect(page.locator('.quota-primary .quota-value')).toHaveText('75 / 200');
+  await expect(page.locator('.quota-primary .quota-caption')).toHaveText('已用 / 总额');
+  await expect(page.locator('.quota-primary')).toContainText('原始数值 · 单位未确认');
   await expect(page.locator('#quota-buckets')).not.toContainText('重置');
   await expect(page.locator('#quota-buckets')).not.toContainText('AI Credits');
   await expect(page.locator('#quota-buckets')).not.toContainText('Premium Requests');
@@ -131,6 +137,40 @@ test('current premium percentage is distinct from local month and hides unspecif
   await page.locator('#period').fill('2025-01');
   await expect(page.locator('#quota-buckets')).toContainText('37.5%');
 });
+
+test('source used 62000 and limit 2000000 are visible in the main quota without opening details', async ({ page }) => {
+  const data = state();
+  Object.assign(data.overview.quota.buckets[0], { used: '62000', limit: '2000000', usedPercentage: '3.1', remainingPercentage: '96.9' });
+  await mock(page, data);
+  await page.goto('/');
+  await expect(page.locator('.quota-primary .quota-value')).toHaveText('62,000 / 2,000,000');
+  await expect(page.locator('.quota-primary .quota-value')).toBeVisible();
+  await expect(page.locator('.quota-primary .quota-percentage')).toHaveText('当前周期已用 3.1%');
+  await expect(page.locator('.quota-primary')).toContainText('原始数值 · 单位未确认');
+});
+
+for (const unit of ['unspecified', 'ai-credits']) {
+  test(`quota preserves every source digit for ${unit} at narrow widths`, async ({ page }) => {
+    const data = state();
+    Object.assign(data.overview.quota.buckets[0], {
+      unit, used: '9007199254740993.123456789012345678901', limit: '9007199254740994.987654321098765432109',
+      usedPercentage: '99.99999999999999999999999999', remainingPercentage: '0.00000000000000000000000001',
+    });
+    await page.setViewportSize({ width: 320, height: 900 });
+    await mock(page, data);
+    await page.goto('/');
+    await expect(page.locator('.quota-primary .quota-value')).toHaveText('9,007,199,254,740,993.123456789012345678901 / 9,007,199,254,740,994.987654321098765432109');
+    await expect(page.locator('.quota-primary .quota-percentage')).toHaveText('当前周期已用 99.99999999999999999999999999%');
+    await expect(page.locator('.quota-primary')).not.toContainText('≈');
+    await expect(page.locator('.quota-primary')).not.toContainText('×10');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(await page.locator('.quota-primary').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    const sections = await page.locator('.quota-primary > *').evaluateAll(elements => elements.map(element => {
+      const rect = element.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom };
+    }));
+    for (let index = 1; index < sections.length; index++) expect(sections[index].top).toBeGreaterThanOrEqual(sections[index - 1].bottom);
+  });
+}
 
 test('premium is the visible main category and unlimited categories stay under a persistent native disclosure', async ({ page }) => {
   // Deliberately artificial values; never sourced from a real account or screenshot.
@@ -144,11 +184,10 @@ test('premium is the visible main category and unlimited categories stay under a
   await page.clock.install();
   await page.goto('/');
   await expect(page.locator('.quota-primary h4')).toHaveText('高级请求');
-  await expect(page.locator('.quota-primary .quota-value')).toHaveText('25%');
+  await expect(page.locator('.quota-primary .quota-value')).toHaveText('432 / 1,728');
+  await expect(page.locator('.quota-primary .quota-percentage')).toHaveText('当前周期已用 25%');
   await expect(page.locator('.quota-other')).not.toHaveAttribute('open', '');
   await expect(page.locator('[data-quota-key="chat"]')).toBeHidden();
-  await expect(page.locator('#quota-buckets')).not.toContainText('432');
-  await expect(page.locator('#quota-buckets')).not.toContainText('1728');
   await page.locator('.quota-other > summary').press('Enter');
   await expect(page.locator('[data-quota-key="chat"] h4')).toHaveText('聊天');
   await expect(page.locator('[data-quota-key="completions"] h4')).toHaveText('代码补全');
@@ -175,7 +214,8 @@ test('multiple unrecognized finite categories stay independent until explicitly 
   await expect(page.locator('[data-quota-key="synthetic_second"]')).toBeVisible();
   await page.getByLabel('查看额度类别').selectOption('synthetic_second');
   await expect(page.locator('.quota-primary h4')).toHaveText('其他额度 · synthetic_second');
-  await expect(page.locator('.quota-primary .quota-value')).toHaveText('80%');
+  await expect(page.locator('.quota-primary .quota-value')).toHaveText('400 / 500');
+  await expect(page.locator('.quota-primary .quota-percentage')).toHaveText('当前周期已用 80%');
   await expect(page.locator('.quota-primary')).toContainText('400 / 500 Premium Requests');
   await expect(page.locator('#quota-buckets')).not.toContainText('420');
 });
@@ -247,6 +287,32 @@ test('cancel, expired retry and reauthentication remain usable by keyboard', asy
   await expect(page.locator('#primary-value')).toHaveText('1,000,000,000');
 });
 
+test('expired code retry clears old copy feedback and failed authorization explains recovery', async ({ page, context }) => {
+  const data = state([], null);
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await mock(page, data);
+  await page.clock.install();
+  await page.goto('/');
+  await page.getByRole('button', { name: '登录 GitHub', exact: true }).click();
+  await page.getByRole('button', { name: '获取登录验证码' }).click();
+  await page.getByRole('button', { name: '复制验证码' }).click();
+  await expect(page.locator('#copy-code-feedback')).toHaveText('已复制。');
+  data.login.status = 'expired';
+  await page.clock.runFor(1_100);
+  await expect(page.locator('#github-user-code')).toBeHidden();
+  await expect(page.locator('#login-status')).toContainText('复制新码');
+  data.login.status = 'pending'; data.login.userCode = 'WXYZ-9876';
+  await page.getByRole('button', { name: '重新获取验证码' }).click();
+  await expect(page.locator('#github-user-code')).toHaveText('WXYZ-9876');
+  await expect(page.locator('#copy-code-feedback')).toBeEmpty();
+  data.login.status = 'failed'; data.login.error = { code: 'LOGIN_FAILED', message: 'GitHub 未批准此次授权。' };
+  await page.clock.runFor(1_100);
+  await expect(page.locator('#login-status')).toContainText('GitHub 未批准此次授权。');
+  await expect(page.locator('#login-status')).toContainText('重新获取验证码');
+  await expect(page.locator('#login-status')).toHaveAttribute('data-state', 'failed');
+  await expect(page.locator('#github-user-code')).toBeHidden();
+});
+
 test('enterprise account login validates host, while account removal requires explicit local confirmation', async ({ page }) => {
   const data = state();
   await mock(page, data);
@@ -288,7 +354,7 @@ test('account endpoint failure and reauthentication error do not suppress local 
   await expect(page.locator('#connection')).toHaveText('本地服务已连接');
 });
 
-test('320px accounts and device dialog stay in viewport and render account metadata as text', async ({ page }) => {
+test('320px accounts and device dialog stay in viewport and render account metadata as text', async ({ page }, testInfo) => {
   const data = state([{ ...alice, login: '<img src=x onerror=alert(1)>-very-long-account-name' }, bob]);
   await page.setViewportSize({ width: 320, height: 900 });
   await mock(page, data);
@@ -300,6 +366,12 @@ test('320px accounts and device dialog stay in viewport and render account metad
   await page.getByRole('button', { name: '获取登录验证码' }).click();
   await expect(page.locator('#github-user-code')).toBeVisible();
   expect(await page.locator('#github-login-dialog').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const sections = await page.locator('#device-login > li, #login-status, .login-footer').evaluateAll(elements => elements.filter(element => element.closest('#github-login-dialog')).map(element => {
+    const rect = element.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom };
+  }));
+  expect(sections).toHaveLength(5);
+  for (let index = 1; index < sections.length; index++) expect(sections[index].top).toBeGreaterThanOrEqual(sections[index - 1].bottom);
+  await page.screenshot({ path: testInfo.outputPath('login-steps-narrow.png') });
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: '添加账号' })).toBeFocused();
 });

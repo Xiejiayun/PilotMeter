@@ -88,12 +88,15 @@ jobs:
           compression-level: 0
           retention-days: 14
 
-      - name: Upload browser failure evidence
+      - name: Upload browser and native layout failure evidence
         if: failure() && (runner.os == 'Linux' || runner.os == 'Windows')
         uses: actions/upload-artifact@v4
         with:
           name: browser-results-${{ matrix.os }}
-          path: test-results/
+          path: |
+            test-results/
+            .tmp/ui-review/
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
 

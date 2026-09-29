@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { atomicJson, readJson } from '../shared/runtime.js';
-import { compareDecimals, nonNegativeDecimal, percentageOf, subtractDecimals } from '../domain/decimal.js';
+import { compareDecimals, exactPercentageOf, nonNegativeDecimal, subtractDecimals } from '../domain/decimal.js';
 import { quotaBucketLabel } from '../domain/personal-quota.js';
 import type { AccountLogin, AccountsOverview, GitHubProfile, PersonalQuota } from '../shared/accounts.js';
 import type { AccountModels } from '../shared/models.js';
@@ -22,7 +22,7 @@ function quantity(input: unknown): string | null {
 }
 function percent(input: unknown): string | null {
   try {
-    const result = nonNegativeDecimal(typeof input === 'number' && Number.isFinite(input) ? String(input) : input);
+    const result = nonNegativeDecimal(nonNegativeDecimal(input));
     return compareDecimals(result, '100') <= 0 ? result : null;
   } catch { return null; }
 }
@@ -41,7 +41,7 @@ export function personalQuota(accountId: string, result: CopilotQuota): Personal
       const used = quantity(snapshot.usedRequests); const limit = snapshot.isUnlimitedEntitlement ? null : quantity(snapshot.entitlementRequests);
       const remainingPercentage = snapshot.isUnlimitedEntitlement ? null : percent(snapshot.remainingPercentage);
       const usedPercentage = snapshot.isUnlimitedEntitlement ? null : remainingPercentage !== null ? subtractDecimals('100', remainingPercentage)
-        : used !== null && limit !== null ? percentageOf(used, limit, 2) : null;
+        : used !== null && limit !== null ? exactPercentageOf(used, limit) : null;
       return { key: snapshot.type, label: quotaBucketLabel(snapshot.type),
         unit, used, limit, remainingPercentage, usedPercentage, unlimited: snapshot.isUnlimitedEntitlement, resetAt: snapshot.resetDate };
     }),

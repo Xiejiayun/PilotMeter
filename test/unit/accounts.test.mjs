@@ -13,7 +13,7 @@ const host = 'https://github.com';
 const identity = (login, changes = {}) => ({ selectionId: `private-selection-${login}`, host, login, authType: 'user', isCurrent: true, ...changes });
 const quota = (used = '25', changes = {}) => ({
   selectionId: 'private-selection-not-for-browser', fetchedAt: timestamp, scope: 'user',
-  snapshots: [{ type: 'chat', unit: null, billingMode: 'unknown', usedRequests: used, entitlementRequests: '100', remainingPercentage: 75,
+  snapshots: [{ type: 'chat', unit: null, billingMode: 'unknown', usedRequests: used, entitlementRequests: '100', remainingPercentage: '75',
     overage: '0', isUnlimitedEntitlement: false, usageAllowedWithExhaustedQuota: false, overageAllowedWithExhaustedQuota: false,
     resetDate: '2026-10-01T00:00:00.000Z' }], ...changes,
 });
@@ -605,7 +605,7 @@ test('refresh commits queued during another login preserve both registry profile
 
 test('personal quota preserves percentages and never infers AI Credits from a bucket name', () => {
   const input = quota();
-  input.snapshots = ['chat', 'completions', 'premium_interactions', 'ai_credits', 'ai-credits', 'premium_requests'].map(type => ({ ...input.snapshots[0], type, unit: null, remainingPercentage: 12.345 }));
+  input.snapshots = ['chat', 'completions', 'premium_interactions', 'ai_credits', 'ai-credits', 'premium_requests'].map(type => ({ ...input.snapshots[0], type, unit: null, remainingPercentage: '12.345' }));
   const result = personalQuota('synthetic-account', input);
   assert.equal(result.scope, 'signed-in-user');
   for (const bucket of result.buckets) {
@@ -622,13 +622,13 @@ test('personal quota keeps explicit units, exact amounts, zero, unlimited and mi
   const result = personalQuota('synthetic-account', quota('25', { snapshots: [
     { ...template, unit: 'ai-credits', billingMode: 'ai-credits', usedRequests: '9007199254740993.123456789', entitlementRequests: '18014398509481986.246913578', remainingPercentage: NaN },
     { ...template, unit: 'premium-requests', billingMode: 'premium-requests', usedRequests: '0', entitlementRequests: '0', remainingPercentage: NaN },
-    { ...template, usedRequests: '25', entitlementRequests: '-1', isUnlimitedEntitlement: true, remainingPercentage: 0 },
-    { ...template, usedRequests: '25', entitlementRequests: '100', remainingPercentage: 200 },
+    { ...template, usedRequests: '25', entitlementRequests: '-1', isUnlimitedEntitlement: true, remainingPercentage: '0' },
+    { ...template, usedRequests: '25', entitlementRequests: '100', remainingPercentage: '200' },
   ] }));
   assert.equal(result.buckets[0].unit, 'ai-credits');
   assert.equal(result.buckets[0].label, '聊天', 'The quota category is independent of its explicitly returned unit.');
   assert.equal(result.buckets[0].used, '9007199254740993.123456789');
-  assert.equal(result.buckets[0].usedPercentage, '50.00');
+  assert.equal(result.buckets[0].usedPercentage, '50');
   assert.equal(result.buckets[1].unit, 'premium-requests');
   assert.equal(result.buckets[1].used, '0');
   assert.equal(result.buckets[1].usedPercentage, null);
@@ -637,9 +637,44 @@ test('personal quota keeps explicit units, exact amounts, zero, unlimited and mi
   assert.equal(result.buckets[2].remainingPercentage, null);
   assert.equal(result.buckets[2].usedPercentage, null);
   assert.equal(result.buckets[3].remainingPercentage, null);
-  assert.equal(result.buckets[3].usedPercentage, '25.00');
+  assert.equal(result.buckets[3].usedPercentage, '25');
   const unavailable = personalQuota('synthetic-account', quota('0', { snapshots: [] }));
   assert.equal(unavailable.state, 'unavailable');
   assert.deepEqual(unavailable.buckets, []);
   assert.equal(unavailable.error.code, 'QUOTA_EMPTY');
+});
+
+test('derived personal quota percentages preserve finite decimals and leave repeating ratios unrounded', () => {
+  const template = quota().snapshots[0];
+  const examples = [
+    ['62000', '2000000', '3.1'], ['1', '128', '0.78125'],
+    ['0.00000000000000000001', '100', '0.00000000000000000001'],
+    ['99.99999999999999999999', '100', '99.99999999999999999999'],
+    ['1', '3', null], ['0', '0', null],
+  ];
+  const result = personalQuota('synthetic-account', quota('25', { snapshots: examples.map(([used, limit]) => ({
+    ...template, usedRequests: used, entitlementRequests: limit, remainingPercentage: null,
+  })) }));
+  for (const [index, [used, limit, percentage]] of examples.entries()) {
+    assert.equal(result.buckets[index].used, used); assert.equal(result.buckets[index].limit, limit);
+    assert.equal(result.buckets[index].usedPercentage, percentage);
+  }
+  const supplied = personalQuota('synthetic-account', quota('25', { snapshots: [{
+    ...template, usedRequests: '1', entitlementRequests: '3', remainingPercentage: '66.66666666666666666666',
+  }] }));
+  assert.equal(supplied.buckets[0].usedPercentage, '33.33333333333333333334');
+});
+
+test('personal percentages accept bounded exact strings and cannot reintroduce floating-point rounding', () => {
+  const template = { ...quota().snapshots[0], usedRequests: null, entitlementRequests: null };
+  const examples = [
+    ['99.999999999999999999', '99.999999999999999999', '0.000000000000000001'],
+    ['0.000000000000000001', '0.000000000000000001', '99.999999999999999999'],
+    ['100.000000000000000001', null, null], ['-0.000000000000000001', null, null],
+    ['1e-256', null, null], [99.999999999999999999, null, null], [42.5, null, null],
+  ];
+  for (const [input, remaining, used] of examples) {
+    const result = personalQuota('synthetic-percentage-account', quota('25', { snapshots: [{ ...template, remainingPercentage: input }] })).buckets[0];
+    assert.equal(result.remainingPercentage, remaining); assert.equal(result.usedPercentage, used);
+  }
 });

@@ -51,7 +51,7 @@ test('a sole finite category is named, while ambiguous finite categories require
   assert.equal(duplicate.selection, 'required'); assert.equal(duplicate.primary, null);
 });
 
-test('unspecified units restrict raw amounts to the expandable whitelist while preserving official percentages', () => {
+test('unspecified units expose exact raw amounts separately from confirmed-unit quantities', () => {
   const raw = bucket('premium_interactions', { used: '987654321', limit: '9876543210', usedPercentage: '10' });
   const result = projectPersonalQuota(quota([raw]), now);
   assert.equal(result.primary.unit, 'unspecified'); assert.equal(result.primary.unitLabel, '单位未确认');
@@ -70,6 +70,10 @@ test('unspecified units restrict raw amounts to the expandable whitelist while p
   const zero = projectPersonalQuota(quota([bucket('premium_interactions', { used: '0', limit: '0', usedPercentage: '0' })]), now);
   assert.equal(zero.primary.value, '已用未知'); assert.equal(zero.primary.percentage, null);
   assert.doesNotMatch(zero.primary.detail, /为 0|0 \/ 0/);
+  const reported = projectPersonalQuota(quota([bucket('premium_interactions', { used: '62000', limit: '2000000', usedPercentage: '3.1' })]), now).primary;
+  assert.equal(reported.raw.used, '62000'); assert.equal(reported.raw.limit, '2000000');
+  assert.equal(reported.used, null); assert.equal(reported.limit, null); assert.equal(reported.remaining, null);
+  assert.equal(reported.usedPercentage, '3.1'); assert.equal(reported.value, '3.1%');
 });
 
 test('remaining allowance uses exact subtraction only for explicit units and fixed known totals', () => {
@@ -92,15 +96,21 @@ test('remaining allowance uses exact subtraction only for explicit units and fix
   assert.doesNotMatch(JSON.stringify(view), /private-token/);
 });
 
-test('explicit units retain exact quantities, known zero, and bounded approximate display text', () => {
+test('explicit units retain every quantity digit in visible values and details', () => {
   const result = projectPersonalQuota(quota([bucket('premium_interactions', { unit: 'ai-credits', used: '9007199254740993.123456789', limit: null, usedPercentage: null })]), now);
   assert.equal(result.primary.label, '高级请求'); assert.equal(result.primary.unitLabel, 'AI Credits');
-  assert.equal(result.primary.used, '9007199254740993.123456789'); assert.equal(result.primary.value, '≈9×10^15');
-  assert.match(result.primary.detail, /AI Credits/);
+  assert.equal(result.primary.used, '9007199254740993.123456789'); assert.equal(result.primary.value, '9007199254740993.123456789');
+  assert.equal(result.primary.detail, '已用 9007199254740993.123456789 AI Credits。');
   const zero = projectPersonalQuota(quota([bucket('chat', { unit: 'premium-requests', used: '0', usedPercentage: '0' })]), now);
   assert.equal(zero.primary.value, '0%'); assert.equal(zero.primary.percentage, 0); assert.equal(zero.primary.used, '0');
   const noPercentage = projectPersonalQuota(quota([bucket('chat', { unit: 'ai-credits', usedPercentage: null })]), now);
   assert.equal(noPercentage.primary.value, '25 / 100'); assert.match(noPercentage.primary.detail, /AI Credits/);
+  for (const [used, limit] of [['0.000000000000000001', '1.000000000000000001'], ['9'.repeat(200), '1' + '0'.repeat(200)]]) {
+    const view = projectPersonalQuota(quota([bucket('chat', { unit: 'ai-credits', used, limit, usedPercentage: null })]), now).primary;
+    assert.equal(view.value, `${used} / ${limit}`);
+    assert.equal(view.detail, `已用 ${used} / ${limit} AI Credits。`);
+    assert.doesNotMatch(view.value + view.detail, /≈|×10\^/);
+  }
 });
 
 test('percentages do not clamp overages, zero denominators, invalid data or nearly-full precision into misleading gauges', () => {
@@ -110,10 +120,11 @@ test('percentages do not clamp overages, zero denominators, invalid data or near
   for (const changes of [{ used: '101', usedPercentage: '100' }, { used: '0', limit: '0', usedPercentage: '0' }, { unlimited: true }]) {
     assert.equal(projectPersonalQuota(quota([bucket('premium_interactions', changes)]), now).primary.percentage, null);
   }
-  for (const [usedPercentage, expected] of [['0.000001', '<0.1%'], ['99.999999999999999999', '>99.9%'], ['33.3333', '≈33.3%']]) {
+  for (const usedPercentage of ['0.000001', '99.999999999999999999', '33.3333', '0', '100']) {
     const view = projectPersonalQuota(quota([bucket('chat', { usedPercentage })]), now).primary;
-    assert.equal(view.value, expected);
-    if (expected === '>99.9%') assert.equal(view.percentage, null);
+    assert.equal(view.value, `${usedPercentage}%`);
+    assert.equal(view.usedPercentage, usedPercentage);
+    if (usedPercentage === '99.999999999999999999') assert.equal(view.percentage, null);
   }
 });
 

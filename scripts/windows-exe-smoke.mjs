@@ -294,7 +294,7 @@ try {
   assert.deepEqual(runtime, { version: 'v24.14.0', arch: 'x64' });
   record('Concurrent first launches share one complete cache with x64 Node and production dependencies');
 
-  const desktopContracts = await run(process.execPath, [join(workspace, 'scripts', 'test-windows-desktop.mjs')], { env: process.env, cwd: workspace });
+  const desktopContracts = await run(process.execPath, [join(workspace, 'scripts', 'test-windows-desktop.mjs')], { env: process.env, cwd: workspace, timeout: 180_000 });
   assert.match(desktopContracts.stdout, /Desktop contracts passed: \d+/);
   record('Windowless native contracts verify Windows quoting, canonical paths, instance identity, and CSRF transport boundaries');
 

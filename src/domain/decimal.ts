@@ -58,6 +58,27 @@ export function compareDecimals(left: string, right: string): -1 | 0 | 1 {
   return values.left < values.right ? -1 : values.left > values.right ? 1 : 0;
 }
 
+/** Exact finite percentage, or null when division repeats or exceeds the supported precision. */
+export function exactPercentageOf(used: string, limit: string): string | null {
+  nonNegativeDecimal(used); nonNegativeDecimal(limit);
+  const values = align(used, limit);
+  if (values.right === 0n) return null;
+  let numerator = values.left * 100n;
+  let denominator = values.right;
+  let a = numerator; let b = denominator;
+  while (b !== 0n) { const remainder = a % b; a = b; b = remainder; }
+  numerator /= a; denominator /= a;
+  let twos = 0; let fives = 0;
+  while (denominator % 2n === 0n) { denominator /= 2n; twos++; }
+  while (denominator % 5n === 0n) { denominator /= 5n; fives++; }
+  const scale = Math.max(twos, fives);
+  if (denominator !== 1n || scale > MAX_DIGITS) return null;
+  const coefficient = numerator * 2n ** BigInt(scale - twos) * 5n ** BigInt(scale - fives);
+  if (coefficient.toString().length > MAX_DIGITS) return null;
+  // Recheck the expanded decimal too, including zeroes before a tiny fractional value.
+  try { return nonNegativeDecimal(formatDecimal({ coefficient, scale })); } catch { return null; }
+}
+
 /** Rounded half up, for display only. A zero denominator has no percentage. */
 export function percentageOf(used: string, limit: string, precision = 1): string | null {
   if (!Number.isInteger(precision) || precision < 0 || precision > 6) throw new RangeError('Invalid percentage precision');

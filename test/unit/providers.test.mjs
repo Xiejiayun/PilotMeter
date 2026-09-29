@@ -66,7 +66,7 @@ test('empty, unknown and unverified-unit local data never turn into a percentage
 
 test('custom budget always names its local numerator and supports zero and overage', () => {
   const custom = buildDisplay(local({ credits: '105', unknownCalls: 2 }), null, settings({ monthlyBudget: '100' }));
-  assert.equal(custom.mode, 'custom'); assert.equal(custom.percentage, '105.0'); assert.equal(custom.scope, '本机已记录会话');
+  assert.equal(custom.mode, 'custom'); assert.equal(custom.percentage, '105'); assert.equal(custom.scope, '本机已记录会话');
   assert.match(custom.reason, /已知用量小计/);
   const zero = buildDisplay(local(), null, settings({ monthlyBudget: '0' }));
   assert.equal(zero.mode, 'custom'); assert.equal(zero.percentage, null); assert.equal(zero.reason, '预算为 0');
@@ -74,7 +74,7 @@ test('custom budget always names its local numerator and supports zero and overa
 
 test('official mode requires verified identity, pool, units, monthly coverage, allowance and timestamp', () => {
   const valid = official();
-  assert.equal(buildDisplay(local(), valid, settings()).percentage, '105.0');
+  assert.equal(buildDisplay(local(), valid, settings()).percentage, '105');
   assert.equal(buildDisplay(local(), valid, settings()).mode, 'official');
   const invalid = [
     { coverage: 'partial' }, { poolId: null }, { verifiedAt: null }, { unit: 'credits' }, { billingMode: 'unknown' },
@@ -95,13 +95,31 @@ test('official zero, unlimited and stale snapshots retain their distinct meaning
   const unlimited = buildDisplay(local(), { ...valid, limit: null, limitKind: 'unlimited' }, settings());
   assert.equal(unlimited.mode, 'official'); assert.equal(unlimited.percentage, null); assert.equal(unlimited.reason, '无固定上限');
   const stale = buildDisplay(local(), { ...valid, stale: true }, settings());
-  assert.equal(stale.percentage, '105.0'); assert.match(stale.reason, /陈旧/);
+  assert.equal(stale.percentage, '105'); assert.match(stale.reason, /陈旧/);
   const staleZero = buildDisplay(local(), { ...valid, limit: '0', stale: true }, settings());
   assert.equal(staleZero.percentage, null); assert.match(staleZero.reason, /额度为 0/); assert.match(staleZero.reason, /陈旧/);
   const staleUnlimited = buildDisplay(local(), { ...valid, limit: null, limitKind: 'unlimited', stale: true }, settings());
   assert.equal(staleUnlimited.percentage, null); assert.match(staleUnlimited.reason, /无固定上限/); assert.match(staleUnlimited.reason, /陈旧/);
   const knownZero = buildDisplay(local(), { ...valid, used: '0' }, settings());
-  assert.equal(knownZero.percentage, '0.0');
+  assert.equal(knownZero.percentage, '0');
+});
+
+test('custom and official display keep exact ratios or retain amounts when the percentage repeats', () => {
+  const valid = official();
+  for (const make of [
+    limit => buildDisplay(local({ credits: '1', unknownCalls: 2 }), null, settings({ monthlyBudget: limit })),
+    limit => buildDisplay(local(), { ...valid, used: '1', limit }, settings()),
+  ]) {
+    const finite = make('128');
+    assert.equal(finite.percentage, '0.78125');
+    assert.equal(finite.used, '1'); assert.equal(finite.limit, '128');
+    const repeating = make('3');
+    assert.equal(repeating.percentage, null);
+    assert.equal(repeating.used, '1'); assert.equal(repeating.limit, '3');
+    assert.match(repeating.reason, /保留精确用量与总额/);
+    assert.doesNotMatch(repeating.reason, /(?:预算|额度)为 0/);
+    if (repeating.mode === 'custom') assert.match(repeating.reason, /已知用量小计/);
+  }
 });
 
 test('billing counts gross quantity, never net charges, and stays partial without an allowance', () => {

@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { StringDecoder } from 'node:string_decoder';
-import { nonNegativeDecimal, normalizeDecimal } from '../domain/decimal.js';
+import { compareDecimals, nonNegativeDecimal, normalizeDecimal } from '../domain/decimal.js';
 import type { AccountModel } from '../shared/models.js';
 
 /** Account RPCs are experimental. These wire shapes were checked against SDK 1.0.14 / CLI 1.0.88. */
@@ -31,7 +31,7 @@ export interface CopilotQuotaSnapshot {
   isUnlimitedEntitlement: boolean;
   entitlementRequests: string;
   usedRequests: string;
-  remainingPercentage: number;
+  remainingPercentage: string;
   overage: string;
   usageAllowedWithExhaustedQuota: boolean;
   overageAllowedWithExhaustedQuota: boolean;
@@ -69,6 +69,8 @@ export interface CopilotClientOptions {
   env?: NodeJS.ProcessEnv;
   requestTimeoutMs?: number;
   loginTimeoutMs?: number;
+  /** Stop a login that cannot obtain a device code; default 60 seconds. */
+  loginCodeTimeoutMs?: number;
   /** Close an unused account-query runtime after this delay; default 60 seconds. */
   idleTimeoutMs?: number;
 }
@@ -228,7 +230,7 @@ class Runtime {
       let response: Record<string, unknown> | null;
       try {
         response = object(JSON.parse(bytes.toString('utf8'), (key: string, value: unknown, context?: { source?: string }) => {
-          if (!['entitlementRequests', 'usedRequests', 'overage', 'multiplier'].includes(key) || typeof value !== 'number') return value;
+          if (!['entitlementRequests', 'usedRequests', 'remainingPercentage', 'overage', 'multiplier'].includes(key) || typeof value !== 'number') return value;
           if (!context?.source) throw fail('EXACT_JSON_UNAVAILABLE', '当前运行时无法保留额度小数精度');
           return context.source;
         }));
@@ -272,8 +274,24 @@ class Runtime {
 
 interface LoginOperation {
   state: CopilotLogin; child: ChildProcessWithoutNullStreams; timer: ReturnType<typeof setTimeout>;
+  codeTimer: ReturnType<typeof setTimeout> | null;
   stdoutText: string; stderrText: string; bytes: number; stdout: StringDecoder; stderr: StringDecoder;
   exited: Promise<void>;
+}
+
+/** Classify known CLI failures without returning its output, URLs, or credential diagnostics. */
+function loginFailure(operation: LoginOperation): CopilotSafeError {
+  const output = stripVTControlCharacters(`${operation.stdoutText}\n${operation.stderrText}`);
+  if (/\b(?:expired_token|device code (?:has )?expired|code has expired)\b/i.test(output)) {
+    return { code: 'LOGIN_EXPIRED', message: 'GitHub 验证码已过期，请重新登录获取新验证码。' };
+  }
+  if (/\b(?:access_denied|authorization (?:was )?denied|authorization (?:was )?declined)\b/i.test(output)) {
+    return { code: 'LOGIN_DENIED', message: 'GitHub 授权未获批准，请重新登录，并在授权页确认允许访问。' };
+  }
+  if (/\b(?:request failed|error sending request|fetch failed|network error|connection (?:refused|reset|timed out)|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|certificate verify failed|unable to (?:get local issuer|verify the first) certificate)\b/i.test(output)) {
+    return { code: 'LOGIN_NETWORK_ERROR', message: '无法连接 GitHub 登录服务。请检查网络或代理设置，再重试登录。' };
+  }
+  return { code: 'LOGIN_FAILED', message: 'GitHub 登录未完成。请重新登录，并在浏览器中输入验证码、确认授权后返回。' };
 }
 
 /** All credentials stay with the official CLI; only safe account metadata and user quota leave this boundary. */
@@ -298,7 +316,7 @@ export class CopilotClient {
     if (this.#home.toLowerCase() === normalHome.toLowerCase() || this.#home.toLowerCase() === homedir().toLowerCase()) {
       throw fail('HOME_INVALID', '不能使用默认 Copilot 目录管理 PilotMeter 账号');
     }
-    for (const value of [options.requestTimeoutMs, options.loginTimeoutMs, options.idleTimeoutMs]) {
+    for (const value of [options.requestTimeoutMs, options.loginTimeoutMs, options.loginCodeTimeoutMs, options.idleTimeoutMs]) {
       if (value !== undefined && (!Number.isSafeInteger(value) || value < 1 || value > 30 * 60_000)) throw fail('OPTIONS_INVALID', 'Copilot 超时设置无效');
     }
     this.#options = options;
@@ -429,22 +447,24 @@ export class CopilotClient {
       const snapshot = object(raw);
       if (!snapshot || !/^[a-z][a-z\d_\-]{0,63}$/i.test(type)
         || ['isUnlimitedEntitlement', 'usageAllowedWithExhaustedQuota', 'overageAllowedWithExhaustedQuota'].some(key => typeof snapshot[key] !== 'boolean')
-        || typeof snapshot.remainingPercentage !== 'number' || !Number.isFinite(snapshot.remainingPercentage)
+        || typeof snapshot.remainingPercentage !== 'string'
         || snapshot.resetDate !== undefined && (!safeText(snapshot.resetDate, 64) || !Number.isFinite(Date.parse(snapshot.resetDate)))) {
         throw fail('QUOTA_INVALID', 'Copilot 额度字段无法识别');
       }
-      let entitlement: string; let used: string; let overage: string;
+      let entitlement: string; let used: string; let overage: string; let remainingPercentage: string;
       try {
         if (typeof snapshot.entitlementRequests !== 'string') throw new Error();
         entitlement = normalizeDecimal(snapshot.entitlementRequests);
         if (entitlement !== '-1' || !snapshot.isUnlimitedEntitlement) entitlement = nonNegativeDecimal(entitlement);
         used = nonNegativeDecimal(snapshot.usedRequests); overage = nonNegativeDecimal(snapshot.overage);
+        remainingPercentage = nonNegativeDecimal(nonNegativeDecimal(snapshot.remainingPercentage));
+        if (compareDecimals(remainingPercentage, '100') > 0) throw new Error();
       } catch { throw fail('QUOTA_INVALID', 'Copilot 额度数值无法识别'); }
       const unit = ['ai-credits', 'premium-requests'].includes(String(snapshot.unit)) ? snapshot.unit as string : null;
       const billingMode = unit !== null && snapshot.billingMode === unit ? unit as 'ai-credits' | 'premium-requests' : 'unknown';
       snapshots.push({ type, isUnlimitedEntitlement: snapshot.isUnlimitedEntitlement as boolean,
         entitlementRequests: entitlement, usedRequests: used,
-        remainingPercentage: snapshot.remainingPercentage, overage,
+        remainingPercentage, overage,
         usageAllowedWithExhaustedQuota: snapshot.usageAllowedWithExhaustedQuota as boolean,
         overageAllowedWithExhaustedQuota: snapshot.overageAllowedWithExhaustedQuota as boolean,
         resetDate: snapshot.resetDate === undefined ? null : snapshot.resetDate as string, unit, billingMode });
@@ -511,7 +531,10 @@ export class CopilotClient {
       }
       const timer = setTimeout(() => this.#finishLogin(operation, 'expired', { code: 'LOGIN_EXPIRED', message: '登录等待已超时，请重新发起登录' }), timeout);
       timer.unref();
-      const operation: LoginOperation = { state, child, timer, stdoutText: '', stderrText: '', bytes: 0, stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8'), exited };
+      const codeTimer = setTimeout(() => this.#finishLogin(operation, 'failed', { code: 'LOGIN_CODE_TIMEOUT',
+        message: '暂未获取到 GitHub 验证码。请检查网络或代理设置，再重试登录。' }), this.#options.loginCodeTimeoutMs ?? 60_000);
+      codeTimer.unref();
+      const operation: LoginOperation = { state, child, timer, codeTimer, stdoutText: '', stderrText: '', bytes: 0, stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8'), exited };
       this.#login = operation;
       child.stdin.on('error', () => { /* The login command may close stdin immediately. */ });
       child.stdout.on('data', (chunk: Buffer) => this.#loginOutput(operation, chunk, 'stdout'));
@@ -522,7 +545,10 @@ export class CopilotClient {
       child.on('close', code => {
         if (operation.state.status !== 'starting' && operation.state.status !== 'pending') return;
         if (code === 0 && operation.state.verificationUri && operation.state.userCode) this.#finishLogin(operation, 'complete');
-        else this.#finishLogin(operation, 'failed', { code: 'LOGIN_FAILED', message: 'GitHub 登录未完成，请重试' });
+        else {
+          const error = loginFailure(operation);
+          this.#finishLogin(operation, error.code === 'LOGIN_EXPIRED' ? 'expired' : 'failed', error);
+        }
       });
       // The official device flow polls GitHub; PilotMeter never exchanges or receives an OAuth token.
       child.stdin.end();
@@ -550,11 +576,14 @@ export class CopilotClient {
     if (codes.size > 1) { this.#finishLogin(operation, 'failed', { code: 'LOGIN_OUTPUT_INVALID', message: 'GitHub 登录输出含有不一致的设备码' }); return; }
     operation.state.userCode = codes.size === 1 && /\bcode\b/i.test(output) ? [...codes][0]! : null;
     operation.state.status = operation.state.verificationUri && operation.state.userCode ? 'pending' : 'starting';
+    if (operation.state.status === 'pending' && operation.codeTimer) { clearTimeout(operation.codeTimer); operation.codeTimer = null; }
   }
 
   #finishLogin(operation: LoginOperation, status: CopilotLogin['status'], error: CopilotSafeError | null = null): void {
     if (operation.state.status !== 'starting' && operation.state.status !== 'pending') return;
-    clearTimeout(operation.timer); operation.stdoutText = ''; operation.stderrText = '';
+    clearTimeout(operation.timer);
+    if (operation.codeTimer) clearTimeout(operation.codeTimer);
+    operation.codeTimer = null; operation.stdoutText = ''; operation.stderrText = '';
     operation.state = { ...operation.state, status, error, userCode: null, verificationUri: null };
     operation.child.kill();
     this.#accounts.clear(); this.#accountRuntime = null;

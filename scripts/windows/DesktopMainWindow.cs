@@ -105,7 +105,7 @@ internal sealed class NativeAccount
 internal sealed class NativeBucket
 {
     internal string Key, Label, Value, Detail, NextResetAt, Unit, UnitLabel;
-    internal string Used, Limit, Remaining, Overage, RemainingSource, RemainingPercentageText, RawUsed, RawLimit, RawRemainingPercentage;
+    internal string Used, Limit, Remaining, Overage, RemainingSource, UsedPercentageText, RemainingPercentageText, RawUsed, RawLimit, RawRemainingPercentage;
     internal double? Percentage, RemainingPercentage;
     internal bool Unlimited;
     public override string ToString() { return Label; }
@@ -114,7 +114,7 @@ internal sealed class NativeBucket
     {
         var result = new NativeBucket {
             Key = NativeData.Text(source, "key", 160), Label = NativeData.Clean(NativeData.Text(source, "label", 160), 80),
-            Value = NativeData.Clean(NativeData.Text(source, "value", 160), 100), Detail = NativeData.Clean(NativeData.Text(source, "detail", 600), 300),
+            Value = NativeData.Clean(NativeData.Text(source, "value", 600), 600), Detail = NativeData.Clean(NativeData.Text(source, "detail", 600), 600),
             NextResetAt = NativeData.Text(source, "nextResetAt", 80, true),
             Unit = NativeData.Text(source, "unit", 32), UnitLabel = NativeData.Clean(NativeData.Text(source, "unitLabel", 80), 80), Unlimited = NativeData.Flag(source, "unlimited")
         };
@@ -123,6 +123,8 @@ internal sealed class NativeBucket
         result.Remaining = NativeDisplay.Quantity(source, "remaining"); result.Overage = NativeDisplay.Quantity(source, "overage");
         result.RemainingPercentage = NativeDisplay.Percent(source, "remainingPercentage");
         result.RemainingPercentageText = NativeDisplay.Quantity(source, "remainingPercentage");
+        result.UsedPercentageText = NativeDisplay.Quantity(source, "usedPercentage");
+        NativeDisplay.Percent(source, "usedPercentage");
         result.RemainingSource = NativeData.Text(source, "remainingSource", 32, true);
         if (result.RemainingSource != null && result.RemainingSource != "calculated" || result.Unit == "unspecified" && (result.Used != null || result.Limit != null || result.Remaining != null || result.Overage != null)
             || result.Unlimited && (result.Limit != null || result.Remaining != null || result.Overage != null)) throw new InvalidDataException("额度数量与计量单位不一致。");
@@ -235,6 +237,9 @@ internal abstract class NativeForm : Form
 
     protected NativeForm()
     {
+        // Defer the first DPI pass until the derived form has built every row,
+        // card and button. Otherwise only the form/font scale on a 150% screen.
+        SuspendLayout();
         AutoScaleMode = AutoScaleMode.Dpi;
         AutoScaleDimensions = new SizeF(96, 96);
         Font = Typeface(9.5F, FontStyle.Regular);
@@ -277,74 +282,134 @@ internal sealed class NativeLoginDialog : NativeForm
 {
     private readonly DesktopNativeApi api;
     private readonly NativeAccount expected;
-    private readonly TextBox host, code;
-    private readonly Label status, expiry;
+    private readonly TextBox host, code, address;
+    private readonly Label status, expiry, copyFeedback;
     private readonly Button start, copy, open, cancel;
     private readonly System.Windows.Forms.Timer timer;
     private NativeLogin login;
     private bool working, polling, closing, allowClose, disconnected, disposed, startUncertain, resumed;
-    private int generation;
+    private int generation, pollFailures;
     internal bool Succeeded;
     internal string Feedback;
 
     internal NativeLoginDialog(DesktopInstance service, NativeAccount expected, NativeLogin pending)
     {
-        api = new DesktopNativeApi(service); this.expected = expected; login = pending;
-        Text = expected == null ? "登录 GitHub · PilotMeter" : "重新登录 · PilotMeter";
+        api = new DesktopNativeApi(service); this.expected = pending == null ? expected : null; login = pending; resumed = pending != null;
+        Text = pending != null ? "继续登录 · PilotMeter" : expected == null ? "登录 GitHub · PilotMeter" : "重新登录 · PilotMeter";
         Name = "PilotMeterLoginWindow";
-        ClientSize = new Size(500, 410);
+        ClientSize = new Size(560, 660);
+        MinimumSize = new Size(500, 490);
+        FormBorderStyle = FormBorderStyle.Sizable;
         ShowInTaskbar = false; MinimizeBox = false; StartPosition = FormStartPosition.CenterParent;
-        var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(26), ColumnCount = 1, RowCount = 9, Margin = Padding.Empty };
-        foreach (var height in new[] { 34, 32, 38, 20, 59, 36, 30, 70, 37 }) root.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
-        var title = LabelFor(expected == null ? "连接 GitHub 账号" : "重新登录 @" + expected.Login, Ink); title.Font = Typeface(15F, FontStyle.Bold);
-        root.Controls.Add(title, 0, 0);
-        root.Controls.Add(LabelFor("在 GitHub 授权页选择要连接的账号。", Muted), 0, 1);
-        var hostRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, Margin = Padding.Empty };
+        var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24), ColumnCount = 1, RowCount = 2, Margin = Padding.Empty };
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        var scroll = new Panel { Name = "LoginInstructions", Dock = DockStyle.Fill, AutoScroll = true, Margin = Padding.Empty };
+        var body = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 12, Margin = Padding.Empty, Padding = new Padding(0, 0, 12, 8) };
+        body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        foreach (var height in new[] { 36, 46, 28, 38, 44, 60, 40, 24, 26, 30, 30 }) body.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
+        body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var title = LabelFor(pending != null ? "继续 GitHub 登录" : expected == null ? "连接 GitHub 账号" : "重新登录 @" + expected.Login, Ink); title.Font = Typeface(15F, FontStyle.Bold);
+        body.Controls.Add(title, 0, 0);
+        var intro = LabelFor(pending != null ? "继续之前发起的授权，请确认网页上是你要连接的账号。\n如需更换账号，请取消后重新开始。" : expected == null ? "用 GitHub 设备码连接个人或工作账号。\n密码只需在 GitHub 网站输入。" : "请在 GitHub 网页确认当前账号为 @" + expected.Login + "，再授权。", Muted);
+        intro.AutoEllipsis = false; intro.AutoSize = true; intro.MinimumSize = new Size(0, 46);
+        body.RowStyles[1].SizeType = SizeType.AutoSize; body.Controls.Add(intro, 0, 1);
+        body.Controls.Add(LabelFor("1. 获取验证码 · 登录网站通常无需更改", Ink), 0, 2);
+        var hostRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty };
+        hostRow.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         hostRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); hostRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 10)); hostRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 108));
         host = new TextBox { Name = "GitHubHost", AccessibleName = "GitHub 登录主机", Text = pending != null ? pending.Host : expected != null ? expected.Host : "https://github.com", Dock = DockStyle.Fill, Margin = new Padding(0, 5, 0, 0), ReadOnly = expected != null || pending != null };
         start = ButtonFor("获取验证码"); start.Name = "StartDeviceLogin";
-        hostRow.Controls.Add(host, 0, 0); hostRow.Controls.Add(start, 2, 0); root.Controls.Add(hostRow, 0, 2);
+        hostRow.Controls.Add(host, 0, 0); hostRow.Controls.Add(start, 2, 0); body.Controls.Add(hostRow, 0, 3);
+        body.Controls.Add(LabelFor("2. 复制下方验证码，在 GitHub 授权页粘贴并确认", Ink), 0, 4);
         code = new TextBox { Name = "GitHubDeviceCode", AccessibleName = "GitHub 设备验证码", ReadOnly = true, TextAlign = HorizontalAlignment.Center, Dock = DockStyle.Fill, BorderStyle = BorderStyle.FixedSingle, BackColor = Color.White, Margin = new Padding(0, 5, 0, 5), Font = Typeface(23F, FontStyle.Bold), TabStop = true };
-        root.Controls.Add(code, 0, 4);
-        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, Margin = Padding.Empty };
+        body.Controls.Add(code, 0, 5);
+        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty };
+        actions.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 102)); actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 10)); actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        copy = ButtonFor("复制验证码"); open = ButtonFor("打开 GitHub 授权页"); open.Name = "OpenGitHubDevicePage";
-        actions.Controls.Add(copy, 0, 0); actions.Controls.Add(open, 2, 0); root.Controls.Add(actions, 0, 5);
-        expiry = LabelFor("", Muted); expiry.Font = Typeface(8.5F, FontStyle.Regular); root.Controls.Add(expiry, 0, 6);
-        status = LabelFor(expected == null ? "无需在此输入密码。获取验证码后，在 GitHub 完成授权。" : "请确认授权页登录的是 " + expected.Login + "。", Muted); root.Controls.Add(status, 0, 7);
-        cancel = ButtonFor("取消"); cancel.Width = 100; cancel.Dock = DockStyle.Right; root.Controls.Add(cancel, 0, 8);
+        copy = ButtonFor("仅复制"); copy.Name = "CopyGitHubDeviceCode";
+        open = ButtonFor("复制并打开 GitHub"); open.Name = "OpenGitHubDevicePage"; open.BackColor = Accent; open.ForeColor = Color.White;
+        actions.Controls.Add(copy, 0, 0); actions.Controls.Add(open, 2, 0); body.Controls.Add(actions, 0, 6);
+        copyFeedback = LabelFor("", Muted); copyFeedback.Name = "CopyDeviceCodeFeedback"; copyFeedback.AutoEllipsis = false;
+        copyFeedback.AutoSize = true; copyFeedback.MinimumSize = new Size(0, 24); body.RowStyles[7].SizeType = SizeType.AutoSize; body.Controls.Add(copyFeedback, 0, 7);
+        expiry = LabelFor("", Muted); expiry.Name = "DeviceCodeExpiry"; body.Controls.Add(expiry, 0, 8);
+        address = new TextBox { Name = "GitHubDeviceAddress", AccessibleName = "GitHub 授权网址，可手动复制", ReadOnly = true, Dock = DockStyle.Fill, BorderStyle = BorderStyle.None, BackColor = BackColor, ForeColor = Muted, Margin = new Padding(0, 6, 0, 0) };
+        body.Controls.Add(address, 0, 9);
+        body.Controls.Add(LabelFor("3. 授权后回到这里，账号会自动连接", Ink), 0, 10);
+        status = LabelFor("点击“获取验证码”开始登录。", Muted); status.Name = "GitHubLoginStatus";
+        status.AutoEllipsis = false; status.AutoSize = true; status.MinimumSize = new Size(0, 48); status.TextAlign = ContentAlignment.TopLeft;
+        status.Padding = new Padding(0, 6, 0, 8); body.Controls.Add(status, 0, 11);
+        body.SizeChanged += delegate {
+            var maximum = new Size(Math.Max(1, body.ClientSize.Width - body.Padding.Horizontal), 0);
+            status.MaximumSize = intro.MaximumSize = copyFeedback.MaximumSize = maximum;
+        };
+        scroll.Controls.Add(body); root.Controls.Add(scroll, 0, 0);
+        cancel = ButtonFor("取消登录"); cancel.Name = "CancelDeviceLogin"; cancel.Width = 112; cancel.Dock = DockStyle.Right; cancel.Margin = new Padding(0, 8, 0, 0); root.Controls.Add(cancel, 0, 1);
         Controls.Add(root);
+        CancelButton = cancel; AcceptButton = start;
         start.Click += async delegate { await StartAsync(); };
         cancel.Click += delegate { Close(); };
         copy.Click += delegate {
-            if (String.IsNullOrEmpty(code.Text)) return;
-            try { Clipboard.SetText(code.Text); expiry.Text = "验证码已复制。"; }
-            catch { expiry.Text = "无法访问剪贴板，请选中验证码后复制。"; }
+            if (!CodeUsable()) { Render(); return; }
+            CopyCode();
         };
         open.Click += delegate {
+            if (!CodeUsable()) { Render(); return; }
             var target = login != null && login.Active ? NativeData.DevicePage(login.Host, login.VerificationUri) : null;
             if (target == null || !open.Enabled) return;
+            CopyCode();
             try { using (var child = Process.Start(new ProcessStartInfo { FileName = target, UseShellExecute = true })) { } }
-            catch { status.Text = "无法打开默认浏览器，请检查浏览器设置后重试。"; }
+            catch { copyFeedback.Text = "无法打开浏览器，请复制下方网址到浏览器，再输入验证码。"; }
         };
         timer = new System.Windows.Forms.Timer { Interval = 1000 };
         timer.Tick += async delegate { await PollAsync(); };
-        Shown += delegate { Render(); if (login != null && login.Active) timer.Start(); };
+        Shown += delegate {
+            var area = Screen.FromControl(this).WorkingArea;
+            MinimumSize = new Size(Math.Min(MinimumSize.Width, area.Width), Math.Min(MinimumSize.Height, area.Height));
+            Size = new Size(Math.Min(Width, area.Width), Math.Min(Height, area.Height));
+            Render(); if (login != null && login.Active) timer.Start();
+        };
         FormClosing += OnClosing;
         Render();
+        ResumeLayout(true);
     }
 
     private bool Current(int value) { return !disposed && !disconnected && value == generation; }
 
+    private bool CodeUsable()
+    {
+        var expires = login == null ? null : NativeData.Date(login.ExpiresAt);
+        return login != null && login.Active && !closing && !disconnected && !String.IsNullOrEmpty(code.Text)
+            && (!expires.HasValue || expires.Value > DateTimeOffset.UtcNow);
+    }
+
+    private void CopyCode()
+    {
+        try { Clipboard.SetText(code.Text); copyFeedback.Text = "验证码已复制，到 GitHub 粘贴并确认授权。"; }
+        catch { copyFeedback.Text = "无法复制，请手动选中上方验证码后按 Ctrl+C。"; }
+    }
+
+    private void ServiceChanged()
+    {
+        EndDisconnectedLogin("本机服务已重启，此验证码已失效。请关闭此窗口，再点击登录获取新验证码。", "本机服务已更换，请重新开始登录。");
+    }
+
+    private void EndDisconnectedLogin(string description, string feedback)
+    {
+        disconnected = true; working = false; timer.Stop(); ClearCode(); copyFeedback.Text = "";
+        start.Enabled = false; host.ReadOnly = true; cancel.Text = "关闭";
+        status.Text = description;
+        Feedback = feedback;
+    }
+
     private void ClearCode()
     {
-        code.Text = ""; copy.Enabled = open.Enabled = false; expiry.Text = "";
+        code.Text = ""; address.Text = ""; copy.Enabled = open.Enabled = false; expiry.Text = "";
     }
 
     private void Render()
     {
         if (disposed || disconnected) return;
-        ClearCode();
         var active = login != null && login.Active;
         var expires = login == null ? null : NativeData.Date(login.ExpiresAt);
         var expired = expires.HasValue && expires.Value <= DateTimeOffset.UtcNow;
@@ -352,22 +417,26 @@ internal sealed class NativeLoginDialog : NativeForm
         start.Text = login == null ? "获取验证码" : "重新获取";
         host.ReadOnly = expected != null || active;
         if (!active && expected != null) host.Text = expected.Host;
-        cancel.Text = closing ? "正在取消…" : "取消";
-        if (login == null) return;
+        cancel.Text = closing ? "正在取消…" : active ? "取消登录" : "关闭";
+        if (login == null) { ClearCode(); cancel.Text = "取消登录"; return; }
         if (active && !expired && !String.IsNullOrEmpty(login.UserCode) && NativeData.DevicePage(login.Host, login.VerificationUri) != null)
         {
+            if (code.Text != login.UserCode) copyFeedback.Text = "";
             code.Text = login.UserCode; copy.Enabled = open.Enabled = !closing;
-            expiry.Text = expires.HasValue ? "有效至 " + expires.Value.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture) : "请在 GitHub 提示的有效期内完成授权。";
+            address.Text = NativeData.DevicePage(login.Host, login.VerificationUri);
+            var seconds = expires.HasValue ? Math.Max(0, (int)Math.Ceiling((expires.Value - DateTimeOffset.UtcNow).TotalSeconds)) : 0;
+            expiry.Text = expires.HasValue ? "验证码剩余 " + (seconds / 60) + " 分 " + (seconds % 60).ToString("00", CultureInfo.InvariantCulture) + " 秒" : "请在 GitHub 提示的有效期内完成授权。";
         }
+        else { ClearCode(); copyFeedback.Text = ""; }
         switch (login.Status)
         {
-            case "starting": status.Text = "正在向 GitHub 获取验证码…"; break;
-            case "pending": status.Text = expired ? "验证码已过期，请重新获取。" : "复制验证码后打开 GitHub 授权页。完成后会自动确认账号。"; break;
+            case "starting": status.Text = "正在连接 GitHub 获取验证码，通常需要几秒。请稍候…"; break;
+            case "pending": status.Text = expired ? "验证码已过期。点击“重新获取”，再使用新验证码授权。" : "等待 GitHub 授权。请在网页输入上方验证码，确认账号并点击授权；完成后这里会自动更新。"; break;
             case "verifying": status.Text = "正在确认已授权的账号…"; break;
             case "complete": status.Text = "登录成功。"; break;
-            case "expired": status.Text = "验证码已过期，请重新获取。"; break;
+            case "expired": status.Text = "验证码已过期。点击“重新获取”，再使用新验证码授权。"; break;
             case "cancelled": status.Text = "登录已取消，可重新获取验证码。"; break;
-            default: status.Text = "登录未完成。" + NativeData.Clean(login.Error, 200); break;
+            default: status.Text = "登录未完成。" + NativeData.Clean(login.Error, 400) + "\n处理后点击“重新获取”重试。"; break;
         }
         if (closing) status.Text = "正在取消此次登录…";
         else if (resumed && login.Status == "pending") status.Text = "继续尚未完成的登录。请确认 GitHub 授权页上的账号，或取消后重新开始。";
@@ -383,7 +452,7 @@ internal sealed class NativeLoginDialog : NativeForm
         if (working || closing || disposed || disconnected) return;
         var targetHost = NativeData.Host(expected != null ? expected.Host : host.Text);
         if (targetHost == null) { status.Text = "请输入 github.com 或企业专属的 tenant.ghe.com。"; return; }
-        var current = ++generation; working = true; timer.Stop(); ClearCode(); start.Enabled = false; host.ReadOnly = true; status.Text = "正在获取验证码…";
+        var current = ++generation; working = true; timer.Stop(); ClearCode(); copyFeedback.Text = ""; start.Enabled = false; host.ReadOnly = true; status.Text = "正在连接 GitHub 获取验证码…";
         string failure = null;
         try
         {
@@ -400,6 +469,11 @@ internal sealed class NativeLoginDialog : NativeForm
             if (!Current(current)) return;
             startUncertain = false; resumed = false; login = result; host.Text = result.Host;
             if (login.Status == "complete") { Complete(); return; }
+        }
+        catch (DesktopServiceChangedException)
+        {
+            if (Current(current)) ServiceChanged();
+            return;
         }
         catch (Exception error)
         {
@@ -442,11 +516,23 @@ internal sealed class NativeLoginDialog : NativeForm
         {
             var result = NativeLogin.Read(await api.RequestAsync("/api/auth/login/" + id));
             if (!Current(current)) return;
-            login = result;
+            login = result; pollFailures = 0;
             if (result.Status == "complete") { Complete(); return; }
             Render(); if (!login.Active) timer.Stop();
         }
-        catch (Exception error) { if (Current(current)) { ClearCode(); status.Text = "登录状态暂不可用：" + NativeData.Error(error); } }
+        catch (DesktopServiceChangedException)
+        {
+            if (Current(current)) ServiceChanged();
+        }
+        catch (Exception error)
+        {
+            if (Current(current))
+            {
+                if (++pollFailures >= 3)
+                    EndDisconnectedLogin("无法连接本机服务，暂时不能确认授权结果。请关闭此窗口，重试连接后查看账号；仍未登录时再获取新验证码。", "登录连接已中断，请重试连接并查看当前账号状态。");
+                else { Render(); status.Text = "暂时无法确认授权状态，正在自动重试。\n" + NativeData.Error(error); }
+            }
+        }
         finally { polling = false; }
     }
 

@@ -1,5 +1,5 @@
 import type { DisplayMode, LocalUsage, Settings, UsageSnapshot } from '../shared/types.js';
-import { nonNegativeDecimal, percentageOf } from './decimal.js';
+import { exactPercentageOf, nonNegativeDecimal } from './decimal.js';
 import { isMonthlyInterval, timestamp } from './period.js';
 
 function quantity(value: unknown): string | null {
@@ -43,12 +43,13 @@ export function buildDisplay(local: LocalUsage, account: UsageSnapshot | null, s
   const entity = configured ? `${configured.kind}:${configured.login}` : null;
   if (entity && (configured?.kind !== 'user' || configured.directBilling === true) && officialSnapshotEligible(account, local.period, entity) && account) {
     const unlimited = account.limitKind === 'unlimited';
-    const percentage = unlimited ? null : percentageOf(account.used!, account.limit!);
+    const percentage = unlimited ? null : exactPercentageOf(account.used!, account.limit!);
     return {
       mode: 'official', label: unlimited ? '官方额度（无固定上限）' : '本月官方额度已用',
       used: account.used, limit: account.limit, percentage, unit: account.unit,
       scope: `官方账户额度池 · ${account.billingEntity}`,
-      reason: [unlimited ? '无固定上限' : percentage === null ? '额度为 0' : null, account.stale ? '数据已陈旧；显示上次成功同步值' : null].filter(Boolean).join('；') || null,
+      reason: [unlimited ? '无固定上限' : quantity(account.limit) === '0' ? '额度为 0' : percentage === null ? '保留精确用量与总额，不显示近似百分比' : null,
+        account.stale ? '数据已陈旧；显示上次成功同步值' : null].filter(Boolean).join('；') || null,
     };
   }
 
@@ -56,11 +57,12 @@ export function buildDisplay(local: LocalUsage, account: UsageSnapshot | null, s
   const budget = quantity(settings.monthlyBudget);
   const incomplete = local.unknownCalls + local.pendingCalls > 0;
   if (credits !== null && budget !== null) {
-    const percentage = percentageOf(credits, budget);
+    const percentage = exactPercentageOf(credits, budget);
     return {
       mode: 'custom', label: '自定义预算已用', used: credits, limit: budget, percentage,
       unit: 'ai-credits', scope: '本机已记录会话',
-      reason: percentage === null ? '预算为 0' : incomplete ? '已知用量小计；包含尚未确定消耗的调用' : '从启用采集起记录；不代表全账户消费',
+      reason: budget === '0' ? '预算为 0' : [percentage === null ? '保留精确用量与总额，不显示近似百分比' : null,
+        incomplete ? '已知用量小计；包含尚未确定消耗的调用' : '从启用采集起记录；不代表全账户消费'].filter(Boolean).join('；'),
     };
   }
 

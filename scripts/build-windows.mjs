@@ -308,7 +308,7 @@ await copyFile(join(output, name + '.json'), join(portable, name + '.json'));
 await writeFile(join(portable, 'README.md'), '# PilotMeter ' + packageInfo.version + '\n\n' +
   '双击 ' + name + ' 显示桌面宠物，点击宠物打开主窗口。无需安装 Node/npm/WebView。\n\n' +
   '支持 Windows 10/11 x64 和系统 .NET Framework 4.8。十个宠物可在账户页或右键菜单切换。\n\n' +
-  '升级前从旧宠物菜单退出桌面界面，再用旧版 EXE 执行 stop，之后启动新版；账户和账本保留。\n\n' +
+  '升级前从旧宠物菜单退出桌面界面，再启动新版；如提示后台版本冲突，先结束采集会话，再点击“重启本机服务”。账户和账本保留。\n\n' +
   'SHA256SUMS 包含本包 EXE 校验值；版本清单记录运行时与未签名状态。\n\n' +
   '[完整使用指南](https://github.com/Xiejiayun/PilotMeter/blob/v' + packageInfo.version + '/docs/windows-exe.md)\n');
 await writeFile(join(portable, 'SHA256SUMS'), exeHash + '  ' + name + '\n');

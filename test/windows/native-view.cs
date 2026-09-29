@@ -30,7 +30,7 @@ internal static class NativeViewTests
     {
         return new Dictionary<string, object> {
             { "key", "premium_interactions" }, { "label", "高级请求" }, { "value", "37.5%" }, { "detail", "数量单位未确认，仅展示已确认比例或额度状态。" },
-            { "percentage", 37.5 }, { "nextResetAt", null }, { "unit", "unspecified" }, { "unitLabel", "单位未确认" },
+            { "percentage", 37.5 }, { "usedPercentage", "37.5" }, { "nextResetAt", null }, { "unit", "unspecified" }, { "unitLabel", "单位未确认" },
             { "used", null }, { "limit", null }, { "unlimited", false }
         };
     }
@@ -145,11 +145,25 @@ internal static class NativeViewTests
                 {
                     var complete = Bucket(); complete["unit"] = "ai-credits"; complete["unitLabel"] = "AI Credits";
                     complete["used"] = "70"; complete["limit"] = "100"; complete["remaining"] = "30";
-                    complete["remainingSource"] = "calculated"; complete["percentage"] = 70; complete["remainingPercentage"] = "30";
+                    complete["remainingSource"] = "calculated"; complete["percentage"] = 70; complete["usedPercentage"] = "70"; complete["remainingPercentage"] = "30";
                     var accountA = DashboardSnapshot(identity, AccountId, complete);
                     var accountBId = "99999999-2222-4333-8444-555555555555";
                     ApplyDashboard(window, accountA);
                     CheckMetric(window, "quotaValue", "30", "30"); CheckMetric(window, "quotaUsed", "70", "70"); CheckMetric(window, "quotaTotal", "100", "100");
+
+                    var raw = Bucket(); raw["raw"] = new Dictionary<string, object> { { "used", "62000" }, { "limit", "2000000" }, { "remainingPercentage", "96.9" } };
+                    raw["usedPercentage"] = "3.1"; raw["remainingPercentage"] = "96.9"; raw["percentage"] = 3.1;
+                    ApplyDashboard(window, DashboardSnapshot(identity, AccountId, raw));
+                    CheckMetric(window, "quotaUsed", "62,000", "62,000"); CheckMetric(window, "quotaTotal", "2,000,000", "2,000,000");
+                    Check(DashboardField<Label>(window, "quotaDetail").Text.Contains("单位未确认"), "Visible source quantities must identify unconfirmed units once beside the amount rows.");
+                    Check(!DashboardField<Panel>(window, "rawPanel").Visible, "Source quantities must be available without opening raw details.");
+
+                    var precise = Bucket(); precise["unit"] = "ai-credits"; precise["used"] = "9007199254740993.000000001";
+                    precise["limit"] = "18014398509481986.000000003"; precise["usedPercentage"] = "49.999999999999999999999999999";
+                    ApplyDashboard(window, DashboardSnapshot(identity, AccountId, precise));
+                    CheckMetric(window, "quotaUsed", "9,007,199,254,740,993.000000001", "9,007,199,254,740,993.000000001");
+                    CheckMetric(window, "quotaValue", "49.999999999999999999999999999%", "49.999999999999999999999999999%");
+                    Check(DashboardField<NativeUsageBar>(window, "progress").AccessibleDescription == "已用 49.999999999999999999999999999%", "The decorative gauge must expose exact source percentage to accessibility.");
 
                     var ratio = Bucket(); ratio["remainingPercentage"] = "62.5";
                     ApplyDashboard(window, DashboardSnapshot(identity, accountBId, ratio));
@@ -163,7 +177,7 @@ internal static class NativeViewTests
                     ApplyDashboard(window, DashboardSnapshot(identity, accountBId, unlimited));
                     CheckMetric(window, "quotaValue", "无固定上限", "无固定上限"); CheckMetric(window, "quotaUsed", "7", "7"); CheckMetric(window, "quotaTotal", "无固定上限", "无固定上限");
 
-                    var unknown = Bucket(); unknown["percentage"] = null;
+                    var unknown = Bucket(); unknown["percentage"] = null; unknown["usedPercentage"] = null;
                     ApplyDashboard(window, accountA);
                     ApplyDashboard(window, DashboardSnapshot(identity, accountBId, unknown));
                     CheckMetric(window, "quotaValue", "—", "—"); CheckMetric(window, "quotaUsed", "—", "—"); CheckMetric(window, "quotaTotal", "—", "—");
@@ -266,15 +280,22 @@ internal static class NativeViewTests
         exact["limit"] = "9007199254740993.000000001"; exact["remaining"] = "9007199254740993"; exact["remainingSource"] = "calculated"; exact["remainingPercentage"] = "99.999999999";
         var exactView = NativeBucket.Read(exact);
         Check(exactView.Remaining == "9007199254740993" && NativeDisplay.Amount(exactView.Limit) == "9,007,199,254,740,993.000000001", "Quota amounts must retain exact decimal strings beyond floating-point precision.");
-        Check(NativeDisplay.Percentage(exactView.RemainingPercentage) == ">99.9%", "An almost-full ratio must not be rounded to a misleading 100%.");
-        Check(NativeDisplay.ExactPercentage("99.99999999999999999999999999999") == ">99.9%", "An exact sub-100 percentage must not round up through a floating point conversion.");
+        var longest = Bucket(); longest["unit"] = "ai-credits";
+        longest["used"] = "0." + new String('0', 254) + "1"; longest["limit"] = new String('9', 256);
+        longest["remaining"] = new String('9', 255) + "8." + new String('9', 255);
+        longest["value"] = new String('9', 256) + " / " + new String('8', 256);
+        longest["detail"] = "已用 " + new String('9', 256) + " / " + new String('8', 256);
+        var longestView = NativeBucket.Read(longest);
+        Check(longestView.Used == (string)longest["used"] && longestView.Remaining == (string)longest["remaining"] && longestView.Value == (string)longest["value"] && longestView.Detail == (string)longest["detail"], "Maximum supported source decimals and longer calculated differences must arrive without numeric truncation.");
+        Check(NativeDisplay.ExactPercentage(exactView.RemainingPercentageText) == "99.999999999%", "The supplied ratio must remain exact.");
+        Check(NativeDisplay.ExactPercentage("99.99999999999999999999999999999") == "99.99999999999999999999999999999%", "An exact sub-100 percentage must not round up through a floating point conversion.");
         var excessivePercent = Bucket(); excessivePercent["remainingPercentage"] = "100.00000000000000000000000000001";
         Reject(delegate { NativeBucket.Read(excessivePercent); }, "A slightly out-of-range decimal percentage must be rejected exactly.");
-        Check(NativeDisplay.Percentage(.00001) == "<0.1%" && NativeDisplay.Amount(null) == "—", "Small usage and missing values must remain distinguishable from zero.");
-        Check(NativeDisplay.CompactAmount("0.000000001") == "1e-9" && NativeDisplay.CompactAmount("9007199254740993000000000000") == "≈9e27", "Small controls use explicit scientific notation; only inexact compact values get an approximation marker.");
+        Check(NativeDisplay.ExactPercentage("0.00001") == "0.00001%" && NativeDisplay.Amount(null) == "—", "Small usage and missing values must remain distinguishable from zero.");
+        Check(NativeDisplay.Amount("0.000000001") == "0.000000001" && NativeDisplay.Amount("9007199254740993000000000000") == "9,007,199,254,740,993,000,000,000,000", "All significant quantity digits must stay visible, without scientific notation or approximation.");
         var rawQuota = Bucket(); rawQuota["raw"] = new Dictionary<string, object> { { "used", "17.25" }, { "limit", "20000" }, { "remainingPercentage", "62.4" }, { "token", "never-display-this" } };
         var rawView = NativeBucket.Read(rawQuota);
-        Check(rawView.Used == null && rawView.Limit == null && rawView.Remaining == null && rawView.RawUsed == "17.25" && rawView.RawLimit == "20000", "Unknown units may expose only allowlisted raw quantities, never main amounts.");
+        Check(rawView.Used == null && rawView.Limit == null && rawView.Remaining == null && rawView.RawUsed == "17.25" && rawView.RawLimit == "20000", "Unknown units retain allowlisted source quantities without inventing confirmed-unit amounts.");
         var invented = Bucket(); invented["remaining"] = "10";
         Reject(delegate { NativeBucket.Read(invented); }, "An unknown unit cannot contain a confirmed remaining quantity.");
         var infinite = Bucket(); infinite["unit"] = "ai-credits"; infinite["unlimited"] = true; infinite["limit"] = "100";

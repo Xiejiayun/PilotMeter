@@ -129,19 +129,35 @@ test('unlimited, zero limits and overage never become misleading progress ratios
   }
 });
 
-test('compact numeric values mark approximation and retain tiny or near-full nonzero meaning', () => {
-  for (const [remainingPercentage, expected] of [['0.000001', '剩余 <0.1%'], ['99.999999999999999999', '剩余 >99.9%'], ['33.3333', '剩余 ≈33.3%']]) {
+test('widget preserves exact quantities and tiny or near-full percentages', () => {
+  for (const remainingPercentage of ['0.000001', '99.999999999999999999', '33.3333']) {
     const value = buildWidget(summary(), overview({ quota: quota({ buckets: [bucket({ unit: 'unspecified', remainingPercentage })] }) }));
-    assert.equal(value.value, expected); bounded(value);
+    assert.equal(value.value, `剩余 ${remainingPercentage}%`); bounded(value);
   }
   const large = buildWidget(summary(), overview({ quota: quota({ buckets: [bucket({ used: '9007199254740993.123456789', limit: null, usedPercentage: null, remainingPercentage: null })] }) }));
-  assert.equal(large.value, '≈9×10^15'); bounded(large);
+  assert.equal(large.value, '9007199254740993.123456789'); bounded(large);
   const exactPower = buildWidget(summary(), overview({ quota: quota({ buckets: [bucket({ used: '1e40', limit: null, usedPercentage: null, remainingPercentage: null })] }) }));
-  assert.equal(exactPower.value, '1×10^40');
+  assert.equal(exactPower.value, '1' + '0'.repeat(40));
+  const tinyRemainder = buildWidget(summary(), overview({ quota: quota({ buckets: [bucket({ used: '1.000000000000000001', limit: '2' })] }) }));
+  assert.equal(tinyRemainder.value, '0.999999999999999999 剩余');
   for (const used of ['1e256', '1e-256', '-1', 'synthetic-private-token']) {
     const value = buildWidget(summary(), overview({ quota: quota({ buckets: [bucket({ used, usedPercentage: null, remainingPercentage: null })] }) }));
     assert.equal(value.value, '已用未知'); bounded(value);
   }
+});
+
+test('numbers that exceed widget text bounds point to complete usage without clipped numeric prefixes', () => {
+  for (const changes of [
+    { used: '9'.repeat(200), limit: null, usedPercentage: null, remainingPercentage: null },
+    { used: '0', limit: '9'.repeat(200), usedPercentage: '0' },
+    { unit: 'unspecified', remainingPercentage: `0.${'1'.repeat(200)}` },
+  ]) {
+    const value = buildWidget(summary(), overview({ quota: quota({ buckets: [bucket(changes)] }) }));
+    assert.equal(value.value, '查看精确用量'); assert.match(value.detail, /主窗口.*完整用量|主窗口查看/);
+    assert.doesNotMatch(value.value + value.detail, /≈|×10\^|9{10}|1{10}/); bounded(value);
+  }
+  const localValue = buildWidget(summary({ local: local({ knownCalls: 1, nanoAiu: '9'.repeat(200) }) }), overview({ quota: null }));
+  assert.equal(localValue.value, '查看精确用量'); assert.match(localValue.detail, /主窗口/); bounded(localValue);
 });
 
 test('local fallback names UTC month, verified units and partial retained coverage', () => {
@@ -161,8 +177,15 @@ test('local custom budget is labeled separately and has no fabricated zero or ca
   assert.match(make('25', '100').detail, /不代表个人官方额度/);
   assert.equal(make('105', '100').percentage, null); assert.match(make('105', '100').detail, /已超预算/);
   assert.equal(make('0', '0').percentage, null); assert.equal(make('0', '0').value, '0 / 0');
-  assert.equal(make('0.00000000000000000001', '100').value, '<0.1%');
-  assert.equal(make('99.99999999999999999999', '100').value, '>99.9%');
+  assert.equal(make('25', '100').value, '25 / 100');
+  assert.equal(make('0.00000000000000000001', '100').value, '0.00000000000000000001 / 100');
+  assert.equal(make('99.99999999999999999999', '100').value, '99.99999999999999999999 / 100');
+  assert.equal(make('0.00000000000000000001', '100').percentage, 1e-20);
+  assert.equal(make('99.99999999999999999999', '100').percentage, null);
+  assert.equal(make('1', '3').value, '1 / 3');
+  assert.equal(make('1', '3').percentage, null);
+  assert.equal(make('0', '100').percentage, 0);
+  assert.equal(make('100', '100').percentage, 100);
 });
 
 test('late quota and summary from another identity cannot leak into the selected account', () => {

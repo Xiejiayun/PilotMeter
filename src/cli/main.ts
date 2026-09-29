@@ -51,7 +51,18 @@ program.command('init').option('--statusline', 'install the optional native stat
   if (!cliVersion) throw new Error('Cannot read the bundled Copilot CLI version; reinstall PilotMeter or check the PILOTMETER_COPILOT_BIN override before statusline integration.');
   console.log(JSON.stringify(installStatusline({ dataDir: dir(), cliVersion, replace: options.replace }), null, 2));
 });
-program.command('stop').action(async () => { const instance = await instanceAt(dir()); if (!instance) { console.log('PilotMeter 已停止'); return; } await request(instance, '/api/shutdown', 'POST'); console.log('PilotMeter 正在正常停止'); });
+program.command('stop').option('--if-instance <uuid>', 'stop only the previously confirmed service instance').action(async options => {
+  const expected = options.ifInstance as string | undefined;
+  if (expected !== undefined && !/^[a-f\d]{8}-[a-f\d]{4}-4[a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/i.test(expected)) {
+    throw new Error('要停止的服务实例标识无效，请刷新后重试。');
+  }
+  const instance = await instanceAt(dir());
+  if (!instance) { console.log('PilotMeter 已停止'); return; }
+  if (expected !== undefined && instance.instanceId.toLowerCase() !== expected.toLowerCase()) {
+    throw new Error('后台服务已发生变化，未停止任何服务。请刷新后重试。');
+  }
+  await request(instance, '/api/shutdown', 'POST'); console.log('PilotMeter 正在正常停止');
+});
 program.command('import <file>').option('--source-label <label>', 'collection context matching run').description('Import supported OTLP traces JSONL through the shared ledger').action(async (file, options) => { const instance = await collectorForRun(await ensureService(dir()), options.sourceLabel); console.log(JSON.stringify(await request(instance, '/api/import', 'POST', { path: resolve(file), collectorToken: instance.collectorToken }))); });
 program.command('config').command('set <key> <value>').action(async (key, value) => {
   if (key === 'budget.monthlyCredits') {
