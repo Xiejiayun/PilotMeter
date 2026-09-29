@@ -3,7 +3,7 @@ import { realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { readFile, writeFile, rename, mkdir, rm } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
-export const VERSION = '0.1.0-preview.11';
+export const VERSION = '0.1.0-preview.12';
 export const APP = 'pilotmeter';
 export function sourceContextId(label = '', explicitHome?: string): string {
   let home = resolve(explicitHome || process.env.COPILOT_HOME || join(homedir(), '.copilot'));

@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { copyFile, lstat, mkdir, mkdtemp, realpath, rm, stat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
+import { basename, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Compiles shipping native sources. Layout forms render at zero opacity; no visible windows.
@@ -21,9 +21,11 @@ let passed = false;
 
 function run(command, args, timeout = 30_000) {
   return new Promise((resolveRun, reject) => {
+    const stage = basename(command);
+    const started = Date.now();
     const child = spawn(command, args, { cwd: temporary, windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
-    const timer = setTimeout(() => { child.kill(); reject(new Error('Desktop contract command timed out.')); }, timeout);
+    const timer = setTimeout(() => { child.kill(); reject(new Error(`${stage} timed out after ${timeout} ms.\n${output}`)); }, timeout);
     const collect = chunk => {
       output += chunk;
       if (output.length > 128 * 1024) { child.kill(); clearTimeout(timer); reject(new Error('Desktop contract output exceeded its bound.')); }
@@ -34,7 +36,7 @@ function run(command, args, timeout = 30_000) {
     child.once('close', code => {
       clearTimeout(timer);
       if (code !== 0) reject(new Error('Desktop contract command failed (' + code + '):\n' + output));
-      else resolveRun(output.trim());
+      else { console.log(`[native-check] ${stage}: ${Date.now() - started} ms`); resolveRun(output.trim()); }
     });
   });
 }
@@ -103,7 +105,15 @@ try {
   await run(compiler, ['/main:DesktopLayoutTests', '/out:' + layoutExecutable, ...nativeArguments,
     '/win32manifest:' + join(workspace, 'scripts', 'windows', 'app.manifest'),
     join(workspace, 'test', 'windows', 'desktop-layout.cs')]);
-  console.log(await run(layoutExecutable, [join(workspace, '.tmp', 'ui-review')], 90_000));
+  // The full DPI/resize matrix and login screenshots take up to 154 seconds on
+  // the development machine. Keep a bound while allowing complete visual QA.
+  console.log(await run(layoutExecutable, [join(workspace, '.tmp', 'ui-review')], 240_000));
+  const loginExecutable = join(temporary, 'DesktopLoginTests.exe');
+  await copyFile(join(workspace, 'scripts', 'windows', 'DesktopApp.config'), loginExecutable + '.config');
+  await run(compiler, ['/main:DesktopLoginTests', '/out:' + loginExecutable, ...nativeArguments,
+    '/win32manifest:' + join(workspace, 'scripts', 'windows', 'app.manifest'),
+    join(workspace, 'test', 'windows', 'desktop-login.cs')]);
+  console.log(await run(loginExecutable, [join(workspace, '.tmp', 'ui-review')], 45_000));
   const recoveryExecutable = join(temporary, 'DesktopRecoveryTests.exe');
   await copyFile(join(workspace, 'scripts', 'windows', 'DesktopApp.config'), recoveryExecutable + '.config');
   await run(compiler, ['/main:DesktopRecoveryTests', '/out:' + recoveryExecutable, ...nativeArguments,

@@ -228,8 +228,8 @@ internal sealed class NativeRecords
 internal sealed class NativeSurface : Panel
 {
     internal Color SurfaceColor = Color.White;
-    internal Color BorderColor = Color.FromArgb(221, 229, 215);
-    internal int Radius = 16;
+    internal Color BorderColor = Color.FromArgb(225, 231, 234);
+    internal int Radius = 12;
     internal NativeSurface()
     {
         DoubleBuffered = true;
@@ -251,9 +251,106 @@ internal sealed class NativeSurface : Panel
         base.OnPaint(e);
         if (Width < 2 || Height < 2) return;
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        using (var path = Rounded(new RectangleF(.5F, .5F, Width - 1, Height - 1), Radius))
+        using (var path = Rounded(new RectangleF(.5F, .5F, Width - 1, Height - 1), Radius * e.Graphics.DpiX / 96F))
         using (var fill = new SolidBrush(SurfaceColor))
         using (var edge = new Pen(BorderColor)) { e.Graphics.FillPath(fill, path); e.Graphics.DrawPath(edge, path); }
+    }
+}
+
+// Retain Button's keyboard, accessibility and click behavior while drawing a
+// consistent rounded surface. Image buttons keep the platform's image layout.
+internal sealed class NativeActionButton : Button
+{
+    private bool hovered, mousePressed, keyPressed;
+    internal string NavigationIcon;
+    internal NativeActionButton() { DoubleBuffered = true; }
+    protected override void OnMouseEnter(EventArgs e) { hovered = Enabled; Invalidate(); base.OnMouseEnter(e); }
+    protected override void OnMouseLeave(EventArgs e) { hovered = false; Invalidate(); base.OnMouseLeave(e); }
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        if (Enabled && e.Button == MouseButtons.Left) { mousePressed = true; hovered = ClientRectangle.Contains(e.Location); }
+        Invalidate(); base.OnMouseDown(e);
+    }
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        if (e.Button == MouseButtons.Left) mousePressed = false;
+        Invalidate(); base.OnMouseUp(e);
+    }
+    protected override void OnMouseCaptureChanged(EventArgs e)
+    {
+        if (!Capture) mousePressed = false;
+        Invalidate(); base.OnMouseCaptureChanged(e);
+    }
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (Enabled && e.KeyData == Keys.Space) keyPressed = true;
+        Invalidate(); base.OnKeyDown(e);
+        if (e.SuppressKeyPress) { keyPressed = false; Invalidate(); }
+    }
+    protected override void OnKeyUp(KeyEventArgs e)
+    {
+        if (e.KeyCode == Keys.Space) keyPressed = false;
+        Invalidate(); base.OnKeyUp(e);
+    }
+    protected override void OnLostFocus(EventArgs e)
+    {
+        mousePressed = keyPressed = false;
+        Invalidate(); base.OnLostFocus(e);
+    }
+    protected override void OnEnabledChanged(EventArgs e)
+    {
+        if (!Enabled) hovered = mousePressed = keyPressed = false;
+        Invalidate(); base.OnEnabledChanged(e);
+    }
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        if (Image != null) { base.OnPaint(e); return; }
+        var scale = e.Graphics.DpiX / 96F;
+        var primary = BackColor.GetBrightness() < .45F;
+        var pressed = keyPressed || mousePressed && hovered;
+        var background = !Enabled ? Color.FromArgb(241, 244, 246) : pressed ? (primary ? ControlPaint.Dark(BackColor, .08F) : Color.FromArgb(222, 235, 230)) : hovered ? (primary ? ControlPaint.Light(BackColor, .08F) : FlatAppearance.MouseOverBackColor) : BackColor;
+        var backdrop = Color.White;
+        for (var parent = Parent; parent != null; parent = parent.Parent)
+        {
+            var surface = parent as NativeSurface;
+            if (surface != null) { backdrop = surface.SurfaceColor; break; }
+            if (parent.BackColor.A == 255) { backdrop = parent.BackColor; break; }
+        }
+        e.Graphics.Clear(backdrop);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        using (var path = NativeSurface.Rounded(new RectangleF(.5F, .5F, Width - 1, Height - 1), 7 * scale))
+        {
+            using (var brush = new SolidBrush(background)) e.Graphics.FillPath(brush, path);
+            if (FlatAppearance.BorderSize > 0 && !primary)
+                using (var pen = new Pen(FlatAppearance.BorderColor)) e.Graphics.DrawPath(pen, path);
+        }
+        var color = Enabled ? ForeColor : Color.FromArgb(139, 150, 157);
+        var bounds = new Rectangle(Padding.Left, Padding.Top, Width - Padding.Horizontal, Height - Padding.Vertical);
+        if (NavigationIcon != null)
+        {
+            var box = new RectangleF(16 * scale, (Height - 16 * scale) / 2, 16 * scale, 16 * scale);
+            using (var pen = new Pen(color, 1.4F * scale))
+            {
+                if (NavigationIcon == "overview") {
+                    var step = 9 * scale; var side = 6 * scale;
+                    for (var row = 0; row < 2; row++) for (var col = 0; col < 2; col++) e.Graphics.DrawRectangle(pen, box.X + col * step, box.Y + row * step, side, side);
+                } else if (NavigationIcon == "models") {
+                    e.Graphics.DrawEllipse(pen, box.X + 4 * scale, box.Y, 8 * scale, 8 * scale);
+                    e.Graphics.DrawEllipse(pen, box.X, box.Y + 7 * scale, 8 * scale, 8 * scale);
+                    e.Graphics.DrawEllipse(pen, box.X + 8 * scale, box.Y + 7 * scale, 8 * scale, 8 * scale);
+                } else if (NavigationIcon == "records") {
+                    for (var bar = 0; bar < 3; bar++) e.Graphics.DrawLine(pen, box.X + bar * 6 * scale, box.Bottom, box.X + bar * 6 * scale, box.Bottom - (6 + bar * 4) * scale);
+                } else {
+                    e.Graphics.DrawEllipse(pen, box.X + 5 * scale, box.Y, 6 * scale, 6 * scale);
+                    e.Graphics.DrawArc(pen, box.X + scale, box.Y + 8 * scale, 14 * scale, 12 * scale, 180, 180);
+                }
+            }
+            bounds.X = (int)(44 * scale); bounds.Width = Width - bounds.X - (int)(8 * scale);
+        }
+        var flags = TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
+        flags |= TextAlign == ContentAlignment.MiddleLeft ? TextFormatFlags.Left : TextFormatFlags.HorizontalCenter;
+        TextRenderer.DrawText(e.Graphics, Text, Font, bounds, color, flags);
+        if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -(int)(4 * scale), -(int)(4 * scale)), color, background);
     }
 }
 
@@ -313,10 +410,10 @@ internal sealed class NativeUsageBar : Control
         if (Width < 2 || Height < 2) return;
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
         using (var track = NativeSurface.Rounded(new RectangleF(0, 0, Width, Height), Height / 2F))
-        using (var brush = new SolidBrush(Color.FromArgb(221, 232, 212))) e.Graphics.FillPath(brush, track);
+        using (var brush = new SolidBrush(Color.FromArgb(232, 239, 236))) e.Graphics.FillPath(brush, track);
         if (!percentage.HasValue || percentage <= 0) return;
         using (var bar = NativeSurface.Rounded(new RectangleF(0, 0, Math.Max(2, (float)(Width * Math.Min(100, percentage.Value) / 100)), Height), Height / 2F))
-        using (var brush = new SolidBrush(Color.FromArgb(91, 126, 87))) e.Graphics.FillPath(brush, bar);
+        using (var brush = new SolidBrush(Color.FromArgb(31, 111, 87))) e.Graphics.FillPath(brush, bar);
     }
 }
 
@@ -358,7 +455,7 @@ internal sealed class DashboardWindow : NativeForm
     private NativeOverview overview;
     private NativeLoginDialog loginDialog;
     private string currentPage = "overview", quotaKey, quotaAccount, accountSignature, accountsGridSignature, modelsSignature, recordsAccount, recordsCursor, networkError, publishedAccount, publishedKey;
-    private int generation, recordsGeneration;
+    private int generation, recordsGeneration, loginOperation;
     private bool suppress, suppressPets, loading, busy, expanded, rawExpanded, disposed, recordsLoading, recordsLoaded, serviceRecoveryAvailable, serviceRecoveryWorking, layoutReady;
     private DateTime nextRefresh = DateTime.MinValue;
     internal event EventHandler<NativeQuotaSelectionEventArgs> QuotaSelectionChanged;
@@ -372,31 +469,32 @@ internal sealed class DashboardWindow : NativeForm
         ClientSize = new Size(1280, 850); MinimumSize = new Size(880, 640);
         DoubleBuffered = true;
         var shell = Columns(190, -1); shell.BackColor = BackColor;
-        var sidebarScroll = new Panel { Name = "SidebarScroll", Dock = DockStyle.Fill, AutoScroll = true, Margin = Padding.Empty, BackColor = Color.FromArgb(242, 246, 234) };
-        var sidebar = Rows(62, 28, 50, 50, 50, 50, -1, 120, 34);
+        var sidebarScroll = new Panel { Name = "SidebarScroll", Dock = DockStyle.Fill, AutoScroll = true, Margin = Padding.Empty, BackColor = Color.White };
+        var sidebar = Rows(42, 38, 46, 46, 46, 46, -1, 126, 34);
         sidebar.Name = "SidebarContent"; sidebar.Dock = DockStyle.Top; sidebar.MinimumSize = new Size(0, 486);
-        sidebar.Padding = new Padding(16, 24, 10, 18); sidebar.BackColor = sidebarScroll.BackColor;
+        sidebar.Padding = new Padding(14, 24, 14, 14); sidebar.BackColor = sidebarScroll.BackColor;
         Action fitSidebar = delegate {
             if (!LayoutStable) return;
             var height = Math.Max(sidebar.MinimumSize.Height, sidebarScroll.ClientSize.Height);
             if (sidebar.Height != height) sidebar.Height = height;
         };
         sidebarScroll.SizeChanged += delegate { fitSidebar(); }; sidebarScroll.Layout += delegate { fitSidebar(); };
-        var brand = LabelFor("PilotMeter", Ink); brand.Font = Typeface(17, FontStyle.Bold); sidebar.Controls.Add(brand, 0, 0);
-        var edition = LabelFor("YOUR QUIET COPILOT", Muted); edition.Font = Typeface(7.2F, FontStyle.Regular); sidebar.Controls.Add(edition, 0, 1);
+        var brand = LabelFor("PilotMeter", Ink); brand.Font = Typeface(16, FontStyle.Bold); brand.Padding = new Padding(12, 0, 0, 0); sidebar.Controls.Add(brand, 0, 0);
+        var edition = LabelFor("COPILOT 用量助手", Muted); edition.Font = Typeface(7.4F, FontStyle.Regular); edition.Padding = new Padding(12, 0, 0, 12); sidebar.Controls.Add(edition, 0, 1);
         var names = new[] { "总览", "可用模型", "用量记录", "账户" }; var keys = new[] { "overview", "models", "records", "accounts" };
         for (var index = 0; index < keys.Length; index++)
         {
             var key = keys[index]; var navigationIndex = index; var button = ButtonFor(names[index]);
             button.Name = "Navigate" + key; button.TextAlign = ContentAlignment.MiddleLeft; button.Padding = new Padding(16, 0, 0, 0);
             button.Margin = new Padding(0, 3, 0, 3); button.FlatAppearance.BorderSize = 0;
+            ((NativeActionButton)button).NavigationIcon = key;
             button.Click += delegate { Navigate(key); }; navigation.Add(key, button); sidebar.Controls.Add(button, 0, index + 2);
             button.KeyDown += delegate(object sender, KeyEventArgs e) {
                 if (e.KeyCode != Keys.Up && e.KeyCode != Keys.Down) return;
                 var next = (navigationIndex + (e.KeyCode == Keys.Down ? 1 : 3)) % 4; navigation[keys[next]].Focus(); Navigate(keys[next]); e.Handled = true;
             };
         }
-        var identity = Rows(25, 21, 24, 34); identity.Name = "SidebarAccount"; identity.Padding = new Padding(8); identity.BackColor = Color.FromArgb(233, 240, 222);
+        var identity = Rows(25, 21, 24, 34); identity.Name = "SidebarAccount"; identity.Padding = new Padding(10); identity.BackColor = Color.FromArgb(245, 248, 247);
         sidebarAccountLogin = LabelFor("未登录 GitHub", Ink); sidebarAccountLogin.Name = "SidebarAccountLogin"; sidebarAccountLogin.Font = Typeface(9.5F, FontStyle.Bold);
         sidebarAccountHost = Caption("个人或工作账号"); sidebarAccountHost.Name = "SidebarAccountHost";
         sidebarAccountState = Caption("正在连接本机服务…"); sidebarAccountState.Name = "SidebarAccountState";
@@ -406,16 +504,16 @@ internal sealed class DashboardWindow : NativeForm
         var bottom = LabelFor("关闭窗口后，后台继续运行。", Muted); bottom.Name = "SidebarFooter"; bottom.Font = Typeface(7.6F, FontStyle.Regular); sidebar.Controls.Add(bottom, 0, 8);
         sidebarScroll.Controls.Add(sidebar); shell.Controls.Add(sidebarScroll, 0, 0);
 
-        var content = Rows(54, 70, -1, 42); content.Padding = new Padding(28, 18, 28, 10);
+        var content = Rows(48, 80, -1, 32); content.Padding = new Padding(30, 16, 26, 6);
         var topbar = Columns(-1, 260, 42, 136);
-        accountStatus = LabelFor("正在连接本机服务…", Muted); topbar.Controls.Add(accountStatus, 0, 0);
+        accountStatus = Caption("正在连接本机服务…"); topbar.Controls.Add(accountStatus, 0, 0);
         accounts = new ComboBox { Name = "AccountSelector", AccessibleName = "当前 GitHub 账号", Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, IntegralHeight = false, DropDownHeight = 250, Margin = new Padding(10, 9, 8, 0) };
-        accountSettings = ButtonFor("···"); accountSettings.AccessibleName = "当前账号操作"; accountSettings.Margin = new Padding(0, 3, 6, 9);
-        refresh = ButtonFor("刷新数据"); refresh.Name = "RefreshQuota"; refresh.Margin = new Padding(5, 3, 0, 9);
+        accountSettings = ButtonFor("···"); accountSettings.AccessibleName = "当前账号操作"; accountSettings.Margin = new Padding(0, 4, 6, 8);
+        refresh = ButtonFor("刷新数据"); refresh.Name = "RefreshQuota"; refresh.Margin = new Padding(5, 4, 0, 8);
         topbar.Controls.Add(accounts, 1, 0); topbar.Controls.Add(accountSettings, 2, 0); topbar.Controls.Add(refresh, 3, 0); content.Controls.Add(topbar, 0, 0);
-        var heading = Rows(0, 38, 28); breadcrumb = LabelFor("", Muted); breadcrumb.Visible = false;
-        pageTitle = LabelFor("用量概览", Ink); pageTitle.Font = Typeface(20, FontStyle.Bold);
-        pageSubtitle = LabelFor("了解当前额度，找到适合下一项任务的模型。", Muted);
+        var heading = Rows(0, 42, 30); breadcrumb = LabelFor("", Muted); breadcrumb.Visible = false;
+        pageTitle = LabelFor("用量概览", Ink); pageTitle.Font = Typeface(21, FontStyle.Bold);
+        pageSubtitle = Caption("了解当前额度，找到适合下一项任务的模型。");
         heading.Controls.Add(breadcrumb, 0, 0); heading.Controls.Add(pageTitle, 0, 1); heading.Controls.Add(pageSubtitle, 0, 2); content.Controls.Add(heading, 0, 1);
         pageHost = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty }; content.Controls.Add(pageHost, 0, 2);
         var footer = Columns(-1, 190); feedback = LabelFor("", Muted); feedback.Font = Typeface(8, FontStyle.Regular); synced = LabelFor("尚未同步", Muted); synced.TextAlign = ContentAlignment.MiddleRight; synced.Font = Typeface(8, FontStyle.Regular);
@@ -487,6 +585,13 @@ internal sealed class DashboardWindow : NativeForm
 
     private bool LayoutStable { get { return layoutReady && (AutoScaleMode != AutoScaleMode.Dpi || Math.Abs(AutoScaleDimensions.Width - CurrentAutoScaleDimensions.Width) < .5F); } }
 
+    private float LayoutScale(Control control, float initialFontSize)
+    {
+        var dpi = CurrentAutoScaleDimensions.Width;
+        if (dpi < 48) { using (var graphics = control.CreateGraphics()) dpi = graphics.DpiY; }
+        return control.Font.Size / initialFontSize * dpi / 96F;
+    }
+
     private void RefreshAdaptiveLayout()
     {
         if (!LayoutStable) return;
@@ -496,36 +601,36 @@ internal sealed class DashboardWindow : NativeForm
 
     private NativeSurface Card(FlowLayoutPanel page, int height)
     {
-        var card = new NativeSurface { Height = height, Padding = new Padding(22), Margin = new Padding(0, 0, 0, 16) }; page.Controls.Add(card); return card;
+        var card = new NativeSurface { Height = height, Padding = new Padding(22), Margin = new Padding(0, 0, 0, 14) }; page.Controls.Add(card); return card;
     }
 
     private Label Caption(string text) { var label = LabelFor(text, Muted); label.Font = Typeface(8, FontStyle.Regular); return label; }
-    private Label Title(string text) { var label = LabelFor(text, Ink); label.Font = Typeface(13, FontStyle.Bold); return label; }
+    private Label Title(string text) { var label = LabelFor(text, Ink); label.Font = Typeface(11, FontStyle.Bold); return label; }
     private LinkLabel Link(string text)
     {
-        return new LinkLabel { Text = text, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, LinkColor = Accent, ActiveLinkColor = Accent, VisitedLinkColor = Accent, Margin = Padding.Empty, AutoEllipsis = true };
+        return new LinkLabel { Text = text, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, LinkColor = Accent, ActiveLinkColor = Accent, VisitedLinkColor = Accent, LinkBehavior = LinkBehavior.HoverUnderline, Font = Typeface(8.5F, FontStyle.Regular), Margin = Padding.Empty, AutoEllipsis = true };
     }
 
     private DataGridView Grid(params string[] columns)
     {
         var grid = new DataGridView { Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false, AllowUserToDeleteRows = false, AllowUserToResizeRows = false,
             RowHeadersVisible = false, BackgroundColor = Color.White, BorderStyle = BorderStyle.None, CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal,
-            GridColor = Color.FromArgb(232, 238, 226), SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false,
+            GridColor = Color.FromArgb(235, 239, 242), SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false,
             AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells,
             ColumnHeadersHeight = 38, ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing, EnableHeadersVisualStyles = false };
-        grid.DefaultCellStyle = new DataGridViewCellStyle { BackColor = Color.White, ForeColor = Ink, SelectionBackColor = Color.FromArgb(235, 242, 226), SelectionForeColor = Ink, Padding = new Padding(8, 10, 8, 10), WrapMode = DataGridViewTriState.True };
-        grid.ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle { BackColor = Color.FromArgb(247, 249, 241), ForeColor = Muted, SelectionBackColor = Color.FromArgb(247, 249, 241), Padding = new Padding(8, 0, 8, 0) };
+        grid.DefaultCellStyle = new DataGridViewCellStyle { BackColor = Color.White, ForeColor = Ink, SelectionBackColor = Color.FromArgb(236, 245, 241), SelectionForeColor = Ink, Padding = new Padding(8, 9, 8, 9), WrapMode = DataGridViewTriState.True, Font = Typeface(8.5F, FontStyle.Regular) };
+        grid.ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle { BackColor = Color.FromArgb(246, 248, 249), ForeColor = Muted, SelectionBackColor = Color.FromArgb(246, 248, 249), Padding = new Padding(8, 0, 8, 0), Font = Typeface(8, FontStyle.Regular) };
         foreach (var name in columns) grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = name, Name = name, SortMode = DataGridViewColumnSortMode.NotSortable });
         return grid;
     }
 
     private Label Metric(TableLayoutPanel container, int row, string caption, float size)
     {
-        var metric = Columns(76, -1);
-        var title = Caption(caption); metric.Controls.Add(title, 0, 0);
-        var viewport = new Panel { Name = "ExactMetricViewport" + row, AutoScroll = true, Dock = DockStyle.Fill, Margin = Padding.Empty, BackColor = Color.Transparent };
-        var amount = new NativeExactLabel { KeepOnOneLine = true, Text = "—", ForeColor = Ink, BackColor = Color.Transparent, Margin = Padding.Empty, Font = Typeface(size, row == 0 ? FontStyle.Bold : FontStyle.Regular) };
-        viewport.Controls.Add(amount); metric.Controls.Add(viewport, 1, 0); container.Controls.Add(metric, 0, row);
+        var metric = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty, BackColor = Color.Transparent };
+        var title = Caption(caption); title.Name = "MetricCaption" + row; title.Dock = DockStyle.None; metric.Controls.Add(title);
+        var viewport = new Panel { Name = "ExactMetricViewport" + row, AutoScroll = true, Margin = Padding.Empty, BackColor = Color.Transparent };
+        var amount = new NativeExactLabel { KeepOnOneLine = true, Text = "—", ForeColor = Ink, BackColor = Color.Transparent, Margin = Padding.Empty, Font = Typeface(size, row == 0 ? FontStyle.Bold : FontStyle.Regular, "Segoe UI") };
+        viewport.Controls.Add(amount); metric.Controls.Add(viewport); container.Controls.Add(metric, 0, row);
         if (row == 2) quotaCaption = title;
         amount.TextChanged += delegate { tips.SetToolTip(amount, amount.Text); amount.AccessibleDescription = amount.Text; };
         return amount;
@@ -540,7 +645,16 @@ internal sealed class DashboardWindow : NativeForm
     // Text can change after a sync, and a narrow window or larger system font
     // can need more lines. Grow the row and its scrolling card together so the
     // next section never paints over the message. Reclaim that space on resize.
-    private void FitTextRow(TableLayoutPanel layout, Label label, int row, NativeSurface card)
+    private static void FitAbsoluteCard(TableLayoutPanel layout, NativeSurface card)
+    {
+        // Scale rounds each row and each padding edge independently. Recompute
+        // their sum instead of preserving a fractional-DPI shortfall or drift.
+        var height = card.Padding.Vertical + layout.Margin.Vertical + layout.Padding.Vertical;
+        foreach (RowStyle style in layout.RowStyles) height += (int)Math.Ceiling(style.Height);
+        if (card.Height != height) card.Height = height;
+    }
+
+    private void FitTextRow(TableLayoutPanel layout, Label label, int row, NativeSurface card, bool fitCardHeight = false)
     {
         var minimum = layout.RowStyles[row].Height;
         var initialFontSize = label.Font.Size;
@@ -550,22 +664,44 @@ internal sealed class DashboardWindow : NativeForm
             fitting = true;
             try
             {
-                var dpi = CurrentAutoScaleDimensions.Width;
-                if (dpi < 48) { using (var graphics = label.CreateGraphics()) dpi = graphics.DpiY; }
-                var scale = label.Font.Size / initialFontSize * dpi / 96F;
+                var scale = LayoutScale(label, initialFontSize);
                 var measured = label is NativeExactLabel ? label.GetPreferredSize(new Size(label.ClientSize.Width, Int32.MaxValue))
                     : TextRenderer.MeasureText(label.Text, label.Font, new Size(label.ClientSize.Width, Int32.MaxValue), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
                 var height = Math.Max((int)Math.Ceiling(minimum * scale), measured.Height + (int)Math.Ceiling(4 * scale));
                 var difference = height - (int)Math.Round(layout.RowStyles[row].Height);
-                if (difference == 0) return;
+                if (difference == 0 && !fitCardHeight) return;
                 layout.RowStyles[row].SizeType = SizeType.Absolute; layout.RowStyles[row].Height = height;
-                if (card != null) card.Height += difference;
+                if (card != null) { if (fitCardHeight) FitAbsoluteCard(layout, card); else card.Height += difference; }
             }
             finally { fitting = false; }
         };
         label.AutoEllipsis = false;
         fitTextRows.Add(fit);
         label.TextChanged += delegate { fit(); }; label.SizeChanged += delegate { fit(); }; label.FontChanged += delegate { fit(); };
+    }
+
+    private void FitContentGrid(TableLayoutPanel layout, DataGridView grid, int row, NativeSurface card)
+    {
+        var initialFontSize = grid.Font.Size; var fitting = false;
+        Action fit = delegate {
+            if (!LayoutStable || fitting || disposed) return;
+            fitting = true;
+            try
+            {
+                var scale = LayoutScale(grid, initialFontSize);
+                var rowsHeight = 0;
+                foreach (DataGridViewRow item in grid.Rows) rowsHeight += item.Height;
+                var height = Math.Min((int)(280 * scale), Math.Max((int)(78 * scale), grid.ColumnHeadersHeight + rowsHeight + grid.Margin.Vertical + 2));
+                var total = card.Padding.Vertical + height;
+                for (var index = 0; index < layout.RowCount; index++) if (index != row) total += (int)Math.Ceiling(layout.RowStyles[index].Height);
+                layout.RowStyles[row].SizeType = SizeType.Absolute; layout.RowStyles[row].Height = height;
+                if (card.Height != total) card.Height = total;
+            }
+            finally { fitting = false; }
+        };
+        fitTextRows.Add(fit);
+        grid.RowsAdded += delegate { fit(); }; grid.RowsRemoved += delegate { fit(); };
+        grid.RowHeightChanged += delegate { fit(); }; grid.SizeChanged += delegate { fit(); };
     }
 
     private void FitMetrics(TableLayoutPanel layout, TableLayoutPanel metrics, NativeSurface card)
@@ -577,21 +713,48 @@ internal sealed class DashboardWindow : NativeForm
             fitting = true;
             try
             {
-                var scale = quotaUsed.Font.Size / initialFontSize * CurrentAutoScaleDimensions.Width / 96F;
-                var height = 0; var row = 0;
-                foreach (var label in new[] { quotaUsed, quotaTotal, quotaValue })
+                var scale = LayoutScale(quotaUsed, initialFontSize);
+                var values = new[] { quotaUsed, quotaTotal, quotaValue };
+                var horizontal = metrics.Width >= 600 * scale;
+                foreach (var label in values)
+                    horizontal &= label.GetPreferredSize(new Size(Int32.MaxValue, Int32.MaxValue)).Width + 24 * scale <= metrics.Width / 3;
+                var columns = horizontal ? 3 : 1;
+                if (metrics.ColumnCount != columns)
+                {
+                    metrics.SuspendLayout();
+                    var groups = new Control[values.Length];
+                    for (var index = 0; index < values.Length; index++) groups[index] = values[index].Parent.Parent;
+                    metrics.Controls.Clear();
+                    metrics.ColumnStyles.Clear(); metrics.RowStyles.Clear();
+                    metrics.ColumnCount = columns; metrics.RowCount = horizontal ? 1 : 3;
+                    for (var col = 0; col < columns; col++) metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F / columns));
+                    for (var row = 0; row < metrics.RowCount; row++) metrics.RowStyles.Add(new RowStyle(SizeType.Absolute, 1));
+                    for (var index = 0; index < values.Length; index++) metrics.Controls.Add(groups[index], horizontal ? index : 0, horizontal ? 0 : index);
+                    metrics.ResumeLayout(true);
+                }
+                var height = 0; var indexOf = 0;
+                foreach (var label in values)
                 {
                     var viewport = (Panel)label.Parent;
+                    var group = viewport.Parent;
+                    var caption = group.Controls[0];
+                    var left = horizontal ? (indexOf == 0 ? 0 : (int)(20 * scale)) : (int)(80 * scale);
+                    var top = horizontal ? (int)(28 * scale) : 0;
+                    var width = Math.Max(1, group.ClientSize.Width - left);
                     var measured = label.GetPreferredSize(new Size(Int32.MaxValue, Int32.MaxValue));
                     var lineHeight = measured.Height + (int)Math.Ceiling(4 * scale);
-                    var needsScroll = measured.Width + 4 * scale > viewport.ClientSize.Width;
-                    var rowHeight = Math.Max((int)Math.Ceiling((row == 0 ? 56 : 46) * scale), lineHeight + (needsScroll ? SystemInformation.HorizontalScrollBarHeight : 0) + (int)Math.Ceiling(8 * scale));
-                    metrics.RowStyles[row++].Height = rowHeight; height += rowHeight;
-                    label.SetBounds(viewport.AutoScrollPosition.X, Math.Max(0, (rowHeight - (needsScroll ? SystemInformation.HorizontalScrollBarHeight : 0) - lineHeight) / 2), Math.Max(viewport.ClientSize.Width, measured.Width + (int)Math.Ceiling(4 * scale)), lineHeight);
+                    var needsScroll = measured.Width + 4 * scale > width;
+                    var rowHeight = Math.Max((int)Math.Ceiling((horizontal ? 86 : indexOf == 0 ? 60 : 50) * scale), top + lineHeight + (needsScroll ? SystemInformation.HorizontalScrollBarHeight : 0) + (int)Math.Ceiling(8 * scale));
+                    if (horizontal) { height = Math.Max(height, rowHeight); metrics.RowStyles[0].Height = height; }
+                    else { metrics.RowStyles[indexOf].Height = rowHeight; height += rowHeight; }
+                    caption.SetBounds(horizontal ? left : 0, 0, horizontal ? width : left, horizontal ? top : rowHeight);
+                    viewport.SetBounds(left, top, width, rowHeight - top);
+                    indexOf++;
+                    var availableHeight = rowHeight - top;
+                    label.SetBounds(viewport.AutoScrollPosition.X, Math.Max(0, (availableHeight - (needsScroll ? SystemInformation.HorizontalScrollBarHeight : 0) - lineHeight) / 2), Math.Max(viewport.ClientSize.Width, measured.Width + (int)Math.Ceiling(4 * scale)), lineHeight);
                 }
-                var difference = height - (int)Math.Round(layout.RowStyles[1].Height);
-                if (difference == 0) return;
-                layout.RowStyles[1].Height = height; card.Height += difference;
+                layout.RowStyles[1].Height = height;
+                FitAbsoluteCard(layout, card);
             }
             finally { fitting = false; }
         };
@@ -601,30 +764,32 @@ internal sealed class DashboardWindow : NativeForm
             label.TextChanged += delegate { ((Panel)label.Parent).AutoScrollPosition = Point.Empty; fit(); };
             label.Parent.SizeChanged += delegate { fit(); }; label.FontChanged += delegate { fit(); };
         }
+        metrics.SizeChanged += delegate { fit(); };
     }
 
     private void BuildOverview()
     {
         var page = Page("overview");
-        var quota = Card(page, 322); quota.SurfaceColor = Color.FromArgb(246, 249, 238);
-        var layout = Rows(32, 148, 14, 30, 28, 22); var top = Columns(-1, 100);
+        var quota = Card(page, 284); quota.Name = "PrimaryQuotaCard";
+        var layout = Rows(30, 148, 12, 26, 24); var top = Columns(-1, 100);
         category = Title("当前账户额度"); top.Controls.Add(category, 0, 0);
         var details = Link("额度明细  →"); details.LinkClicked += delegate { ShowQuotaDetails(); }; top.Controls.Add(details, 1, 0); layout.Controls.Add(top, 0, 0);
         var metrics = Rows(56, 46, 46);
-        quotaUsed = Metric(metrics, 0, "已用", 19); quotaUsed.Name = "QuotaUsed";
-        quotaTotal = Metric(metrics, 1, "总额", 16); quotaTotal.Name = "QuotaTotal";
-        quotaValue = Metric(metrics, 2, "剩余", 16); quotaValue.Name = "QuotaValue";
+        quotaUsed = Metric(metrics, 0, "已用", 30); quotaUsed.Name = "QuotaUsed"; quotaUsed.ForeColor = Accent;
+        quotaTotal = Metric(metrics, 1, "总额", 22); quotaTotal.Name = "QuotaTotal";
+        quotaValue = Metric(metrics, 2, "剩余", 22); quotaValue.Name = "QuotaValue";
         layout.Controls.Add(metrics, 0, 1);
         progress = new NativeUsageBar { Name = "QuotaProgress", Dock = DockStyle.Fill, Margin = new Padding(0, 8, 0, 0) }; layout.Controls.Add(progress, 0, 2);
         quotaRatios = new NativeExactLabel { Text = "额度比例待同步", ForeColor = Muted, BackColor = Color.Transparent, Dock = DockStyle.Fill, Margin = Padding.Empty, Font = Typeface(8, FontStyle.Regular) }; layout.Controls.Add(quotaRatios, 0, 3);
-        quotaDetail = new NativeExactLabel { ForeColor = Muted, BackColor = Color.Transparent, Dock = DockStyle.Fill, Margin = Padding.Empty, Font = Typeface(8.4F, FontStyle.Regular) }; layout.Controls.Add(quotaDetail, 0, 4);
-        reset = Caption(""); layout.Controls.Add(reset, 0, 5); quota.Controls.Add(layout);
+        var metadata = Columns(-1, 180);
+        quotaDetail = new NativeExactLabel { ForeColor = Muted, BackColor = Color.Transparent, Dock = DockStyle.Fill, Margin = Padding.Empty, Font = Typeface(8, FontStyle.Regular) }; metadata.Controls.Add(quotaDetail, 0, 0);
+        reset = Caption(""); reset.TextAlign = ContentAlignment.MiddleRight; metadata.Controls.Add(reset, 1, 0); layout.Controls.Add(metadata, 0, 4); quota.Controls.Add(layout);
         FitMetrics(layout, metrics, quota);
-        FitTextRow(layout, quotaRatios, 3, quota);
-        FitTextRow(layout, quotaDetail, 4, quota);
+        FitTextRow(layout, quotaRatios, 3, quota, true);
+        FitTextRow(layout, quotaDetail, 4, quota, true);
 
-        var expanders = new Panel { Height = 34, Margin = new Padding(3, 0, 0, 8) }; var expandRow = Columns(-1, -1);
-        other = Link("其他额度 ▸"); raw = Link("原始数值（单位待确认） ▸"); raw.TextAlign = ContentAlignment.MiddleRight;
+        var expanders = new Panel { Height = 28, Margin = new Padding(3, 0, 0, 8) }; var expandRow = Columns(-1, -1);
+        other = Link("其他额度 ▸"); raw = Link("查看原始数据 ▸"); raw.TextAlign = ContentAlignment.MiddleRight;
         other.LinkClicked += delegate { ExpandOther(!expanded); }; raw.LinkClicked += delegate { ExpandRaw(!rawExpanded); };
         expandRow.Controls.Add(other, 0, 0); expandRow.Controls.Add(raw, 1, 0); expanders.Controls.Add(expandRow); page.Controls.Add(expanders);
         otherPanel = Card(page, 136); var categoryLayout = Rows(28, 35, 24);
@@ -640,15 +805,16 @@ internal sealed class DashboardWindow : NativeForm
         rawPanel = Card(page, 160); rawPanel.SurfaceColor = Color.FromArgb(252, 246, 230);
         rawText = new TextBox { Name = "RawQuotaFields", AccessibleName = "允许展示的原始额度数值", Multiline = true, ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = rawPanel.SurfaceColor, ForeColor = Ink, Dock = DockStyle.Fill, ScrollBars = ScrollBars.Vertical };
         rawPanel.Controls.Add(rawText); rawPanel.Visible = false;
-        var local = Card(page, 124); var localLayout = Rows(29, 51);
+        var local = Card(page, 112); var localLayout = Rows(29, 39);
         var localHeader = Columns(-1, 110); localHeader.Controls.Add(Title("本机用量"), 0, 0); var history = Link("查看记录  →"); history.LinkClicked += delegate { Navigate("records"); }; localHeader.Controls.Add(history, 1, 0);
-        localSummary = LabelFor("尚未读取本机会话。", Muted); localSummary.AutoEllipsis = false; localLayout.Controls.Add(localHeader, 0, 0); localLayout.Controls.Add(localSummary, 0, 1); local.Controls.Add(localLayout);
+        localSummary = Caption("尚未读取本机会话。"); localSummary.AutoEllipsis = false; localLayout.Controls.Add(localHeader, 0, 0); localLayout.Controls.Add(localSummary, 0, 1); local.Controls.Add(localLayout);
         FitTextRow(localLayout, localSummary, 1, local);
-        var modelCard = Card(page, 295); var modelsLayout = Rows(32, 33, -1);
+        var modelCard = Card(page, 270); var modelsLayout = Rows(28, 28, -1);
         var modelHeader = Columns(-1, 110); modelHeader.Controls.Add(Title("账户可用模型"), 0, 0); var all = Link("查看全部  →"); all.LinkClicked += delegate { Navigate("models"); }; modelHeader.Controls.Add(all, 1, 0);
         modelSummary = Caption("模型权限待验证；登录成功不会自动授予模型权限。"); overviewModels = Grid("模型", "访问状态", "能力"); overviewModels.Name = "OverviewModels";
         overviewModels.CellDoubleClick += delegate(object sender, DataGridViewCellEventArgs e) { ShowModelFrom(overviewModels, e.RowIndex); };
         modelsLayout.Controls.Add(modelHeader, 0, 0); modelsLayout.Controls.Add(modelSummary, 0, 1); modelsLayout.Controls.Add(overviewModels, 0, 2); modelCard.Controls.Add(modelsLayout);
+        FitContentGrid(modelsLayout, overviewModels, 2, modelCard);
         var scope = Caption("数据来源：Copilot CLI 当前账户额度。账户额度与组织／企业月度账单分别核对；本机记录仅覆盖通过 PilotMeter 启动的会话。");
         scope.Height = 54; scope.Dock = DockStyle.None; scope.AutoEllipsis = false; scope.Margin = new Padding(4, 0, 4, 12); page.Controls.Add(scope);
     }
@@ -693,7 +859,7 @@ internal sealed class DashboardWindow : NativeForm
     private void BuildAccounts()
     {
         var page = Page("accounts"); var card = Card(page, 330); var layout = Rows(35, 50, -1, 42);
-        var titleRow = Columns(-1, 118); titleRow.Controls.Add(Title("已连接的 GitHub 账号"), 0, 0); add = ButtonFor("添加账号"); add.Name = "AddAccount"; add.Click += delegate { OpenLogin(false); }; titleRow.Controls.Add(add, 1, 0); layout.Controls.Add(titleRow, 0, 0);
+        var titleRow = Columns(-1, 118); titleRow.Controls.Add(Title("已连接的 GitHub 账号"), 0, 0); add = ButtonFor("添加账号"); add.Name = "AddAccount"; add.BackColor = Accent; add.ForeColor = Color.White; add.Click += delegate { OpenLogin(false); }; titleRow.Controls.Add(add, 1, 0); layout.Controls.Add(titleRow, 0, 0);
         accountHint = LabelFor("连接个人或工作账号。身份、额度和模型权限分别验证。", Muted); accountHint.AutoEllipsis = false; layout.Controls.Add(accountHint, 0, 1);
         accountsGrid = Grid("账号", "连接状态", "当前账户"); accountsGrid.Name = "ConnectedAccounts"; accountsGrid.Columns[0].FillWeight = 170;
         accountsGrid.CellDoubleClick += async delegate(object sender, DataGridViewCellEventArgs e) { if (e.RowIndex >= 0 && accountsGrid.Rows[e.RowIndex].Tag is NativeAccount) await SelectAccountAsync(((NativeAccount)accountsGrid.Rows[e.RowIndex].Tag).Id); };
@@ -703,6 +869,7 @@ internal sealed class DashboardWindow : NativeForm
         accountReauth.Click += delegate { OpenLogin(true); }; accountRemove.Click += async delegate { await RemoveAsync(); };
         actions.Controls.Add(accountReauth, 1, 0); actions.Controls.Add(accountRemove, 3, 0); layout.Controls.Add(actions, 0, 3); card.Controls.Add(layout);
         FitTextRow(layout, accountHint, 1, card);
+        FitContentGrid(layout, accountsGrid, 2, card);
 
         var pets = Card(page, 444); var petLayout = Rows(34, 40, 234, 58, 28); petLayout.Controls.Add(Title("选择你的桌面伙伴"), 0, 0);
         petHint = LabelFor("10 个角色，选择后立即更新桌面宠物。", Muted); petLayout.Controls.Add(petHint, 0, 1);
@@ -799,7 +966,7 @@ internal sealed class DashboardWindow : NativeForm
         if (disposed || !pages.ContainsKey(page)) return;
         currentPage = page;
         foreach (var item in pages) item.Value.Visible = item.Key == page;
-        foreach (var item in navigation) { item.Value.BackColor = item.Key == page ? Color.FromArgb(223, 233, 208) : Color.FromArgb(242, 246, 234); item.Value.ForeColor = item.Key == page ? Ink : Muted; }
+        foreach (var item in navigation) { item.Value.BackColor = item.Key == page ? Color.FromArgb(232, 242, 237) : Color.White; item.Value.ForeColor = item.Key == page ? Accent : Muted; }
         var titles = new Dictionary<string, string[]> {
             { "overview", new[] { "用量概览", "YOUR COPILOT, AT A GLANCE", "了解当前额度，找到适合下一项任务的模型。" } },
             { "models", new[] { "可用模型", "A MODEL FOR YOUR NEXT IDEA", "查看当前账号实际返回的模型目录与访问状态。" } },
@@ -855,16 +1022,19 @@ internal sealed class DashboardWindow : NativeForm
     private void UpdateControls()
     {
         if (disposed || add == null) return;
-        var ready = api != null && overview != null && overview.Enabled && !busy && loginDialog == null;
-        accounts.Enabled = ready && overview.Accounts.Count > 0; add.Enabled = ready;
+        var ready = api != null && overview != null && overview.Enabled && !busy && !AccountMutationPending && loginDialog == null;
+        accounts.Enabled = ready && overview.Accounts.Count > 0;
+        // The login entry remains responsive when the first overview fails or a
+        // quota refresh is running. OpenLogin explains unavailable service states.
+        add.Enabled = loginDialog == null;
         add.Text = overview != null && overview.Login != null && overview.Login.Active ? "继续登录" : overview != null && overview.Accounts.Count == 0 ? "登录 GitHub" : "添加账号";
         var selected = ready && overview.Active != null;
         accountSettings.Enabled = selected; accountReauth.Enabled = selected && !(overview.Login != null && overview.Login.Active); accountRemove.Enabled = selected;
         if (reauthenticate != null) { reauthenticate.Enabled = accountReauth.Enabled; remove.Enabled = selected; }
-        refresh.Enabled = !busy && !loading && !serviceRecoveryWorking && loginDialog == null;
+        refresh.Enabled = !busy && !loading && !AccountMutationPending && !serviceRecoveryWorking && loginDialog == null;
         refresh.Text = api == null ? serviceRecoveryWorking ? "正在重连…" : serviceRecoveryAvailable ? "重启本机服务" : "重试连接" : busy ? "同步中…" : "刷新数据";
-        bucketChoice.Enabled = !busy && !loading; accountsGrid.Enabled = ready;
-        loadMore.Enabled = !busy && !recordsLoading && recordsCursor != null && api != null;
+        bucketChoice.Enabled = !busy && !loading && !AccountMutationPending && loginDialog == null; accountsGrid.Enabled = ready;
+        loadMore.Enabled = !busy && !AccountMutationPending && loginDialog == null && !recordsLoading && recordsCursor != null && api != null;
     }
 
     private async Task<NativeOverview> ReadOverviewAsync(DesktopNativeApi client, DesktopInstance identity, int current)
@@ -960,7 +1130,7 @@ internal sealed class DashboardWindow : NativeForm
         tips.SetToolTip(accountStatus, active == null ? "请到账户页登录 GitHub。" : "当前账号：" + active.Login);
         synced.Text = "上次同步  " + NativeDisplay.Time(result.FetchedAt);
         feedback.Text = networkError != null ? "同步失败 · 当前展示上次读取的数据" : result.Refreshing ? "正在同步额度与模型权限…" : result.Stale ? "旧快照 · 等待最新数据" : "";
-        accountHint.Text = !result.Enabled ? "当前服务未启用真实账号操作。" : active == null ? "连接 GitHub 后分别验证身份、额度和模型权限。" : "当前账号：" + active.Login + "。切换账号后，额度、模型与记录同步切换。";
+        accountHint.Text = !result.Enabled ? "当前服务未启用真实账号操作。" : active == null ? "连接 GitHub 后分别验证身份、额度和模型权限。" : "切换账号后，额度、模型与记录同步切换。";
         if (active == null) ClearQuota("登录或选择一个 GitHub 账号，查看 Copilot 额度。");
         else if (active.Status != "connected") ClearQuota("当前账号需要重新验证，请在账户页重新登录。");
         else if (!result.CanDisplaySnapshot) ClearQuota(result.QuotaError ?? "尚未取得当前账户额度，请刷新。");
@@ -1020,7 +1190,7 @@ internal sealed class DashboardWindow : NativeForm
     }
 
     private void ExpandOther(bool show) { expanded = show; otherPanel.Visible = show; other.Text = (overview != null && overview.Primary == null ? "选择额度类别" : "其他额度") + (show ? " ▾" : " ▸"); }
-    private void ExpandRaw(bool show) { rawExpanded = show; rawPanel.Visible = show; raw.Text = "原始数值（单位待确认）" + (show ? " ▾" : " ▸"); }
+    private void ExpandRaw(bool show) { rawExpanded = show; rawPanel.Visible = show; raw.Text = "查看原始数据" + (show ? " ▾" : " ▸"); }
 
     private void RenderModels()
     {
@@ -1099,23 +1269,60 @@ internal sealed class DashboardWindow : NativeForm
 
     private async void OpenLogin(bool reauth)
     {
-        if (api == null || service == null || overview == null || !overview.Enabled || busy || loginDialog != null) return;
-        var identity = service; var expected = reauth ? overview.Active : null; var pending = overview.Login != null && overview.Login.Active ? overview.Login : null;
-        generation++; loading = false; timer.Stop(); AccountMutationPending = true; PublishQuotaSelection(overview.ActiveId, null, true);
+        if (disposed) return;
+        if (loginDialog != null) { loginDialog.Activate(); return; }
+        if (api == null || service == null || serviceRecoveryWorking)
+        {
+            LoginFeedback(serviceRecoveryWorking ? "本机服务正在重连，完成后请再次点击登录。" : "本机服务尚未连接。请先点击右上角“重试连接”或“重启本机服务”，再登录 GitHub。");
+            return;
+        }
+        if (overview != null && !overview.Enabled) { LoginFeedback("当前服务未启用账号登录，请连接已启用账号功能的本机服务后重试。"); return; }
+        if (AccountMutationPending) { LoginFeedback("正在更新当前账号，请等待操作完成后再添加账号。"); return; }
+        if (reauth && (overview == null || overview.Active == null)) { LoginFeedback("请先选择需要重新登录的账号。"); return; }
+        var operation = ++loginOperation;
+        var identity = service; var expected = reauth ? overview.Active : null;
+        var pending = overview != null && overview.Login != null && overview.Login.Active ? overview.Login : null;
         try
         {
+            // Supersede read/refresh UI work without waiting for quota retrieval.
+            generation++; loading = busy = false; timer.Stop(); AccountMutationPending = true;
+            PublishQuotaSelection(overview == null ? null : overview.ActiveId, null, true);
             using (var dialog = new NativeLoginDialog(identity, expected, pending))
             {
-                loginDialog = dialog; UpdateControls(); dialog.ShowDialog(this); loginDialog = null;
-                if (disposed) return;
+                loginDialog = dialog; UpdateControls(); dialog.ShowDialog(this);
+                if (disposed || operation != loginOperation) return;
+                if (Object.ReferenceEquals(loginDialog, dialog)) loginDialog = null;
                 if (service == null || !service.SameAs(identity)) { UpdateControls(); UpdatePolling(); if (CanRead) await LoadAsync(true); return; }
                 generation++; overview = null; quotaKey = quotaAccount = null; nextRefresh = DateTime.MinValue;
                 ClearAccountPresentation(dialog.Succeeded ? "登录成功，正在读取额度与模型权限…" : "正在读取当前账号…"); RenderModels();
-                await LoadAsync(true); if (!disposed && !String.IsNullOrEmpty(dialog.Feedback)) feedback.Text = dialog.Feedback;
+                await LoadAsync(true); if (!disposed && operation == loginOperation && !String.IsNullOrEmpty(dialog.Feedback)) feedback.Text = dialog.Feedback;
             }
         }
-        finally { if (!disposed) { AccountMutationPending = false; PublishQuotaSelection(overview == null ? null : overview.ActiveId, quotaKey, true); } }
-        UpdateControls(); UpdatePolling();
+        catch (Exception error)
+        {
+            if (!disposed && operation == loginOperation) LoginFeedback("无法打开登录窗口：" + NativeData.Error(error) + " 请再次点击登录重试。");
+        }
+        finally
+        {
+            // Service replacement can allow a new login while this operation's
+            // final overview read is still pending. Only its owner may release it.
+            if (operation == loginOperation)
+            {
+                loginDialog = null;
+                if (!disposed)
+                {
+                    AccountMutationPending = false;
+                    UpdateControls(); UpdatePolling();
+                    PublishQuotaSelection(overview == null ? null : overview.ActiveId, quotaKey, true);
+                }
+            }
+        }
+    }
+
+    private void LoginFeedback(string message)
+    {
+        accountHint.Text = feedback.Text = message;
+        tips.SetToolTip(accountHint, message); tips.SetToolTip(feedback, message);
     }
 
     private void ShowQuotaDetails()

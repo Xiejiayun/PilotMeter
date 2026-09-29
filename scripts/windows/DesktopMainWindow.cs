@@ -230,9 +230,9 @@ internal sealed class NativeOverview
 
 internal abstract class NativeForm : Form
 {
-    protected static readonly Color Ink = Color.FromArgb(47, 67, 45);
-    protected static readonly Color Muted = Color.FromArgb(111, 129, 100);
-    protected static readonly Color Accent = Color.FromArgb(79, 113, 75);
+    protected static readonly Color Ink = Color.FromArgb(30, 42, 48);
+    protected static readonly Color Muted = Color.FromArgb(103, 117, 125);
+    protected static readonly Color Accent = Color.FromArgb(31, 111, 87);
     private readonly List<Font> fonts = new List<Font>();
 
     protected NativeForm()
@@ -244,16 +244,16 @@ internal abstract class NativeForm : Form
         AutoScaleDimensions = new SizeF(96, 96);
         Font = Typeface(9.5F, FontStyle.Regular);
         ForeColor = Ink;
-        BackColor = Color.FromArgb(249, 250, 244);
+        BackColor = Color.FromArgb(245, 247, 249);
         ShowInTaskbar = true;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
     }
 
-    protected Font Typeface(float size, FontStyle style)
+    protected Font Typeface(float size, FontStyle style, string family = "Microsoft YaHei UI")
     {
-        var font = new Font("Microsoft YaHei UI", size, style);
+        var font = new Font(family, size, style);
         fonts.Add(font);
         return font;
     }
@@ -265,9 +265,9 @@ internal abstract class NativeForm : Form
 
     protected static Button ButtonFor(string value)
     {
-        var button = new Button { Text = value, AutoSize = false, Dock = DockStyle.Fill, FlatStyle = FlatStyle.Flat, BackColor = Color.White, Cursor = Cursors.Hand, Margin = Padding.Empty, UseVisualStyleBackColor = false };
-        button.FlatAppearance.BorderColor = Color.FromArgb(218, 226, 209);
-        button.FlatAppearance.MouseOverBackColor = Color.FromArgb(237, 243, 229);
+        var button = new NativeActionButton { Text = value, AutoSize = false, Dock = DockStyle.Fill, FlatStyle = FlatStyle.Flat, BackColor = Color.White, Cursor = Cursors.Hand, Margin = Padding.Empty, UseVisualStyleBackColor = false };
+        button.FlatAppearance.BorderColor = Color.FromArgb(220, 226, 230);
+        button.FlatAppearance.MouseOverBackColor = Color.FromArgb(237, 244, 241);
         return button;
     }
 
@@ -307,38 +307,39 @@ internal sealed class NativeLoginDialog : NativeForm
         var scroll = new Panel { Name = "LoginInstructions", Dock = DockStyle.Fill, AutoScroll = true, Margin = Padding.Empty };
         var body = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 12, Margin = Padding.Empty, Padding = new Padding(0, 0, 12, 8) };
         body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        foreach (var height in new[] { 36, 46, 28, 38, 44, 60, 40, 24, 26, 30, 30 }) body.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
-        body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        foreach (var height in new[] { 36, 46, 48, 28, 38, 44, 60, 40, 24, 26, 30, 30 }) body.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
         var title = LabelFor(pending != null ? "继续 GitHub 登录" : expected == null ? "连接 GitHub 账号" : "重新登录 @" + expected.Login, Ink); title.Font = Typeface(15F, FontStyle.Bold);
         body.Controls.Add(title, 0, 0);
         var intro = LabelFor(pending != null ? "继续之前发起的授权，请确认网页上是你要连接的账号。\n如需更换账号，请取消后重新开始。" : expected == null ? "用 GitHub 设备码连接个人或工作账号。\n密码只需在 GitHub 网站输入。" : "请在 GitHub 网页确认当前账号为 @" + expected.Login + "，再授权。", Muted);
         intro.AutoEllipsis = false; intro.AutoSize = true; intro.MinimumSize = new Size(0, 46);
         body.RowStyles[1].SizeType = SizeType.AutoSize; body.Controls.Add(intro, 0, 1);
-        body.Controls.Add(LabelFor("1. 获取验证码 · 登录网站通常无需更改", Ink), 0, 2);
+        // Keep progress and failure reasons near the top, including in a short
+        // window. Users should not have to scroll past an empty code to retry.
+        status = LabelFor("点击“获取验证码”开始登录。", Ink); status.Name = "GitHubLoginStatus";
+        status.AutoEllipsis = false; status.AutoSize = true; status.MinimumSize = new Size(0, 48); status.TextAlign = ContentAlignment.TopLeft;
+        status.Padding = new Padding(0, 6, 0, 8); body.RowStyles[2].SizeType = SizeType.AutoSize; body.Controls.Add(status, 0, 2);
+        body.Controls.Add(LabelFor("1. 获取验证码 · 登录网站通常无需更改", Ink), 0, 3);
         var hostRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty };
         hostRow.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         hostRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); hostRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 10)); hostRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 108));
         host = new TextBox { Name = "GitHubHost", AccessibleName = "GitHub 登录主机", Text = pending != null ? pending.Host : expected != null ? expected.Host : "https://github.com", Dock = DockStyle.Fill, Margin = new Padding(0, 5, 0, 0), ReadOnly = expected != null || pending != null };
         start = ButtonFor("获取验证码"); start.Name = "StartDeviceLogin";
-        hostRow.Controls.Add(host, 0, 0); hostRow.Controls.Add(start, 2, 0); body.Controls.Add(hostRow, 0, 3);
-        body.Controls.Add(LabelFor("2. 复制下方验证码，在 GitHub 授权页粘贴并确认", Ink), 0, 4);
+        hostRow.Controls.Add(host, 0, 0); hostRow.Controls.Add(start, 2, 0); body.Controls.Add(hostRow, 0, 4);
+        body.Controls.Add(LabelFor("2. 复制下方验证码，在 GitHub 授权页粘贴并确认", Ink), 0, 5);
         code = new TextBox { Name = "GitHubDeviceCode", AccessibleName = "GitHub 设备验证码", ReadOnly = true, TextAlign = HorizontalAlignment.Center, Dock = DockStyle.Fill, BorderStyle = BorderStyle.FixedSingle, BackColor = Color.White, Margin = new Padding(0, 5, 0, 5), Font = Typeface(23F, FontStyle.Bold), TabStop = true };
-        body.Controls.Add(code, 0, 5);
+        body.Controls.Add(code, 0, 6);
         var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty };
         actions.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 102)); actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 10)); actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         copy = ButtonFor("仅复制"); copy.Name = "CopyGitHubDeviceCode";
         open = ButtonFor("复制并打开 GitHub"); open.Name = "OpenGitHubDevicePage"; open.BackColor = Accent; open.ForeColor = Color.White;
-        actions.Controls.Add(copy, 0, 0); actions.Controls.Add(open, 2, 0); body.Controls.Add(actions, 0, 6);
+        actions.Controls.Add(copy, 0, 0); actions.Controls.Add(open, 2, 0); body.Controls.Add(actions, 0, 7);
         copyFeedback = LabelFor("", Muted); copyFeedback.Name = "CopyDeviceCodeFeedback"; copyFeedback.AutoEllipsis = false;
-        copyFeedback.AutoSize = true; copyFeedback.MinimumSize = new Size(0, 24); body.RowStyles[7].SizeType = SizeType.AutoSize; body.Controls.Add(copyFeedback, 0, 7);
-        expiry = LabelFor("", Muted); expiry.Name = "DeviceCodeExpiry"; body.Controls.Add(expiry, 0, 8);
+        copyFeedback.AutoSize = true; copyFeedback.MinimumSize = new Size(0, 24); body.RowStyles[8].SizeType = SizeType.AutoSize; body.Controls.Add(copyFeedback, 0, 8);
+        expiry = LabelFor("", Muted); expiry.Name = "DeviceCodeExpiry"; body.Controls.Add(expiry, 0, 9);
         address = new TextBox { Name = "GitHubDeviceAddress", AccessibleName = "GitHub 授权网址，可手动复制", ReadOnly = true, Dock = DockStyle.Fill, BorderStyle = BorderStyle.None, BackColor = BackColor, ForeColor = Muted, Margin = new Padding(0, 6, 0, 0) };
-        body.Controls.Add(address, 0, 9);
-        body.Controls.Add(LabelFor("3. 授权后回到这里，账号会自动连接", Ink), 0, 10);
-        status = LabelFor("点击“获取验证码”开始登录。", Muted); status.Name = "GitHubLoginStatus";
-        status.AutoEllipsis = false; status.AutoSize = true; status.MinimumSize = new Size(0, 48); status.TextAlign = ContentAlignment.TopLeft;
-        status.Padding = new Padding(0, 6, 0, 8); body.Controls.Add(status, 0, 11);
+        body.Controls.Add(address, 0, 10);
+        body.Controls.Add(LabelFor("3. 授权后回到这里，账号会自动连接", Ink), 0, 11);
         body.SizeChanged += delegate {
             var maximum = new Size(Math.Max(1, body.ClientSize.Width - body.Padding.Horizontal), 0);
             status.MaximumSize = intro.MaximumSize = copyFeedback.MaximumSize = maximum;
@@ -367,6 +368,7 @@ internal sealed class NativeLoginDialog : NativeForm
             var area = Screen.FromControl(this).WorkingArea;
             MinimumSize = new Size(Math.Min(MinimumSize.Width, area.Width), Math.Min(MinimumSize.Height, area.Height));
             Size = new Size(Math.Min(Width, area.Width), Math.Min(Height, area.Height));
+            Location = new Point(Math.Max(area.Left, Math.Min(Left, area.Right - Width)), Math.Max(area.Top, Math.Min(Top, area.Bottom - Height)));
             Render(); if (login != null && login.Active) timer.Start();
         };
         FormClosing += OnClosing;
