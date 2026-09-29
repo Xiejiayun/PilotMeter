@@ -104,7 +104,7 @@ internal sealed class NativeAccount
 
 internal sealed class NativeBucket
 {
-    internal string Key, Label, Value, Detail, NextResetAt, Unit, UnitLabel, UsageSource;
+    internal string Key, Label, Value, Detail, NextResetAt, Unit, UnitLabel, UsageSource, ProviderUpdatedAt;
     internal string Used, Limit, Remaining, Overage, RemainingSource, UsedPercentageText, RemainingPercentageText, RawUsed, RawLimit, RawRemainingPercentage;
     internal double? Percentage, RemainingPercentage;
     internal bool Unlimited;
@@ -116,6 +116,7 @@ internal sealed class NativeBucket
             Key = NativeData.Text(source, "key", 160), Label = NativeData.Clean(NativeData.Text(source, "label", 160), 80),
             Value = NativeData.Clean(NativeData.Text(source, "value", 600), 600), Detail = NativeData.Clean(NativeData.Text(source, "detail", 600), 600),
             NextResetAt = NativeData.Text(source, "nextResetAt", 80, true),
+            ProviderUpdatedAt = NativeData.Text(source, "providerUpdatedAt", 80, true),
             Unit = NativeData.Text(source, "unit", 32), UnitLabel = NativeData.Clean(NativeData.Text(source, "unitLabel", 80), 80), Unlimited = NativeData.Flag(source, "unlimited")
         };
         object usageSource;
@@ -171,7 +172,7 @@ internal sealed class NativeOverview
 {
     internal readonly List<NativeAccount> Accounts = new List<NativeAccount>();
     internal readonly List<NativeBucket> Buckets = new List<NativeBucket>();
-    internal string ActiveId, Selection, FetchedAt, QuotaError;
+    internal string ActiveId, Selection, FetchedAt, ProviderUpdatedAt, QuotaError;
     internal bool Enabled, Refreshing, Stale, QuotaAvailable, QuotaHasSnapshot;
     internal NativeBucket Primary;
     internal NativeLogin Login;
@@ -216,6 +217,7 @@ internal sealed class NativeOverview
         if (!new HashSet<string>(new[] { "premium", "single-finite", "explicit", "required", "none" }).Contains(result.Selection))
             throw new InvalidDataException("额度类别暂时无法读取。");
         result.FetchedAt = NativeData.Text(presentation, "fetchedAt", 80, true);
+        result.ProviderUpdatedAt = NativeData.Text(presentation, "providerUpdatedAt", 80, true);
         result.Stale = NativeData.Flag(presentation, "stale") || NativeData.Flag(quota, "stale");
         foreach (var bucket in NativeData.Rows(presentation, "buckets", 64)) result.Buckets.Add(NativeBucket.Read(bucket));
         var primary = NativeData.Map(presentation, "primary");
@@ -224,6 +226,21 @@ internal sealed class NativeOverview
             result.Primary = NativeBucket.Read(primary);
             if (!result.Buckets.Exists(delegate(NativeBucket bucket) { return bucket.Key == result.Primary.Key; })) throw new InvalidDataException("额度类别已更换，请刷新。");
         }
+        var now = DateTimeOffset.UtcNow;
+        var fetched = NativeData.Date(result.FetchedAt);
+        var provider = NativeData.Date(result.ProviderUpdatedAt);
+        if (!provider.HasValue || !fetched.HasValue || provider.Value > fetched.Value || provider.Value > now)
+        {
+            result.ProviderUpdatedAt = null; provider = null;
+        }
+        result.Stale = result.Stale || !provider.HasValue || now - provider.Value > TimeSpan.FromMinutes(5)
+            || !fetched.HasValue || fetched.Value > now || now - fetched.Value > TimeSpan.FromMinutes(5);
+        foreach (var bucket in result.Buckets)
+        {
+            var time = NativeData.Date(bucket.ProviderUpdatedAt);
+            if (!time.HasValue || !fetched.HasValue || time.Value > fetched.Value || time.Value > now) bucket.ProviderUpdatedAt = null;
+        }
+        if (result.Primary != null) result.Primary.ProviderUpdatedAt = result.ProviderUpdatedAt;
         result.Models = NativeModels.Read(NativeData.Map(source, "models"), result.ActiveId);
         result.Local = NativeLocalUsage.Read(NativeData.Map(source, "local"), result.ActiveId);
         return result;

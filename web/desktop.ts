@@ -62,6 +62,10 @@ function feedback(text: string, error = false): void {
   const node = element('feedback'); node.textContent = text; node.hidden = !text; node.dataset.state = error ? 'error' : 'success';
 }
 
+function quotaTimes(view: { providerUpdatedAt: string | null; fetchedAt: string | null }): string {
+  return `${view.providerUpdatedAt ? `数据时间 ${timestamp(view.providerUpdatedAt, true)}` : '来源时间未知'}${view.fetchedAt ? ` · 读取于 ${timestamp(view.fetchedAt, true)}` : ''}`;
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const operationEpoch = epoch();
   const operationInstance = instanceId();
@@ -173,7 +177,7 @@ function renderHeader(): void {
   element('service-dot').classList.toggle('online', !!desktop && service?.connected !== false);
   element('app-version').textContent = desktop && !demo ? desktop.version.replace('0.1.0-', '') : '';
   element('page-meta').textContent = page === 'records' && month() ? `本机记录 · ${month().replace('-', ' / ')}（UTC）` : '';
-  element('last-sync').textContent = desktop?.presentation.fetchedAt ? `${desktop.presentation.stale ? '旧快照' : '额度同步于'} ${timestamp(desktop.presentation.fetchedAt, true)}` : 'PilotMeter · 数据保存在本机';
+  element('last-sync').textContent = desktop?.presentation.fetchedAt ? quotaTimes(desktop.presentation) : 'PilotMeter · 数据保存在本机';
   const modelCount = desktop?.models?.items.filter(model => model.status === 'available').length ?? 0;
   element('nav-model-count').hidden = !modelCount;
   element('nav-model-count').textContent = String(modelCount);
@@ -187,17 +191,18 @@ function metric(label: string, value: string, note: string, className = ''): str
 
 function quotaCard(bucket: PersonalQuotaBucketView, details: string): string {
   const stale = desktop!.presentation.stale;
+  const state = !bucket.providerUpdatedAt ? '来源时间未知' : stale ? '数据较旧' : '数据已读取';
   const used = bucket.used ?? bucket.raw.used;
   const total = bucket.limit ?? bucket.raw.limit;
   const remaining = bucket.remaining !== null ? amount(bucket.remaining) : bucket.remainingPercentage !== null ? `${bucket.remainingPercentage}%` : bucket.unlimited ? '无固定上限' : '—';
   const remainingLabel = bucket.remaining !== null ? '剩余额度' : bucket.unlimited ? '额度状态' : '剩余比例';
   const unit = bucket.unit === 'unspecified' ? '额度数值 · 单位待确认' : bucket.unitLabel;
   const remainingNote = bucket.remainingSource === 'calculated' ? '按总额减已用计算' : bucket.remainingPercentage !== null ? 'GitHub 返回比例，可能已舍入' : bucket.unlimited ? '此类别不设固定额度' : 'GitHub 尚未提供';
-  return `<article class="card quota-card" aria-label="${escape(bucket.label)}额度"><div class="quota-card-heading"><div><div class="quota-card-title"><h2>${escape(bucket.label)}</h2><span class="quota-unit">${bucket.unit === 'unspecified' ? icon('info') : ''}${escape(unit)}</span></div><p class="quota-card-subtitle">@${escape(currentProfile()?.login ?? '')} · ${escape(hostName(currentProfile()?.host ?? ''))}</p></div><span class="source-badge">${icon(stale ? 'clock' : 'check')}${stale ? '旧快照' : '已同步'}</span></div><div class="quota-metrics">${metric('已用额度', amount(used), bucket.usageSource === 'remaining' ? '按总额减剩余量计算' : 'GitHub 返回值，精度依上游', 'used')}${metric('总额度', bucket.unlimited ? '无固定上限' : amount(total), bucket.unlimited ? '不代表所有模型都可用' : bucket.unit === 'unspecified' ? '未换算为次数或点数' : bucket.unitLabel)}${metric(remainingLabel, remaining, remainingNote, 'remaining')}</div>${bucket.percentage !== null ? `<progress class="quota-progress" max="100" value="${bucket.percentage}" aria-label="${escape(bucket.label)}已用比例" aria-valuetext="${escape(bucket.usedPercentage)}%"></progress>` : ''}<div class="quota-progress-label"><span>${bucket.usedPercentage !== null ? `已使用 <strong>${escape(bucket.usedPercentage)}%</strong>` : escape(bucket.unlimited ? '无固定上限' : '使用比例待确认')}</span><span>${bucket.nextResetAt ? `${escape(timestamp(bucket.nextResetAt, true))} 重置` : '重置时间待确认'}</span></div>${details}</article>`;
+  return `<article class="card quota-card" aria-label="${escape(bucket.label)}额度"><div class="quota-card-heading"><div><div class="quota-card-title"><h2>${escape(bucket.label)}</h2><span class="quota-unit">${bucket.unit === 'unspecified' ? icon('info') : ''}${escape(unit)}</span></div><p class="quota-card-subtitle">@${escape(currentProfile()?.login ?? '')} · ${escape(hostName(currentProfile()?.host ?? ''))}</p></div><span class="source-badge">${icon(stale ? 'clock' : 'check')}${state}</span></div><div class="quota-metrics">${metric('已用额度', amount(used), bucket.usageSource === 'remaining' ? '按总额减剩余量计算' : 'GitHub 返回值，精度依上游', 'used')}${metric('总额度', bucket.unlimited ? '无固定上限' : amount(total), bucket.unlimited ? '不代表所有模型都可用' : bucket.unit === 'unspecified' ? '未换算为次数或点数' : bucket.unitLabel)}${metric(remainingLabel, remaining, remainingNote, 'remaining')}</div>${bucket.percentage !== null ? `<progress class="quota-progress" max="100" value="${bucket.percentage}" aria-label="${escape(bucket.label)}已用比例" aria-valuetext="${escape(bucket.usedPercentage)}%"></progress>` : ''}<div class="quota-progress-label"><span>${bucket.usedPercentage !== null ? `已使用 <strong>${escape(bucket.usedPercentage)}%</strong>` : escape(bucket.unlimited ? '无固定上限' : '使用比例待确认')}</span><span>${bucket.nextResetAt ? `${escape(timestamp(bucket.nextResetAt, true))} 重置` : '重置时间待确认'}</span></div>${details}</article>`;
 }
 
 function otherQuota(bucket: PersonalQuotaBucketView): string {
-  return `<article class="other-quota"><h3>${escape(bucket.label)}</h3><div class="other-quota-value">${bucket.unlimited ? '无固定上限' : `${escape(amount(bucket.used ?? bucket.raw.used))} / ${escape(amount(bucket.limit ?? bucket.raw.limit))}`}</div><p>${bucket.unlimited ? '' : '已用 / 总额 · '}${escape(bucket.unitLabel)}</p><p>${escape(bucket.detail)}</p></article>`;
+  return `<article class="other-quota"><h3>${escape(bucket.label)}</h3><div class="other-quota-value">${bucket.unlimited ? '无固定上限' : `${escape(amount(bucket.used ?? bucket.raw.used))} / ${escape(amount(bucket.limit ?? bucket.raw.limit))}`}</div><p>${bucket.unlimited ? '' : '已用 / 总额 · '}${escape(bucket.unitLabel)}</p><p>${escape(bucket.detail)}</p><p>${escape(quotaTimes({ providerUpdatedAt: bucket.providerUpdatedAt, fetchedAt: desktop?.presentation.fetchedAt ?? null }))}</p></article>`;
 }
 
 function renderQuota(): void {
@@ -210,7 +215,7 @@ function renderQuota(): void {
   let choice = '';
   if (view.selection === 'required' || view.selection === 'explicit') choice = `<label class="category-choice">额度类别<select id="quota-category"><option value="">选择一个类别</option>${view.buckets.map(bucket => `<option value="${escape(bucket.key)}"${view.primary?.key === bucket.key ? ' selected' : ''}>${escape(bucket.label)}</option>`).join('')}</select></label>`;
   const detailsOpen = container.querySelector<HTMLDetailsElement>('#quota-explanation')?.open ?? false;
-  const details = `<details class="quota-details${view.primary ? ' quota-details-inline' : ''}" id="quota-explanation"${detailsOpen ? ' open' : ''}><summary><span>${view.stale ? '旧快照 · ' : ''}${view.fetchedAt ? '同步于 ' + escape(timestamp(view.fetchedAt, true)) : '各类别独立计量'}</span><span>额度说明${view.buckets.length > 1 ? '与其他类别' : ''} ${icon('chevron')}</span></summary><div class="quota-details-body"><p>${view.primary?.unit === 'unspecified' ? 'GitHub 未声明数量单位，因此已用和总额不换算成请求次数或 AI Credits。优先按总额减剩余量计算已用，缺少有效剩余量时采用额度接口返回值。' : '当前额度来自已登录 GitHub 账号的 Copilot 快照。剩余额度仅在数量单位确认后按总额减已用计算。'}</p><p>逗号是千位分隔符（66,000 表示六万六千）；显示完整数值，不额外舍入。百分比由 GitHub 返回，可能已舍入，不能用于反算精确已用量。各类别独立计量，本机采集记录不会加进账号额度。</p>${desktop.quota?.error ? `<p class="error-text">同步提示：${escape(desktop.quota.error.message)}</p>` : ''}<div class="other-quotas">${view.buckets.filter(bucket => bucket.key !== view.primary?.key).map(otherQuota).join('')}</div></div></details>`;
+  const details = `<details class="quota-details${view.primary ? ' quota-details-inline' : ''}" id="quota-explanation"${detailsOpen ? ' open' : ''}><summary><span>${view.stale && view.providerUpdatedAt ? '数据较旧 · ' : ''}${escape(quotaTimes(view))}</span><span>额度说明${view.buckets.length > 1 ? '与其他类别' : ''} ${icon('chevron')}</span></summary><div class="quota-details-body"><p>${view.primary?.unit === 'unspecified' ? 'GitHub 未声明数量单位，因此已用和总额不换算成请求次数或 AI Credits。优先按总额减剩余量计算已用，缺少精确数量时显示未知，不从百分比反推已用量。' : '当前额度来自已登录 GitHub 账号的 Copilot 快照。剩余额度仅在数量单位确认后按总额减已用计算。'}</p><p>逗号是千位分隔符（66,000 表示六万六千）；显示完整数值，不额外舍入。百分比由 GitHub 返回，可能已舍入，不能用于反算精确已用量。各类别独立计量，本机采集记录不会加进账号额度。</p>${desktop.quota?.error ? `<p class="error-text">同步提示：${escape(desktop.quota.error.message)}</p>` : ''}<div class="other-quotas">${view.buckets.filter(bucket => bucket.key !== view.primary?.key).map(otherQuota).join('')}</div></div></details>`;
   const primary = view.primary ? quotaCard(view.primary, details) : `<div class="card">${emptyState(view.selection === 'required' ? '选择你要查看的额度' : view.buckets.length ? '各类别均无固定上限' : desktop.refreshing ? '正在同步 Copilot 额度' : '还没有取得额度快照', view.selection === 'required' ? '不同类别独立计量，请从上方选择；不会将它们相加。' : view.buckets.length ? '展开下方说明，查看各类别的具体信息。' : desktop.quota?.error?.message ?? '点击同步重新获取。未知额度不代表没有消耗。', !view.buckets.length && !desktop.refreshing ? `<button type="button" class="button button-secondary" data-action="refresh">${icon('refresh')}同步额度</button>` : '', false, 'activity')}</div>`;
   container.innerHTML = `${choice}${primary}${view.primary ? '' : details}`;
 }
@@ -413,7 +418,10 @@ async function loadDesktop(): Promise<void> {
     } else if (refreshRequested && !value.refreshing) {
       refreshRequested = null;
       const failure = value.quota?.error ?? value.models?.error;
-      feedback(failure ? `同步未完成：${failure.message}` : value.presentation.fetchedAt ? '已读取 GitHub 返回的额度和模型快照。GitHub 用量可能延迟更新。' : '尚未取得额度。可以稍后重试，或在账户页重新登录。', !!failure);
+      feedback(failure ? `同步未完成：${failure.message}` : !value.presentation.fetchedAt ? '尚未取得额度。可以稍后重试，或在账户页重新登录。'
+        : !value.presentation.providerUpdatedAt ? '已完成读取，但额度来源时间未知，无法确认数据是否最新。'
+          : value.presentation.stale ? `已完成读取，但 GitHub 数据较旧。${quotaTimes(value.presentation)}。`
+            : '已读取 GitHub 返回的额度和模型快照。GitHub 用量可能延迟更新。', !!failure);
     }
     if (!demo && value.refreshing) refreshTimer = window.setTimeout(() => { if (!busy()) void loadDesktop(); }, 1500);
   } catch (error) {
@@ -433,7 +441,7 @@ async function changeAccount(accountId: string | null): Promise<void> {
   try {
     release = await acquire();
     viewGeneration++; resetRecords(); quotaKey = null;
-    if (desktop) { desktop = { ...desktop, activeAccountId: accountId, presentation: { selection: 'none', primary: null, buckets: [], fetchedAt: null, stale: true }, quota: null, models: null }; render(); element('local-summary').innerHTML = emptyState('正在切换账号', '本机记录将随账号更新。', '', true, 'terminal'); renderRecords(); }
+    if (desktop) { desktop = { ...desktop, activeAccountId: accountId, presentation: { selection: 'none', primary: null, buckets: [], fetchedAt: null, providerUpdatedAt: null, stale: true }, quota: null, models: null }; render(); element('local-summary').innerHTML = emptyState('正在切换账号', '本机记录将随账号更新。', '', true, 'terminal'); renderRecords(); }
     feedback('正在切换账号…');
     await mutate('/api/auth/select', 'POST', { accountId });
     if (currentEpoch !== epoch()) return;

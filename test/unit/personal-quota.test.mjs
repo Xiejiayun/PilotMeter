@@ -7,7 +7,7 @@ const now = '2026-09-20T10:00:00.000Z';
 const fetchedAt = '2026-09-20T09:59:00.000Z';
 const next = '2026-10-01T00:00:00.000Z';
 const bucket = (key = 'premium_interactions', changes = {}) => ({ key, label: 'untrusted upstream label', unit: 'unspecified',
-  used: '25', limit: '100', remainingPercentage: '75', usedPercentage: '25', unlimited: false, resetAt: next, ...changes });
+  used: '25', limit: '100', remainingPercentage: '75', usedPercentage: '25', unlimited: false, resetAt: next, providerUpdatedAt: fetchedAt, ...changes });
 const quota = (buckets = [bucket()], changes = {}) => ({ accountId: 'synthetic-profile', scope: 'signed-in-user', state: 'available',
   fetchedAt, stale: false, error: null, buckets, ...changes });
 
@@ -172,6 +172,35 @@ test('invalid and future snapshots stay absent; retained stale and failed snapsh
   assert.equal(projectPersonalQuota(quota([bucket()], { stale: true }), now).stale, true);
   const failed = projectPersonalQuota(quota([bucket()], { state: 'error', error: { code: 'private-code', message: 'private-diagnostic' } }), now);
   assert.equal(failed.stale, true); assert.equal(failed.primary.value, '25%'); assert.doesNotMatch(JSON.stringify(failed), /private/);
+});
+
+test('provider freshness is independent of the local read time and rejects untrusted source dates', () => {
+  const fresh = projectPersonalQuota(quota([bucket()], { fetchedAt: now }), now);
+  assert.equal(fresh.providerUpdatedAt, fetchedAt); assert.equal(fresh.fetchedAt, now); assert.equal(fresh.stale, false);
+  const old = '2026-09-20T09:20:00.000Z';
+  const stale = projectPersonalQuota(quota([bucket('premium_interactions', { providerUpdatedAt: old })], { fetchedAt: now }), now);
+  assert.equal(stale.providerUpdatedAt, old); assert.equal(stale.fetchedAt, now); assert.equal(stale.stale, true);
+  assert.equal(stale.primary.raw.used, '25');
+  for (const providerUpdatedAt of [undefined, null, 'not-a-time', '2026-02-30T00:00:00.000Z', next, '2026-09-20T09:59:30.000Z']) {
+    const result = projectPersonalQuota(quota([bucket('premium_interactions', { providerUpdatedAt })]), now);
+    assert.equal(result.providerUpdatedAt, null); assert.equal(result.primary.providerUpdatedAt, null); assert.equal(result.stale, true);
+    assert.equal(result.fetchedAt, fetchedAt); assert.equal(result.primary.raw.used, '25');
+  }
+});
+
+test('freshness follows the selected bucket while unselected summaries use the oldest or unknown source time', () => {
+  const old = '2026-09-20T09:20:00.000Z';
+  const buckets = [bucket('team_old', { providerUpdatedAt: old }), bucket('team_fresh')];
+  const input = quota(buckets, { fetchedAt: now });
+  const aggregate = projectPersonalQuota(input, now);
+  assert.equal(aggregate.selection, 'required'); assert.equal(aggregate.providerUpdatedAt, old); assert.equal(aggregate.stale, true);
+  const chosen = projectPersonalQuota(input, now, 'team_fresh');
+  assert.equal(chosen.providerUpdatedAt, fetchedAt); assert.equal(chosen.stale, false);
+  assert.equal(projectPersonalQuota(input, now, 'team_old').stale, true);
+  buckets[0].providerUpdatedAt = null;
+  assert.equal(projectPersonalQuota(input, now).providerUpdatedAt, null);
+  assert.equal(projectPersonalQuota(input, now).stale, true);
+  assert.equal(projectPersonalQuota(input, now, 'team_fresh').stale, false);
 });
 
 test('projection is pure and cannot copy arbitrary labels, diagnostics or profile metadata', () => {

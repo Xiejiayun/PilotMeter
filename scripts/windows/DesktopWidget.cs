@@ -228,7 +228,7 @@ internal sealed class DesktopWidget : Form
     {
         string detail = snapshot.Title + " · " + snapshot.Value + Environment.NewLine + snapshot.Detail + Environment.NewLine;
         detail += String.IsNullOrEmpty(snapshot.AccountLogin) ? "GitHub 账户尚未连接" : "GitHub: " + snapshot.AccountLogin;
-        if (!String.IsNullOrEmpty(snapshot.UpdatedAt)) detail += Environment.NewLine + "快照：" + snapshot.UpdatedAt;
+        if (!String.IsNullOrEmpty(snapshot.UpdatedAt)) detail += Environment.NewLine + "数据时间：" + snapshot.UpdatedAt;
         if (preferences.PersistenceWarning != null) detail += Environment.NewLine + preferences.PersistenceWarning;
         tooltip.SetToolTip(this, detail + Environment.NewLine + "单击打开主窗口 · 拖动移动 · 右键切换宠物和账号");
         tray.Text = Clean("PilotMeter · " + Caption(snapshot), 63);

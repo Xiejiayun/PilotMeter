@@ -15,7 +15,7 @@ const now = '2026-09-20T10:00:00.000Z';
 const fetchedAt = '2026-09-20T09:59:00.000Z';
 const identity = { id: 'synthetic-a', login: 'widget-fixture', host: 'https://github.com' };
 const bucket = (changes = {}) => ({ key: 'premium_interactions', label: 'Synthetic label', unit: 'premium-requests', used: '25', limit: '100',
-  remainingPercentage: '75', usedPercentage: '25', unlimited: false, resetAt: '2026-10-01T00:00:00.000Z', ...changes });
+  remainingPercentage: '75', usedPercentage: '25', unlimited: false, resetAt: '2026-10-01T00:00:00.000Z', providerUpdatedAt: fetchedAt, ...changes });
 const quota = (changes = {}) => ({ accountId: identity.id, state: 'available', scope: 'signed-in-user', fetchedAt, stale: false, error: null, buckets: [bucket()], ...changes });
 const overview = (changes = {}) => ({ accounts: [{ ...identity, status: 'connected', createdAt: fetchedAt, checkedAt: fetchedAt }],
   activeAccountId: identity.id, quota: quota(), login: null, refreshing: false, enabled: true, runCommand: 'synthetic-private-path', ...changes });
@@ -106,13 +106,22 @@ test('a sole finite category is named, while all unlimited categories have no ar
 
 test('stale and failed snapshots expose their condition without forwarding raw diagnostics', () => {
   const stale = buildWidget(summary(), overview({ quota: quota({ stale: true }) }));
-  assert.equal(stale.state, 'waiting'); assert.match(stale.detail, /旧快照/); assert.equal(stale.updatedAt, fetchedAt);
+  assert.equal(stale.state, 'waiting'); assert.match(stale.detail, /数据较旧/); assert.equal(stale.updatedAt, fetchedAt);
   const failed = buildWidget(summary(), overview({ quota: quota({ state: 'error', stale: true,
     error: { code: 'synthetic-private-code', message: 'synthetic-private-path-and-token' } }) }));
   assert.equal(failed.state, 'error'); assert.match(failed.detail, /同步失败.*旧快照/); assert.equal(failed.value, '75 剩余');
   assert.doesNotMatch(JSON.stringify(failed), /synthetic-private/);
   const refreshing = buildWidget(summary(), overview({ refreshing: true }));
   assert.equal(refreshing.state, 'waiting'); assert.match(refreshing.detail, /正在同步/);
+});
+
+test('widget source timestamps cannot be made current by reading an old snapshot again', () => {
+  const old = '2026-09-20T09:20:00.000Z';
+  const stale = buildWidget(summary(), overview({ quota: quota({ fetchedAt: now, buckets: [bucket({ providerUpdatedAt: old })] }) }));
+  assert.equal(stale.state, 'waiting'); assert.match(stale.detail, /数据较旧/); assert.equal(stale.updatedAt, old);
+  assert.equal(stale.percentage, null); bounded(stale);
+  const unknown = buildWidget(summary(), overview({ quota: quota({ fetchedAt: now, buckets: [bucket({ providerUpdatedAt: null })] }) }));
+  assert.equal(unknown.state, 'waiting'); assert.match(unknown.detail, /来源时间未知/); assert.equal(unknown.updatedAt, ''); bounded(unknown);
 });
 
 test('unlimited, zero limits and overage never become misleading progress ratios', () => {

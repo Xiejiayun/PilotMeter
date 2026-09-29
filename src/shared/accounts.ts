@@ -17,6 +17,8 @@ export interface AccountQuotaBucket {
   used: string | null;
   /** Missing on older snapshots. Quantities from the quota RPC may use rounded percentages. */
   usageSource?: 'remaining' | 'quota-rpc';
+  /** Provider quota snapshot time, independent of the local request completion time. */
+  providerUpdatedAt?: string | null;
   limit: string | null;
   remainingPercentage: string | null;
   usedPercentage: string | null;

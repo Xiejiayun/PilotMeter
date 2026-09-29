@@ -101,9 +101,9 @@ export function initializeAccounts(options: AccountUI): { load: () => Promise<Ac
     const personal = projectPersonalQuota(quota, Date.now(), quotaChoices.get(profile.id));
     const status = profile.status === 'reauth-required' ? '登录已失效，请重新登录后同步额度。'
       : quota?.state === 'error' || quota?.error || profile.status === 'error' ? '同步失败；请重试。'
-        : overview.refreshing ? '正在同步…' : personal.stale && personal.buckets.length ? '待同步'
-          : personal.buckets.length ? '已同步' : '尚未取得此账号的 Copilot 额度；用量未知，不代表零消耗。';
-    text('quota-status', `${personal.stale && personal.buckets.length ? '旧快照 · ' : ''}${status}${personal.fetchedAt ? ` · ${time(personal.fetchedAt)}` : ''}`);
+        : overview.refreshing ? '正在同步…' : personal.buckets.length ? !personal.providerUpdatedAt ? '来源时间未知' : personal.stale ? '数据较旧' : '数据已读取'
+          : '尚未取得此账号的 Copilot 额度；用量未知，不代表零消耗。';
+    text('quota-status', `${status}${personal.providerUpdatedAt ? ` · 数据时间 ${time(personal.providerUpdatedAt)}` : ''}${personal.fetchedAt ? ` · 读取于 ${time(personal.fetchedAt)}` : ''}`);
     if (personal.selection === 'required' || personal.selection === 'explicit') {
       const field = node('label', 'quota-choice', '查看额度类别');
       const choice = node('select', ''); choice.id = 'quota-category';

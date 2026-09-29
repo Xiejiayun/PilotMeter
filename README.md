@@ -2,7 +2,7 @@
 
 GitHub Copilot CLI 本地用量监控工具：10 个可选桌面宠物、HTML + Tailwind CSS 的独立 Windows 工作台、账户额度与模型清单、终端状态提示和可选原生状态栏。Node.js + SQLite，无独立云服务，无 Electron。
 
-**当前为 `0.1.0-preview.15` 预览版，尚未公开发布 npm。** 支持多账号登录和读取当前用户的 Copilot 额度。本机采集默认保存原始 nano AIU，组织账单对账仍需核验；真实订阅、`/usage` 和官方页面对账是独立发布门槛，合成测试不能替代。
+**当前为 `0.1.0-preview.16` 预览版，尚未公开发布 npm。** 支持多账号登录和读取当前用户的 Copilot 额度。本机采集默认保存原始 nano AIU，组织账单对账仍需核验；真实订阅、`/usage` 和官方页面对账是独立发布门槛，合成测试不能替代。
 
 ## 安装与开始使用
 
@@ -10,19 +10,19 @@ GitHub Copilot CLI 本地用量监控工具：10 个可选桌面宠物、HTML + 
 
 ### Windows 单 EXE
 
-Windows 10/11 x64 使用单文件 `PilotMeter-0.1.0-preview.15-win-x64.exe`，无需安装 Node.js 或 npm；已发布产物见 [Releases](https://github.com/Xiejiayun/PilotMeter/releases)，源码构建方式见 [Windows EXE 指南](docs/windows-exe.md)。原生 PET 和窗口宿主使用 .NET Framework 4.8，主界面通过 Microsoft Edge WebView2 显示随包编译的 HTML 与 Tailwind CSS。需要 WebView2 Evergreen Runtime；缺少时程序显示官方安装入口和重试提示。应用不修改 PATH。
+Windows 10/11 x64 使用单文件 `PilotMeter-0.1.0-preview.16-win-x64.exe`，无需安装 Node.js 或 npm；已发布产物见 [Releases](https://github.com/Xiejiayun/PilotMeter/releases)，源码构建方式见 [Windows EXE 指南](docs/windows-exe.md)。原生 PET 和窗口宿主使用 .NET Framework 4.8，主界面通过 Microsoft Edge WebView2 显示随包编译的 HTML 与 Tailwind CSS。需要 WebView2 Evergreen Runtime；缺少时程序显示官方安装入口和重试提示。应用不修改 PATH。
 
 双击 EXE 先显示可拖动的小挂件，不打开浏览器或命令行窗口。点击挂件打开独立主窗口，关闭主窗口后挂件仍保留；右键可隐藏到托盘、调整置顶或退出桌面界面。重复双击会唤回同一数据目录的挂件。退出桌面界面不停止采集服务，停止服务仍使用 `stop`。在 PowerShell 中也能使用完整命令：
 
 ```powershell
-.\PilotMeter-0.1.0-preview.15-win-x64.exe doctor
-.\PilotMeter-0.1.0-preview.15-win-x64.exe desktop
-.\PilotMeter-0.1.0-preview.15-win-x64.exe desktop --open
-Start-Process .\PilotMeter-0.1.0-preview.15-win-x64.exe -ArgumentList 'run -- --no-auto-update' -NoNewWindow -Wait
+.\PilotMeter-0.1.0-preview.16-win-x64.exe doctor
+.\PilotMeter-0.1.0-preview.16-win-x64.exe desktop
+.\PilotMeter-0.1.0-preview.16-win-x64.exe desktop --open
+Start-Process .\PilotMeter-0.1.0-preview.16-win-x64.exe -ArgumentList 'run -- --no-auto-update' -NoNewWindow -Wait
 
 # 另一个终端或分屏
-Start-Process .\PilotMeter-0.1.0-preview.15-win-x64.exe -ArgumentList 'watch' -NoNewWindow -Wait
-.\PilotMeter-0.1.0-preview.15-win-x64.exe stop
+Start-Process .\PilotMeter-0.1.0-preview.16-win-x64.exe -ArgumentList 'watch' -NoNewWindow -Wait
+.\PilotMeter-0.1.0-preview.16-win-x64.exe stop
 ```
 
 `desktop --open` 直接打开主窗口。EXE 使用 GUI 子系统，交互式 PowerShell 可能立即返回提示符；`run` 和 `watch` 使用上方 `Start-Process -NoNewWindow -Wait` 保持终端输入归属。主窗口的账号菜单提供重新登录和移除，设备码窗口支持取消与过期重试。
@@ -45,7 +45,7 @@ npm 方式需要 Node.js **24.14+**。当前尚未公开发布 npm，可从源�
 npm ci
 npm test
 npm pack
-npm install -g ./pilotmeter-0.1.0-preview.15.tgz
+npm install -g ./pilotmeter-0.1.0-preview.16.tgz
 
 pilotmeter doctor
 pilotmeter run -- --no-auto-update
@@ -97,11 +97,11 @@ Windows npm 全局安装目录不要包含 `&`：npm 11.9.0 自身生成的 `.cm
 
 ## 官方额度与预算
 
-独立主窗口和可选网页显示所选 GitHub 用户的当前周期 Copilot 额度，直接读取官方 CLI 的只读账号接口。默认突出“高级请求”类别，聊天、代码补全等放入“其他额度”；没有高级请求时，只有唯一有限类别可以成为默认主指标，多个有限类别需明确选择，不合并数量或比例。类别名不代表计量单位：桌面工作台可展示明确标注“单位未确认”的已用数值与总额，剩余显示上游返回的比例，不能据此推断剩余 Credits；过去的重置日期不显示为下次重置。个人额度不等于组织共享账单，也不随历史月份选择变化。
+独立主窗口和可选网页显示所选 GitHub 用户的当前周期 Copilot 额度，通过官方 CLI 显式刷新账号元数据后读取额度。默认突出“高级请求”类别，聊天、代码补全等放入“其他额度”；没有高级请求时，只有唯一有限类别可以成为默认主指标，多个有限类别需明确选择，不合并数量或比例。类别名不代表计量单位：桌面工作台可展示明确标注“单位未确认”的已用数值与总额，剩余显示上游返回的比例，不能据此推断剩余 Credits；过去的重置日期不显示为下次重置。个人额度不等于组织共享账单，也不随历史月份选择变化。
 
-点击“同步”会绕过后台自动刷新的时间间隔，重新请求当前账号额度。界面上的同步时间是快照读取时间；GitHub 用量入账可能延迟，重新读取后数值不一定立即变化。
+点击“同步”会绕过后台自动刷新的时间间隔，并显式刷新当前账号的额度元数据；仅重启 CLI 或重新读取普通账号接口仍可能命中旧缓存。界面分别显示 GitHub 返回的“数据时间”和本次“读取于”时间。来源时间缺失、异常或超过 5 分钟的数据不会标为已同步；GitHub 用量入账仍可能延迟。
 
-已用数值优先按同一账号快照的总额减有效剩余量计算，保留剩余量的小数；没有有效剩余量时沿用额度接口返回值。界面会标注来源。GitHub 返回的百分比可能已经舍入，不能用它反算精确的已用数量。
+已用数值按刷新返回的同一账号快照总额减有效剩余量计算，保留剩余量的小数；不能确认精确已用量时保留未知，不混入旧额度接口的数值。界面会标注来源。GitHub 返回的百分比可能已经舍入，不能用它反算精确的已用数量。
 
 下方本机记录与账单核验保留三种显示模式：
 
@@ -113,7 +113,7 @@ Windows npm 全局安装目录不要包含 `&`：npm 11.9.0 自身生成的 `.cm
 
 个人、组织、企业使用各自端点与权限。当前仅识别明确的 `Copilot AI Credits / AI Credit / ai-credits` 组合，并标为产品部分覆盖；其他 SKU/单位保持 unsupported。空的个人报告不能代表组织或企业使用了 0。
 
-个人额度使用内置官方 CLI 的实验性只读 account RPC，不额外安装 SDK。旧账单 quota 证据导入继续独立保留；登录新账号不会继承或自动认证旧组织账单绑定。格式与真实验收步骤见[验证指南](docs/validation-guide.md)。
+个人额度使用内置官方 CLI 的实验性账号与元数据刷新 RPC，不额外安装 SDK。刷新会创建一个临时空会话，验证身份后刷新元数据并删除该临时会话；不发送模型消息，不授权工具，不读取项目配置或历史会话。旧账单 quota 证据导入继续独立保留；登录新账号不会继承或自动认证旧组织账单绑定。格式与真实验收步骤见[验证指南](docs/validation-guide.md)。
 
 对账另需显式核验该数据目录内的全部采集来源、额度池、产品范围与时间覆盖。`reconcile inspect` 从实际账本和已验证账户快照生成模板；本地金额由服务端按月初至官方数据截止时间计算，模板不能提供或改写金额。无法证明覆盖时保持“无法对账”；只含部分产品的 Billing 报告、没有官方截止时间或 legacy Premium Requests 均不与本地 nano AIU 比较。
 

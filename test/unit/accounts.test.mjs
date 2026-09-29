@@ -15,7 +15,7 @@ const quota = (used = '25', changes = {}) => ({
   selectionId: 'private-selection-not-for-browser', fetchedAt: timestamp, scope: 'user',
   snapshots: [{ type: 'chat', unit: null, billingMode: 'unknown', usedRequests: used, entitlementRequests: '100', remainingPercentage: '75',
     overage: '0', isUnlimitedEntitlement: false, usageAllowedWithExhaustedQuota: false, overageAllowedWithExhaustedQuota: false,
-    resetDate: '2026-10-01T00:00:00.000Z' }], ...changes,
+    resetDate: '2026-10-01T00:00:00.000Z', providerUpdatedAt: timestamp }], ...changes,
 });
 const models = (id = 'synthetic-model') => ({ selectionId: 'private-selection-not-for-browser', fetchedAt: timestamp,
   items: [{ id, name: 'Synthetic Model', status: 'available', reason: 'Synthetic policy enabled', policyState: 'enabled',
@@ -404,6 +404,19 @@ test('refresh failures retain only their own stale snapshot and require reauth f
   assert.ok(!JSON.stringify(manager.overview()).includes('private-path'));
 });
 
+test('a refreshed quota session with a different identity requires reauthentication and retains only prior usage', async t => {
+  const f = fixture(t); const manager = f.create(); await manager.initialize();
+  const a = await login(f, manager, 'Alice');
+  const before = structuredClone(manager.overview().quota);
+  a.client.quotaImpl = () => { throw new CopilotClientError('ACCOUNT_IDENTITY_MISMATCH', 'Synthetic refreshed session identity mismatch'); };
+  await manager.refresh(a.profile.id, { manual: true });
+  const result = manager.overview();
+  assert.equal(manager.active().status, 'reauth-required');
+  assert.equal(result.quota.accountId, a.profile.id); assert.equal(result.quota.state, 'error'); assert.equal(result.quota.stale, true);
+  assert.equal(result.quota.error.code, 'ACCOUNT_IDENTITY_MISMATCH');
+  assert.equal(result.quota.fetchedAt, before.fetchedAt); assert.deepEqual(result.quota.buckets, before.buckets);
+});
+
 test('runProfile freezes the selected identity and original home across a UI switch and refuses drift', async t => {
   const f = fixture(t); const manager = f.create(); await manager.initialize();
   const a = await login(f, manager, 'Alice'); const b = await login(f, manager, 'Bob');
@@ -668,6 +681,19 @@ test('personal quota retains derived usage and its source without replacing roun
   assert.equal(result.unit, 'unspecified');
   assert.equal(result.remainingPercentage, '96');
   assert.equal(result.usedPercentage, '4');
+});
+
+test('personal quota carries source time separately and preserves unknown amounts', () => {
+  const template = quota().snapshots[0];
+  const old = '2026-09-28T08:20:00.000Z';
+  const input = quota(null, { snapshots: [{ ...template, providerUpdatedAt: old, usedRequests: null, remainingPercentage: '96' }] });
+  const result = personalQuota('synthetic-account', input);
+  assert.equal(result.fetchedAt, timestamp); assert.equal(result.buckets[0].providerUpdatedAt, old);
+  assert.equal(result.buckets[0].used, null); assert.equal(result.buckets[0].usedPercentage, '4');
+  for (const providerUpdatedAt of [undefined, null, 'not-a-time', '2026-02-30T00:00:00.000Z', '2026-09-28T09:01:00.000Z']) {
+    const invalid = personalQuota('synthetic-account', quota('25', { snapshots: [{ ...template, providerUpdatedAt }] }));
+    assert.equal(invalid.buckets[0].providerUpdatedAt, null); assert.equal(invalid.fetchedAt, timestamp);
+  }
 });
 
 test('personal quota defaults legacy or invalid usage sources to quota RPC without copying source content', () => {

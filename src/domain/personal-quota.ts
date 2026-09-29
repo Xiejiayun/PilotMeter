@@ -30,6 +30,7 @@ export interface PersonalQuotaBucketView {
   /** Confirmed-unit quantities; unspecified-unit values remain available in raw. */
   used: string | null;
   usageSource: 'remaining' | 'quota-rpc';
+  providerUpdatedAt: string | null;
   limit: string | null;
   remaining: string | null;
   remainingSource: 'calculated' | null;
@@ -47,6 +48,8 @@ export interface PersonalQuotaProjection {
   primary: PersonalQuotaBucketView | null;
   buckets: PersonalQuotaBucketView[];
   fetchedAt: string | null;
+  /** Selected bucket's source time, or the oldest time when every bucket has one. */
+  providerUpdatedAt: string | null;
   stale: boolean;
 }
 
@@ -85,8 +88,10 @@ function projectBucket(bucket: AccountQuotaBucket, fetchedAt: number, now: numbe
       : `已用 ${used}${limit === null ? ` ${unitLabel}` : ` / ${limit} ${unitLabel}`}`;
   const detail = `${unlimited ? '无固定上限；' : ''}${quantityDetail}${usageSource === 'remaining' ? '；已用按总额减剩余量计算' : ''}${overage ? '；已超出固定额度' : !unlimited && rawLimit === '0' ? unit === 'unspecified' ? '；比例不可用' : '；固定额度为 0，比例不可用' : ''}。`;
   const reset = timestamp(bucket.resetAt);
+  const providerTime = timestamp(bucket.providerUpdatedAt);
   return {
     key: bucket.key, label: quotaBucketLabel(bucket.key), unit, unitLabel, value, detail,
+    providerUpdatedAt: providerTime !== null && providerTime <= fetchedAt && providerTime <= now ? new Date(providerTime).toISOString() : null,
     percentage: percent?.percentage ?? null, usedPercentage: percent?.exact ?? null, used, usageSource, limit, remaining, remainingSource: remaining === null ? null : 'calculated',
     remainingPercentage, overage: exceeded, raw: { used: rawUsed, limit: unlimited ? null : rawLimit, remainingPercentage: rawRemainingPercentage }, unlimited,
     nextResetAt: reset !== null && reset > now && reset > fetchedAt ? new Date(reset).toISOString() : null,
@@ -103,19 +108,27 @@ function projectBucket(bucket: AccountQuotaBucket, fetchedAt: number, now: numbe
 export function projectPersonalQuota(quota: PersonalQuota | null, now: string | number, selectedKey?: string | null): PersonalQuotaProjection {
   const current = typeof now === 'number' ? Number.isFinite(now) && Math.abs(now) <= 8.64e15 ? now : null : timestamp(now);
   const fetched = timestamp(quota?.fetchedAt);
-  const empty: PersonalQuotaProjection = { selection: 'none', primary: null, buckets: [], fetchedAt: null, stale: true };
+  const empty: PersonalQuotaProjection = { selection: 'none', primary: null, buckets: [], fetchedAt: null, providerUpdatedAt: null, stale: true };
   if (!quota || quota.scope !== 'signed-in-user' || !['available', 'error'].includes(quota.state)
     || current === null || fetched === null || fetched > current || !Array.isArray(quota.buckets)
     || quota.buckets.length === 0 || quota.buckets.length > 64
     || quota.buckets.some(bucket => !bucket || typeof bucket.key !== 'string' || !KEY.test(bucket.key))) return empty;
   const buckets = quota.buckets.map(bucket => projectBucket(bucket, fetched, current));
+  const baseStale = quota.stale || quota.state === 'error' || quota.error !== null || current - fetched > 5 * 60_000;
+  const sourceTime = buckets.every(bucket => bucket.providerUpdatedAt !== null)
+    ? Math.min(...buckets.map(bucket => Date.parse(bucket.providerUpdatedAt!))) : null;
+  const sourceStale = (value: string | null): boolean => value === null || current - Date.parse(value) > 5 * 60_000;
   const result: PersonalQuotaProjection = {
     selection: 'none', primary: null, buckets, fetchedAt: new Date(fetched).toISOString(),
-    stale: quota.stale || quota.state === 'error' || quota.error !== null || current - fetched > 5 * 60_000,
+    providerUpdatedAt: sourceTime === null ? null : new Date(sourceTime).toISOString(),
+    stale: baseStale || sourceTime === null || current - sourceTime > 5 * 60_000,
   };
   function choose(candidates: PersonalQuotaBucketView[], selection: PersonalQuotaProjection['selection']): boolean {
     if (candidates.length !== 1) return false;
-    result.primary = candidates[0]!; result.selection = selection; return true;
+    result.primary = candidates[0]!; result.selection = selection;
+    result.providerUpdatedAt = result.primary.providerUpdatedAt;
+    result.stale = baseStale || sourceStale(result.providerUpdatedAt);
+    return true;
   }
   if (selectedKey && choose(buckets.filter(bucket => bucket.key === selectedKey), 'explicit')) return result;
   const premium = buckets.filter(bucket => bucket.key === 'premium_interactions');

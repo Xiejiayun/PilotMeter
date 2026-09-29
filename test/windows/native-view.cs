@@ -11,6 +11,7 @@ internal static class NativeViewTests
     private static int checks;
     private const string AccountId = "11111111-2222-4333-8444-555555555555";
     private const string InstanceId = "aa159f20-b60d-4c08-9352-c3c7bce1ab76";
+    private static readonly string ProviderTime = DateTime.UtcNow.AddMinutes(-1).ToString("o");
 
     private static void Check(bool value, string message)
     {
@@ -31,7 +32,7 @@ internal static class NativeViewTests
         return new Dictionary<string, object> {
             { "key", "premium_interactions" }, { "label", "高级请求" }, { "value", "37.5%" }, { "detail", "数量单位未确认，仅展示已确认比例或额度状态。" },
             { "percentage", 37.5 }, { "usedPercentage", "37.5" }, { "nextResetAt", null }, { "unit", "unspecified" }, { "unitLabel", "单位未确认" },
-            { "used", null }, { "limit", null }, { "unlimited", false }
+            { "used", null }, { "limit", null }, { "unlimited", false }, { "providerUpdatedAt", ProviderTime }
         };
     }
 
@@ -48,7 +49,7 @@ internal static class NativeViewTests
             { "quota", new Dictionary<string, object> { { "accountId", AccountId }, { "state", "available" }, { "stale", false }, { "error", null } } },
             { "presentation", new Dictionary<string, object> {
                 { "selection", "premium" }, { "primary", Bucket() }, { "buckets", new object[] { Bucket() } },
-                { "fetchedAt", DateTime.UtcNow.ToString("o") }, { "stale", false }
+                { "fetchedAt", DateTime.UtcNow.ToString("o") }, { "providerUpdatedAt", ProviderTime }, { "stale", false }
             } }
         };
     }
@@ -129,6 +130,7 @@ internal static class NativeViewTests
         source["accounts"] = new object[] { profile }; source["activeAccountId"] = accountId;
         NativeData.Map(source, "quota")["accountId"] = accountId;
         var presentation = NativeData.Map(source, "presentation"); presentation["primary"] = bucket; presentation["buckets"] = new object[] { bucket };
+        presentation["providerUpdatedAt"] = bucket["providerUpdatedAt"];
         var local = Local(); local["accountId"] = accountId; local["scope"] = profile["login"] + " local sessions"; source["local"] = local;
         var models = Models(); models["accountId"] = accountId; source["models"] = models;
         return NativeOverview.Read(source, identity);
@@ -150,6 +152,14 @@ internal static class NativeViewTests
                     var accountBId = "99999999-2222-4333-8444-555555555555";
                     ApplyDashboard(window, accountA);
                     CheckMetric(window, "quotaValue", "30", "30"); CheckMetric(window, "quotaUsed", "70", "70"); CheckMetric(window, "quotaTotal", "100", "100");
+                    Check(DashboardField<Label>(window, "synced").Text.StartsWith("读取于"), "The footer time must describe a local read, not provider freshness.");
+                    Check(DashboardField<Label>(window, "quotaDetail").Text.Contains("数据时间"), "The provider time must be visible beside the quota.");
+                    var old = Bucket(); old["providerUpdatedAt"] = DateTime.UtcNow.AddMinutes(-40).ToString("o");
+                    ApplyDashboard(window, DashboardSnapshot(identity, AccountId, old));
+                    Check(DashboardField<Label>(window, "feedback").Text.Contains("数据较旧") && DashboardField<Label>(window, "quotaDetail").Text.Contains("数据较旧"), "Reading old source metadata now must remain visibly stale.");
+                    old["providerUpdatedAt"] = null;
+                    ApplyDashboard(window, DashboardSnapshot(identity, AccountId, old));
+                    Check(DashboardField<Label>(window, "feedback").Text.Contains("来源时间未知") && DashboardField<Label>(window, "quotaDetail").Text.Contains("来源时间未知"), "Unknown provider time must not be called synced.");
 
                     var raw = Bucket(); raw["raw"] = new Dictionary<string, object> { { "used", "62000" }, { "limit", "2000000" }, { "remainingPercentage", "96.9" } };
                     raw["usedPercentage"] = "3.1"; raw["remainingPercentage"] = "96.9"; raw["percentage"] = 3.1;
@@ -240,6 +250,18 @@ internal static class NativeViewTests
         Check(view.CanDisplayQuota && view.Active.Login == "sample-person", "The native view must accept the selected account's verified presentation.");
         Check(view.Primary.Value == "37.5%" && view.Primary.Percentage == 37.5, "The native view must retain the shared projection's value and percentage.");
         Check(view.Primary.Label == "高级请求" && view.Buckets.Count == 1, "Category labels must come from the shared projection.");
+        Check(view.ProviderUpdatedAt == ProviderTime && view.Primary.ProviderUpdatedAt == ProviderTime && view.FetchedAt != ProviderTime, "Native quota data and read timestamps must stay distinct.");
+        foreach (var sourceTime in new[] { null, "not-a-time", DateTime.UtcNow.AddMinutes(1).ToString("o"), "2026-02-30T00:00:00.000Z" })
+        {
+            var invalidTime = Overview(); NativeData.Map(invalidTime, "presentation")["providerUpdatedAt"] = sourceTime;
+            var unknown = NativeOverview.Read(invalidTime, identity);
+            Check(unknown.Stale && unknown.ProviderUpdatedAt == null && !unknown.CanDisplayQuota && unknown.CanDisplaySnapshot, "Missing, malformed, or future provider times remain unknown while retaining source values.");
+        }
+        var oldSource = Overview(); NativeData.Map(oldSource, "presentation")["providerUpdatedAt"] = DateTime.UtcNow.AddMinutes(-40).ToString("o");
+        var oldView = NativeOverview.Read(oldSource, identity);
+        Check(oldView.Stale && !oldView.CanDisplayQuota && oldView.CanDisplaySnapshot, "A new read cannot make a 40-minute-old source snapshot current.");
+        var legacySource = Overview(); NativeData.Map(legacySource, "presentation").Remove("providerUpdatedAt");
+        Check(NativeOverview.Read(legacySource, identity).Stale, "Older DTOs lacking source time must remain stale.");
         foreach (var field in new[] { "app", "version", "instanceId" })
         {
             var malformed = Overview(); malformed[field] = "different";

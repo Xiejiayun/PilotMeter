@@ -54,7 +54,7 @@ export function buildWidget(summary: Summary, overview: AccountsOverview, select
   const personal = projectPersonalQuota(quota, summaryAt, selectedKey);
   if (personal.fetchedAt && personal.buckets.length) {
     const state = error ? 'error' : personal.stale || overview.refreshing ? 'waiting' : 'ready';
-    const status = error ? '同步失败，显示旧快照；' : personal.stale ? '旧快照，等待同步；' : overview.refreshing ? '正在同步；' : '';
+    const status = error ? '同步失败，显示旧快照；' : !personal.providerUpdatedAt ? '来源时间未知；' : personal.stale ? '数据较旧，等待更新；' : overview.refreshing ? '正在同步；' : '';
     if (personal.primary) {
       const bucket = personal.primary;
       unitLabel = bucket.unit === 'ai-credits' ? 'AI Credits' : bucket.unit === 'premium-requests' ? 'Premium Requests' : null;
@@ -62,14 +62,14 @@ export function buildWidget(summary: Summary, overview: AccountsOverview, select
       const left = ratio(bucket.remainingPercentage);
       const value = bucket.remaining !== null ? `${bucket.remaining} 剩余` : left ? `剩余 ${left.text}` : bucket.value;
       return result(bucket.value === '已用未知' && value === bucket.value && !error ? 'waiting' : state, `个人${bucket.label} · 当前周期`, value,
-        `${status}${bucket.remaining !== null ? `剩余 ${bucket.remaining} ${bucket.unitLabel}（总额减已用）；` : bucket.unit === 'unspecified' ? '单位未确认；' : ''}${bucket.detail}；个人额度不代表组织总池。`, state === 'ready' ? bucket.percentage : null, personal.fetchedAt);
+        `${status}${bucket.remaining !== null ? `剩余 ${bucket.remaining} ${bucket.unitLabel}（总额减已用）；` : bucket.unit === 'unspecified' ? '单位未确认；' : ''}${bucket.detail}；个人额度不代表组织总池。`, state === 'ready' ? bucket.percentage : null, personal.providerUpdatedAt ?? '');
     }
     if (personal.selection === 'required') {
       return result(error ? 'error' : 'waiting', '个人当前周期额度', '选择额度类别',
-        `${status}共 ${personal.buckets.length} 个独立额度类别，不合并数量或比例；打开主窗口选择查看。`, null, personal.fetchedAt);
+        `${status}共 ${personal.buckets.length} 个独立额度类别，不合并数量或比例；打开主窗口选择查看。`, null, personal.providerUpdatedAt ?? '');
     }
     return result(state, '个人当前周期额度', '各类别无固定上限',
-      `${status}各额度类别独立且无固定上限；打开主窗口逐项查看，个人额度不代表组织总池。`, null, personal.fetchedAt);
+      `${status}各额度类别独立且无固定上限；打开主窗口逐项查看，个人额度不代表组织总池。`, null, personal.providerUpdatedAt ?? '');
   }
 
   const reason = error ? '个人额度同步失败；' : overview.refreshing ? '个人额度正在同步；' : '个人额度尚未取得；';

@@ -1133,8 +1133,8 @@ internal sealed class DashboardWindow : NativeForm
         RenderSidebarAccount(active, !result.Enabled ? "账号功能未启用" : networkError != null ? "同步失败" : null);
         accountStatus.Text = active == null ? "尚未连接账号" : active.Status == "reauth-required" ? "需要重新登录" : active.Status == "error" ? "账号连接异常" : "账号已连接";
         tips.SetToolTip(accountStatus, active == null ? "请到账户页登录 GitHub。" : "当前账号：" + active.Login);
-        synced.Text = "上次同步  " + NativeDisplay.Time(result.FetchedAt);
-        feedback.Text = networkError != null ? "同步失败 · 当前展示上次读取的数据" : result.Refreshing ? "正在同步额度与模型权限…" : result.Stale ? "旧快照 · 等待最新数据" : "";
+        synced.Text = "读取于  " + NativeDisplay.Time(result.FetchedAt);
+        feedback.Text = networkError != null ? "同步失败 · 当前展示上次读取的数据" : result.Refreshing ? "正在同步额度与模型权限…" : result.CanDisplaySnapshot && result.ProviderUpdatedAt == null ? "来源时间未知 · 无法确认数据是否最新" : result.Stale ? "数据较旧 · 等待 GitHub 更新" : "";
         accountHint.Text = !result.Enabled ? "当前服务未启用真实账号操作。" : active == null ? "连接 GitHub 后分别验证身份、额度和模型权限。" : "切换账号后，额度、模型与记录同步切换。";
         if (active == null) ClearQuota("登录或选择一个 GitHub 账号，查看 Copilot 额度。");
         else if (active.Status != "connected") ClearQuota("当前账号需要重新验证，请在账户页重新登录。");
@@ -1177,7 +1177,7 @@ internal sealed class DashboardWindow : NativeForm
             progress.AccessibleDescription = bucket.UsedPercentageText == null ? "比例未知" : "已用 " + NativeDisplay.ExactPercentage(bucket.UsedPercentageText);
             quotaRatios.Text = bucket.Unlimited ? "无固定上限" : "已用比例  " + NativeDisplay.ExactPercentage(bucket.UsedPercentageText) + (bucket.UsedPercentageText != null ? " · GitHub 比例可能已舍入" : "");
             var stale = result.Stale || networkError != null;
-            quotaDetail.Text = (stale ? "旧快照 · " + NativeDisplay.Time(result.FetchedAt) + " · " : "") + (bucket.Unit == "unspecified" ? "额度数值 · 单位未确认" : bucket.Overage != null && bucket.Overage != "0" ? "已超出固定额度 " + NativeDisplay.Amount(bucket.Overage) + " " + bucket.UnitLabel : "计量单位 · " + bucket.UnitLabel) + " · " + NativeDisplay.UsageSource(bucket);
+            quotaDetail.Text = (result.ProviderUpdatedAt == null ? "来源时间未知" : (stale ? "数据较旧 · " : "") + "数据时间 " + NativeDisplay.Time(result.ProviderUpdatedAt)) + " · " + (bucket.Unit == "unspecified" ? "额度数值 · 单位未确认" : bucket.Overage != null && bucket.Overage != "0" ? "已超出固定额度 " + NativeDisplay.Amount(bucket.Overage) + " " + bucket.UnitLabel : "计量单位 · " + bucket.UnitLabel) + " · " + NativeDisplay.UsageSource(bucket);
             quotaDetail.ForeColor = stale || bucket.Unit == "unspecified" ? Color.FromArgb(145, 105, 41) : Muted; tips.SetToolTip(quotaDetail, quotaDetail.Text);
             var date = NativeData.Date(bucket.NextResetAt); reset.Text = date.HasValue && date.Value > DateTimeOffset.UtcNow ? "下次重置  " + NativeDisplay.Time(bucket.NextResetAt) : "重置时间待确认";
             raw.Visible = bucket.Unit == "unspecified"; rawText.Text = RawValues(bucket); if (!raw.Visible) ExpandRaw(false);
@@ -1334,7 +1334,7 @@ internal sealed class DashboardWindow : NativeForm
     {
         if (overview == null || !overview.CanDisplaySnapshot || overview.Primary == null) { ShowDetails("额度明细", "当前没有可展示的额度快照。请连接账号并同步。"); return; }
         var bucket = overview.Primary;
-        var text = "账户：" + overview.Active.Login + "\r\n类别：" + bucket.Label + "\r\n单位：" + bucket.UnitLabel + "\r\n总额：" + (bucket.Unlimited ? "无固定上限" : NativeDisplay.Amount(bucket.Limit ?? bucket.RawLimit)) + "\r\n已用：" + NativeDisplay.Amount(bucket.Used ?? bucket.RawUsed) + "\r\n剩余：" + NativeDisplay.Amount(bucket.Remaining) + "\r\n已用比例：" + NativeDisplay.ExactPercentage(bucket.UsedPercentageText) + "\r\n剩余比例：" + NativeDisplay.ExactPercentage(bucket.RemainingPercentageText) + "\r\n同步时间：" + NativeDisplay.Time(overview.FetchedAt) + "\r\n状态：" + (overview.Stale || networkError != null ? "旧快照，等待同步" : "已同步") + "\r\n\r\n" + bucket.Detail;
+        var text = "账户：" + overview.Active.Login + "\r\n类别：" + bucket.Label + "\r\n单位：" + bucket.UnitLabel + "\r\n总额：" + (bucket.Unlimited ? "无固定上限" : NativeDisplay.Amount(bucket.Limit ?? bucket.RawLimit)) + "\r\n已用：" + NativeDisplay.Amount(bucket.Used ?? bucket.RawUsed) + "\r\n剩余：" + NativeDisplay.Amount(bucket.Remaining) + "\r\n已用比例：" + NativeDisplay.ExactPercentage(bucket.UsedPercentageText) + "\r\n剩余比例：" + NativeDisplay.ExactPercentage(bucket.RemainingPercentageText) + "\r\n数据时间：" + (overview.ProviderUpdatedAt == null ? "来源时间未知" : NativeDisplay.Time(overview.ProviderUpdatedAt)) + "\r\n读取于：" + NativeDisplay.Time(overview.FetchedAt) + "\r\n状态：" + (overview.ProviderUpdatedAt == null ? "来源时间未知" : overview.Stale || networkError != null ? "数据较旧，等待更新" : "数据已读取") + "\r\n\r\n" + bucket.Detail;
         text += "\r\n用量来源：" + NativeDisplay.UsageSource(bucket) + "\r\nGitHub 比例可能已舍入，不一定与数量计算的比例一致。";
         if (bucket.Unit == "unspecified") text += "\r\n\r\n" + RawValues(bucket);
         text += "\r\n\r\n绝对剩余量仅由同一快照、同一额度池的数量相减得出，精度依用量来源。组织付费不代表此值是整个组织的总额度。";

@@ -4,6 +4,7 @@ import { mkdir } from 'node:fs/promises';
 import { atomicJson, readJson } from '../shared/runtime.js';
 import { compareDecimals, exactPercentageOf, nonNegativeDecimal, subtractDecimals } from '../domain/decimal.js';
 import { quotaBucketLabel } from '../domain/personal-quota.js';
+import { timestamp } from '../domain/period.js';
 import type { AccountLogin, AccountsOverview, GitHubProfile, PersonalQuota } from '../shared/accounts.js';
 import type { AccountModels } from '../shared/models.js';
 import { CopilotClient, CopilotClientError, copilotHost, type CopilotModels, type CopilotQuota } from './copilot-client.js';
@@ -37,6 +38,8 @@ export function personalQuota(accountId: string, result: CopilotQuota): Personal
     accountId, state: result.snapshots.length ? 'available' : 'unavailable', scope: 'signed-in-user',
     fetchedAt: result.fetchedAt, stale: false, error: result.snapshots.length ? null : { code: 'QUOTA_EMPTY', message: 'GitHub 尚未返回该账号的 Copilot 额度，请确认订阅和组织策略。' },
     buckets: result.snapshots.map(snapshot => {
+      const providerTime = timestamp(snapshot.providerUpdatedAt);
+      const fetchedTime = timestamp(result.fetchedAt);
       const unit = snapshot.unit === 'ai-credits' ? 'ai-credits' as const : snapshot.unit === 'premium-requests' ? 'premium-requests' as const : 'unspecified' as const;
       const used = quantity(snapshot.usedRequests); const limit = snapshot.isUnlimitedEntitlement ? null : quantity(snapshot.entitlementRequests);
       const remainingPercentage = snapshot.isUnlimitedEntitlement ? null : percent(snapshot.remainingPercentage);
@@ -44,6 +47,7 @@ export function personalQuota(accountId: string, result: CopilotQuota): Personal
         : used !== null && limit !== null ? exactPercentageOf(used, limit) : null;
       return { key: snapshot.type, label: quotaBucketLabel(snapshot.type),
         unit, used, usageSource: snapshot.usageSource === 'remaining' ? 'remaining' : 'quota-rpc',
+        providerUpdatedAt: providerTime !== null && fetchedTime !== null && providerTime <= fetchedTime ? new Date(providerTime).toISOString() : null,
         limit, remainingPercentage, usedPercentage, unlimited: snapshot.isUnlimitedEntitlement, resetAt: snapshot.resetDate };
     }),
   };
@@ -249,12 +253,12 @@ export class AccountsManager {
         return { accountId: id, source: 'copilot-cli-models.list', state: 'error', fetchedAt: old?.fetchedAt ?? null,
           stale: true, refreshing: false, items: old?.items ?? [], error: safeError(error) };
       };
-      const requiresLogin = (error: unknown) => ['AUTH_REQUIRED', 'AUTHENTICATION_FAILED', 'ACCOUNT_NOT_FOUND'].includes(safeError(error).code);
+      const requiresLogin = (error: unknown) => ['AUTH_REQUIRED', 'AUTHENTICATION_FAILED', 'ACCOUNT_NOT_FOUND', 'ACCOUNT_IDENTITY_MISMATCH'].includes(safeError(error).code);
       try {
         const accounts = await client.listAccounts({ fresh: true });
         const matches = accounts.filter(a => a.host === profile.host && a.login.toLowerCase() === profile.login.toLowerCase());
         if (matches.length !== 1) throw new CopilotClientError('AUTH_REQUIRED', '该账号的授权已失效，请重新登录。');
-        // Both read-only RPCs bind to the same selection in the same verified runtime.
+        // Both reads bind to this verified selection; quota refresh also verifies its new session identity.
         // A catalog outage must not discard a successful quota (or vice versa).
         const selection = matches[0]!.selectionId;
         const [quotaResult, modelsResult] = await Promise.allSettled([

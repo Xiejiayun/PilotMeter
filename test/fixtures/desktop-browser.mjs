@@ -25,7 +25,7 @@ export function desktopFixture({ accounts = true, unit = 'ai-credits' } = {}) {
     accountId, state: 'available', scope: 'signed-in-user', fetchedAt: now, stale: false, error: null,
     buckets: [{ key: 'premium_interactions', label: 'Premium interactions', unit, used, limit,
       usedPercentage: accountId === aliceId ? '12.5' : '44', remainingPercentage: accountId === aliceId ? '87.5' : '56', unlimited: false,
-      resetAt: new Date(Date.now() + 86_400_000).toISOString() }],
+      resetAt: new Date(Date.now() + 86_400_000).toISOString(), providerUpdatedAt: now }],
   });
   const model = (id, name, status, values = {}) => ({
     id, name, status, reason: status === 'disabled' ? '组织策略停用' : status === 'unknown' ? '尚未确认可用性' : '账号可用',

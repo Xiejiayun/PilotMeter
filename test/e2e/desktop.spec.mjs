@@ -43,6 +43,7 @@ test('desktop shows all source digits in used, total and remaining quantities', 
 test('manual sync waits for the provider snapshot and updates quota, models and fetch time', async ({ page }) => {
   const data = desktopFixture();
   data.quotas[aliceId].fetchedAt = new Date(Date.now() - 120_000).toISOString();
+  data.quotas[aliceId].buckets[0].providerUpdatedAt = data.quotas[aliceId].fetchedAt;
   await page.clock.install();
   await open(page, data);
   await expect(values(page)).toHaveText(exact);
@@ -57,6 +58,7 @@ test('manual sync waits for the provider snapshot and updates quota, models and 
 
   Object.assign(data.quotas[aliceId].buckets[0], { used: '200', limit: '1000', usedPercentage: '20', remainingPercentage: '80' });
   data.quotas[aliceId].fetchedAt = new Date().toISOString();
+  data.quotas[aliceId].buckets[0].providerUpdatedAt = data.quotas[aliceId].fetchedAt;
   data.modelSets[aliceId].items[0].name = 'Updated Alpha Vision';
   data.refreshing = false;
   await page.clock.runFor(1_600);
@@ -67,6 +69,30 @@ test('manual sync waits for the provider snapshot and updates quota, models and 
   await expect(page.locator('#feedback')).not.toContainText('最新');
   await expect(page.locator('#refresh-button')).toBeEnabled();
 });
+
+for (const unknown of [false, true]) {
+  test(`manual sync retains ${unknown ? 'unknown' : 'old'} provider freshness despite a new local read`, async ({ page }) => {
+    const data = desktopFixture();
+    const sourceTime = new Date(Date.now() - 40 * 60_000).toISOString();
+    data.quotas[aliceId].buckets[0].providerUpdatedAt = unknown ? null : sourceTime;
+    await page.clock.install();
+    await open(page, data);
+    await expect(page.locator('#quota-area')).toContainText(unknown ? '来源时间未知' : '数据较旧');
+    await expect(page.locator('#last-sync')).toContainText('读取于');
+    if (!unknown) await expect(page.locator('#last-sync')).toContainText('数据时间');
+    data.refreshing = true;
+    await page.locator('#refresh-button').click();
+    await expect(page.locator('#refresh-button')).toHaveText('同步中');
+    data.quotas[aliceId].fetchedAt = new Date().toISOString();
+    data.refreshing = false;
+    await page.clock.runFor(1_600);
+    await expect(page.locator('#feedback')).toContainText(unknown ? '来源时间未知' : 'GitHub 数据较旧');
+    await expect(page.locator('#quota-area')).toContainText(unknown ? '来源时间未知' : '数据较旧');
+    await expect(page.locator('#quota-area')).not.toContainText('已同步');
+    await expect(page.locator('#quota-area')).not.toContainText('数据已读取');
+    await expect(values(page)).toHaveText(exact);
+  });
+}
 
 test('a sync completion for another account cannot report success for the current account', async ({ page }) => {
   const data = desktopFixture();

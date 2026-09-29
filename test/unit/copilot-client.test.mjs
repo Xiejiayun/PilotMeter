@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import childProcess from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -212,32 +212,44 @@ test('Copilot child environment pins the profile and removes implicit credential
   assert.deepEqual(env, { PATH: 'kept', COPILOT_HOME: 'profile', NO_COLOR: '1', FORCE_COLOR: '0' });
 });
 
-test('account queries use only official read-only RPCs and discard credential-bearing fields', async t => {
+test('quota refresh uses an empty prompt-free session and discards credential-bearing fields', async t => {
   const { client, home } = await clientFor(t);
   const accounts = await client.listAccounts();
   assert.deepEqual(accounts, [
     { selectionId: 'account-one', host: 'https://github.com', login: 'test-user', authType: 'user', isCurrent: true },
     { selectionId: 'account-two', host: 'https://company.ghe.com', login: 'another-user', authType: 'user', isCurrent: false },
   ]);
-  const quota = await client.getQuota('account-two');
-  assert.equal(quota.selectionId, 'account-two'); assert.equal(quota.scope, 'user');
+  const quota = await client.getQuota('account-one');
+  assert.equal(quota.selectionId, 'account-one'); assert.equal(quota.scope, 'user');
   assert.deepEqual(quota.snapshots, [{ type: 'premium_interactions', isUnlimitedEntitlement: false, entitlementRequests: '100',
-    usedRequests: '9007199254740993.123456789', usageSource: 'quota-rpc', remainingPercentage: '42.5', overage: '0.123456789123456789',
-    usageAllowedWithExhaustedQuota: true, overageAllowedWithExhaustedQuota: false, resetDate: '2026-10-01T00:00:00Z', unit: null, billingMode: 'unknown' }]);
+    usedRequests: '57.5', usageSource: 'remaining', remainingPercentage: '42.5', overage: '0',
+    usageAllowedWithExhaustedQuota: null, overageAllowedWithExhaustedQuota: false, providerUpdatedAt: '2026-09-29T07:13:44.957Z',
+    resetDate: '2026-10-01T00:00:00.000Z', unit: null, billingMode: 'unknown' }]);
   assert.doesNotMatch(JSON.stringify({ accounts, quota }), /synthetic-private|token|sensitive/);
   const trace = await requests(home);
   assert.deepEqual(trace[0].overrides, []);
   assert.equal(trace[0].home, home);
-  assert.deepEqual(trace.slice(1).map(row => row.method), ['connect', 'auth.getStatus', 'account.getAllUsers', 'account.getQuota']);
-  assert.deepEqual(trace.at(-1).params, { selectionId: 'account-two' });
+  assert.deepEqual(trace.slice(1).map(row => row.method), ['connect', 'auth.getStatus', 'account.getAllUsers', 'session.create',
+    'session.gitHubAuth.getCurrentAuthInfo', 'session.gitHubAuth.refreshCopilotUser', 'session.detach']);
+  const created = trace.find(row => row.method === 'session.create').params;
+  assert.match(created.sessionId, /^[a-f0-9-]{36}$/);
+  assert.deepEqual(created, { sessionId: created.sessionId, clientName: 'PilotMeter-quota', availableTools: [], workingDirectory: created.workingDirectory, configDir: created.workingDirectory,
+    enableConfigDiscovery: false, enableFileHooks: false, enableHostGitOperations: false, enableSessionStore: false,
+    enableSkills: false, skipEmbeddingRetrieval: true, embeddingCacheStorage: 'in-memory', memory: { enabled: false },
+    infiniteSessions: { enabled: false }, remoteSession: 'off', mcpServers: {}, pluginDirectories: [], instructionDirectories: [], skillDirectories: [] });
+  for (const row of trace.filter(row => row.method?.startsWith('session.') && row.method !== 'session.create')) {
+    assert.deepEqual(row.params, { sessionId: created.sessionId });
+  }
+  await assert.rejects(access(created.workingDirectory), { code: 'ENOENT' });
   await assert.rejects(client.getQuota('not-listed'), { code: 'ACCOUNT_NOT_FOUND' });
 });
 
 function metadataFixture() {
   return {
-    accounts: { 'account-one': { quota_snapshots: { premium_interactions: {
+    accounts: { 'account-one': { quota_reset_date_utc: '2026-10-01T00:00:00Z', quota_snapshots: { premium_interactions: {
       entitlement: 1000000, quota_remaining: 960123.4, remaining: 960123, percent_remaining: 96,
-      unlimited: false, has_quota: true, sensitive: 'synthetic-private-metadata',
+      unlimited: false, has_quota: true, overage_count: 0, overage_permitted: false,
+      timestamp_utc: '2026-09-29T07:13:44.957Z', quota_reset_at: 0, sensitive: 'synthetic-private-metadata',
     } } } },
     rpc: { entitlementRequests: 1000000, usedRequests: 40000, remainingPercentage: 96, overage: 0 },
   };
@@ -249,11 +261,11 @@ async function metadataClient(t, fixture) {
   return { ...result, backing };
 }
 
-test('precise account remaining overrides rounded RPC usage without changing official percentages or inferring units', async t => {
+test('fresh remaining yields exact usage without rounding percentages or inferring units', async t => {
   for (const [name, primary, used] of [
     ['fractional quota_remaining', 960123.4, '39876.6'],
     ['remaining when quota_remaining is absent', undefined, '39877'],
-    ['remaining when quota_remaining is invalid', -1, '39877'],
+    ['remaining when quota_remaining is invalid', 'invalid', '39877'],
   ]) await t.test(name, async subtest => {
     const fixture = metadataFixture();
     fixture.accounts['account-one'].quota_snapshots.premium_interactions.quota_remaining = primary;
@@ -288,42 +300,28 @@ test('raw numeric metadata tokens preserve large and fractional digits through e
   });
 });
 
-test('remaining subtraction beyond supported decimal precision retains usable RPC usage', async t => {
+test('remaining subtraction beyond supported decimal precision stays unknown', async t => {
   const fixture = metadataFixture();
   const entitlement = '9'.repeat(256);
   Object.assign(fixture.accounts['account-one'].quota_snapshots.premium_interactions, {
-    entitlement, quota_remaining: `0.${'0'.repeat(254)}1`, percent_remaining: 100,
+    entitlement, quota_remaining: `0.${'0'.repeat(254)}1`, remaining: undefined, percent_remaining: 100,
   });
   Object.assign(fixture.rpc, { entitlementRequests: entitlement, usedRequests: 0, remainingPercentage: 100 });
   const { client } = await metadataClient(t, fixture);
   await client.listAccounts();
   const snapshot = (await client.getQuota('account-one')).snapshots[0];
-  assert.equal(snapshot.usedRequests, '0');
+  assert.equal(snapshot.usedRequests, null);
   assert.equal(snapshot.usageSource, 'quota-rpc');
 });
 
-test('optional remaining metadata falls back to RPC usage when missing, malformed, unlimited or inconsistent', async t => {
+test('missing or unrepresentable precise quantities stay unknown instead of reusing cached RPC usage', async t => {
   const changes = [
-    ['no account metadata', fixture => { fixture.accounts = {}; }],
-    ['wrong bucket', fixture => { const user = fixture.accounts['account-one']; user.quota_snapshots.chat = user.quota_snapshots.premium_interactions; delete user.quota_snapshots.premium_interactions; }],
-    ['malformed snapshots', fixture => { fixture.accounts['account-one'].quota_snapshots = []; }],
-    ['missing entitlement', (_fixture, quota) => { delete quota.entitlement; }],
-    ['negative entitlement', (_fixture, quota) => { quota.entitlement = -1; }],
-    ['mismatched entitlement', (_fixture, quota) => { quota.entitlement = 2000000; }],
-    ['missing percentage', (_fixture, quota) => { delete quota.percent_remaining; }],
-    ['mismatched percentage', (_fixture, quota) => { quota.percent_remaining = 95; }],
-    ['percentage beyond range', (_fixture, quota) => { quota.percent_remaining = 101; }],
-    ['unlimited metadata', (_fixture, quota) => { quota.unlimited = true; }],
-    ['unconfirmed entitlement', (_fixture, quota) => { delete quota.unlimited; }],
-    ['no quota', (_fixture, quota) => { quota.has_quota = false; }],
-    ['malformed has_quota', (_fixture, quota) => { quota.has_quota = 'true'; }],
+    ['unlimited metadata', (_fixture, quota) => { quota.unlimited = true; quota.entitlement = -1; }],
     ['missing remaining', (_fixture, quota) => { delete quota.quota_remaining; delete quota.remaining; }],
-    ['negative remaining', (_fixture, quota) => { quota.quota_remaining = -1; quota.remaining = -1; }],
     ['remaining beyond entitlement', (_fixture, quota) => { quota.quota_remaining = 1000001; quota.remaining = 1000001; }],
     ['malformed remaining', (_fixture, quota) => { quota.quota_remaining = {}; quota.remaining = 'NaN'; }],
     ['excessive decimal precision', (_fixture, quota) => { quota.quota_remaining = '1'.repeat(257); delete quota.remaining; }],
-    ['zero entitlement', (fixture, quota) => { quota.entitlement = 0; quota.quota_remaining = 0; fixture.rpc.entitlementRequests = 0; }],
-    ['unlimited RPC', fixture => { fixture.rpc.isUnlimitedEntitlement = true; }],
+    ['expanded exponent exceeds precision', (_fixture, quota) => { quota.quota_remaining = '-1e256'; delete quota.remaining; }],
   ];
   for (const [name, change] of changes) await t.test(name, async subtest => {
     const fixture = metadataFixture();
@@ -331,47 +329,145 @@ test('optional remaining metadata falls back to RPC usage when missing, malforme
     const { client } = await metadataClient(subtest, fixture);
     await client.listAccounts();
     const snapshot = (await client.getQuota('account-one')).snapshots[0];
-    assert.equal(snapshot.usedRequests, '40000');
+    assert.equal(snapshot.usedRequests, null);
     assert.equal(snapshot.usageSource, 'quota-rpc');
   });
 });
 
-test('overage and already over-entitlement RPC usage are never reduced to capped remaining', async t => {
-  for (const [used, overage] of [[1000012.5, 0], [1000012.5, 12.5], [1000000, 12.5]]) await t.test(`used ${used}, overage ${overage}`, async subtest => {
+test('malformed fresh snapshots fail explicitly instead of presenting a stale quota as synchronized', async t => {
+  const changes = [
+    fixture => { fixture.accounts = {}; },
+    fixture => { fixture.accounts['account-one'].quota_snapshots = []; },
+    (_fixture, quota) => { delete quota.entitlement; },
+    (_fixture, quota) => { quota.entitlement = -1; },
+    (_fixture, quota) => { quota.entitlement = '1e256'; },
+    (_fixture, quota) => { delete quota.percent_remaining; },
+    (_fixture, quota) => { quota.percent_remaining = 101; },
+    (_fixture, quota) => { delete quota.unlimited; },
+  ];
+  for (const change of changes) {
     const fixture = metadataFixture();
-    Object.assign(fixture.accounts['account-one'].quota_snapshots.premium_interactions, { quota_remaining: 0, remaining: 0, percent_remaining: 0 });
-    Object.assign(fixture.rpc, { usedRequests: used, remainingPercentage: 0, overage });
+    change(fixture, fixture.accounts['account-one'].quota_snapshots.premium_interactions);
+    const { client, home } = await metadataClient(t, fixture);
+    await client.listAccounts();
+    await assert.rejects(client.getQuota('account-one'), { code: 'QUOTA_INVALID' });
+    assert.equal((await requests(home)).at(-1).method, 'session.detach');
+    assert.equal((await requests(home)).some(row => row.method === 'account.getQuota'), false);
+  }
+});
+
+test('overage stays exact without inventing total usage from a clamped balance', async t => {
+  for (const [remaining, expected] of [[0, null], [-12.5, '1000012.5']]) await t.test(`remaining ${remaining}`, async subtest => {
+    const fixture = metadataFixture();
+    Object.assign(fixture.accounts['account-one'].quota_snapshots.premium_interactions, { quota_remaining: remaining, remaining,
+      percent_remaining: 0, overage_count: 'raw-number:9007199254740993.123456789', overage_permitted: true, has_quota: false });
     const { client } = await metadataClient(subtest, fixture);
     await client.listAccounts();
     const snapshot = (await client.getQuota('account-one')).snapshots[0];
-    assert.equal(snapshot.usedRequests, String(used));
-    assert.equal(snapshot.overage, String(overage));
-    assert.equal(snapshot.usageSource, 'quota-rpc');
+    assert.equal(snapshot.usedRequests, expected);
+    assert.equal(snapshot.overage, '9007199254740993.123456789');
+    assert.equal(snapshot.overageAllowedWithExhaustedQuota, true);
+    assert.equal(snapshot.usageAllowedWithExhaustedQuota, null);
   });
 });
 
-test('remaining metadata is isolated by selected account and replaced across runtime refreshes', async t => {
+test('refresh bypasses persisted account snapshots even after a fresh process and a changed percentage', async t => {
   const fixture = metadataFixture();
-  fixture.accounts['account-two'] = structuredClone(fixture.accounts['account-one']);
-  fixture.accounts['account-two'].quota_snapshots.premium_interactions.quota_remaining = 960555.5;
-  const { client, backing } = await metadataClient(t, fixture);
+  const { client, backing, home } = await metadataClient(t, fixture);
   await client.listAccounts();
-  const [first, second] = await Promise.all([client.getQuota('account-one'), client.getQuota('account-two')]);
-  assert.equal(first.snapshots[0].usedRequests, '39876.6');
-  assert.equal(second.snapshots[0].usedRequests, '39444.5');
-  await assert.rejects(client.getQuota('account-one'), { code: 'ACCOUNT_NOT_FOUND' });
-  fixture.accounts = {};
+  Object.assign(fixture.accounts['account-one'].quota_snapshots.premium_interactions,
+    { quota_remaining: 958123.4, percent_remaining: 95.8, timestamp_utc: '2026-09-29T07:15:00.123Z' });
   await writeFile(backing, JSON.stringify(fixture));
-  await client.listAccounts({ fresh: true });
   const refreshed = (await client.getQuota('account-one')).snapshots[0];
-  assert.equal(refreshed.usedRequests, '40000');
-  assert.equal(refreshed.usageSource, 'quota-rpc');
+  assert.equal(refreshed.usedRequests, '41876.6');
+  assert.equal(refreshed.remainingPercentage, '95.8');
+  assert.equal(refreshed.providerUpdatedAt, '2026-09-29T07:15:00.123Z');
+  assert.equal(refreshed.usageSource, 'remaining');
+  assert.equal((await requests(home)).some(row => row.method === 'account.getQuota'), false);
+});
+
+test('GitHub capture timestamps and actual reset dates stay separate and reject invalid calendar dates', async t => {
+  for (const [source, resetSeconds, reset, expectedSource, expectedReset] of [
+    ['2026-09-29T07:13:44.957Z', 0, '2026-10-01', '2026-09-29T07:13:44.957Z', '2026-10-01T00:00:00.000Z'],
+    ['2026-09-29T00:13:44.957-07:00', 0, '2026-10-01', '2026-09-29T07:13:44.957Z', '2026-10-01T00:00:00.000Z'],
+    ['2026-09-29T00:13:44.957123456-07:00', 0, '2026-10-01', '2026-09-29T07:13:44.957Z', '2026-10-01T00:00:00.000Z'],
+    ['2026-02-30T07:13:44.957-07:00', 0, '2026-10-01', null, '2026-10-01T00:00:00.000Z'],
+    ['2026-02-30T07:13:44Z', Date.parse('2026-11-01T00:00:00Z') / 1000, '2026-10-01', null, '2026-11-01T00:00:00.000Z'],
+    ['2026-09-29', -1, '2026-02-30', null, null],
+    [undefined, 0, undefined, null, null],
+  ]) {
+    const fixture = metadataFixture();
+    const user = fixture.accounts['account-one'];
+    user.quota_reset_date_utc = reset;
+    Object.assign(user.quota_snapshots.premium_interactions, { timestamp_utc: source, quota_reset_at: resetSeconds });
+    const { client } = await metadataClient(t, fixture);
+    await client.listAccounts();
+    const snapshot = (await client.getQuota('account-one')).snapshots[0];
+    assert.equal(snapshot.providerUpdatedAt, expectedSource); assert.equal(snapshot.resetDate, expectedReset);
+  }
+});
+
+test('selected identities are verified before and after refresh without switching authentication', async t => {
+  for (const [mode, selection, refreshCalls] of [
+    ['normal', 'account-two', 0], ['session-wrong-account', 'account-one', 0],
+    ['refresh-wrong-account', 'account-one', 1], ['refresh-wrong-host', 'account-one', 1], ['refresh-wrong-type', 'account-one', 1],
+  ]) await t.test(`${mode}: ${selection}`, async subtest => {
+    const { client, home } = await clientFor(subtest, mode);
+    await client.listAccounts();
+    await assert.rejects(client.getQuota(selection), error => error.code === 'ACCOUNT_IDENTITY_MISMATCH'
+      && !/synthetic-private|unrelated-user|company.ghe.com/.test(error.message));
+    const trace = await requests(home);
+    assert.equal(trace.filter(row => row.method === 'session.gitHubAuth.refreshCopilotUser').length, refreshCalls);
+    assert.equal(trace.at(-1).method, 'session.detach');
+    assert.equal(trace.some(row => /switch|setCredentials|account.getQuota/.test(row.method ?? '')), false);
+    await assert.rejects(access(trace.find(row => row.method === 'session.create').params.workingDirectory), { code: 'ENOENT' });
+  });
+});
+
+test('caller mutation cannot alter the internally bound identity and parallel refreshes clean only their own sessions', async t => {
+  const { client, home } = await clientFor(t);
+  const accounts = await client.listAccounts();
+  accounts[0].login = 'unrelated-user'; accounts[0].host = 'https://company.ghe.com';
+  const results = await Promise.all([client.getQuota('account-one'), client.getQuota('account-one')]);
+  assert.equal(results[0].snapshots[0].usedRequests, '57.5');
+  assert.equal(results[1].snapshots[0].usedRequests, '57.5');
+  const trace = await requests(home);
+  const created = trace.filter(row => row.method === 'session.create').map(row => row.params);
+  assert.equal(new Set(created.map(row => row.sessionId)).size, 2);
+  assert.equal(new Set(created.map(row => row.workingDirectory)).size, 2);
+  assert.deepEqual(new Set(trace.filter(row => row.method === 'session.detach').map(row => row.params.sessionId)), new Set(created.map(row => row.sessionId)));
+  for (const row of created) await assert.rejects(access(row.workingDirectory), { code: 'ENOENT' });
+});
+
+test('failed or unsupported refreshes never fall back to stale success and clean their ephemeral session', async t => {
+  for (const [mode, code] of [['refresh-error', 'RPC_FAILED'], ['refresh-unsupported', 'RPC_UNSUPPORTED'],
+    ['session-wrong-id', 'CLI_PROTOCOL'], ['session-detach-error', 'QUOTA_CLEANUP_FAILED']]) await t.test(mode, async subtest => {
+    const { client, home } = await clientFor(subtest, mode);
+    await client.listAccounts();
+    await assert.rejects(client.getQuota('account-one'), error => error.code === code && !/synthetic-private/.test(error.message));
+    const trace = await requests(home);
+    const created = trace.find(row => row.method === 'session.create').params;
+    assert.deepEqual(trace.at(-1).params, { sessionId: created.sessionId });
+    assert.equal(trace.at(-1).method, 'session.detach');
+    assert.equal(trace.some(row => row.method === 'account.getQuota'), false);
+    await assert.rejects(access(created.workingDirectory), { code: 'ENOENT' });
+  });
+});
+
+test('timed-out metadata refresh removes its temporary working directory and never returns a cached snapshot', async t => {
+  const { client, home } = await clientFor(t, 'refresh-stall', { requestTimeoutMs: 200 });
+  await client.listAccounts();
+  await assert.rejects(client.getQuota('account-one'), { code: 'CLI_TIMEOUT' });
+  const trace = await requests(home);
+  const created = trace.find(row => row.method === 'session.create').params;
+  await assert.rejects(access(created.workingDirectory), { code: 'ENOENT' });
+  assert.equal(trace.some(row => row.method === 'account.getQuota'), false);
 });
 
 test('fragmented JSON-RPC headers/bodies and additional Content-Type headers remain valid', async t => {
   const { client } = await clientFor(t, 'fragmented');
   assert.equal((await client.listAccounts()).length, 2);
-  assert.equal((await client.getQuota('account-one')).snapshots[0].usedRequests, '9007199254740993.123456789');
+  assert.equal((await client.getQuota('account-one')).snapshots[0].usedRequests, '57.5');
 });
 
 test('models list binds the selected identity and exposes only explicit policy and safe capabilities', async t => {
@@ -425,7 +521,7 @@ test('quota reads outlive the idle deadline and retire selections as soon as the
   const { client, home } = await clientFor(t, 'slow-quota', { idleTimeoutMs: 50 });
   await client.listAccounts();
   // This RPC takes longer than the idle timeout; an active request must stay alive.
-  assert.equal((await client.getQuota('account-one')).snapshots[0].usedRequests, '9007199254740993.123456789');
+  assert.equal((await client.getQuota('account-one')).snapshots[0].usedRequests, '57.5');
   assert.equal((await requests(home)).filter(row => row.method === 'connect').length, 1);
   await assert.rejects(client.getQuota('account-one'), { code: 'ACCOUNT_NOT_FOUND' });
   await client.listAccounts();
@@ -444,7 +540,7 @@ test('completed quota cycles retire process caches after parallel model reads fi
     assert.equal((await client.getQuota(first)).snapshots[0].usedRequests, '10');
     assert.equal(modelsFinished, false, 'Quota must not cancel or wait for an active model read.');
     await writeFile(backing, JSON.stringify({ usedRequests: '25', remainingPercentage: '75' }));
-    assert.equal((await client.getQuota(first)).snapshots[0].usedRequests, '10', 'The synthetic runtime freezes its authentication snapshot.');
+    assert.equal((await client.getQuota(first)).snapshots[0].usedRequests, '25', 'Explicit metadata refresh bypasses the frozen authentication snapshot.');
   } finally {
     await writeFile(join(home, 'mock-release-models'), 'ready');
     assert.equal((await models).items.length, 4);
@@ -492,7 +588,7 @@ test('close and login interrupt a draining fresh reset without reopening an acco
     const { client, home } = await clientFor(subtest, 'held-quota');
     await client.listAccounts();
     const quota = assert.rejects(client.getQuota('account-one'), { code: 'CLI_CLOSED' });
-    await waitForRequest(home, 'account.getQuota');
+    await waitForRequest(home, 'session.gitHubAuth.refreshCopilotUser');
     const code = action === 'close' ? 'CLIENT_CLOSED' : 'LOGIN_IN_PROGRESS';
     const reset = assert.rejects(client.listAccounts({ fresh: true }), { code });
     const queued = assert.rejects(client.listAccounts(), { code });
@@ -533,8 +629,11 @@ test('closing during an active quota read cancels it without opening a replaceme
   const { client, home } = await clientFor(t, 'held-quota');
   await client.listAccounts();
   const rejected = assert.rejects(client.getQuota('account-one'), { code: 'CLI_CLOSED' });
-  await waitForRequest(home, 'account.getQuota');
-  await client.close(); await rejected;
+  await waitForRequest(home, 'session.gitHubAuth.refreshCopilotUser');
+  await client.close();
+  const created = (await requests(home)).find(row => row.method === 'session.create').params;
+  await assert.rejects(access(created.configDir), { code: 'ENOENT' }, 'close must wait until isolated session state is removed');
+  await rejected;
   await assert.rejects(client.listAccounts(), { code: 'CLIENT_CLOSED' });
   assert.equal((await requests(home)).filter(row => row.method === 'connect').length, 1);
 });

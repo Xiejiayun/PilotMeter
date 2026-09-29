@@ -433,7 +433,7 @@ internal static class DesktopLayoutTests
     private static NativeOverview Populated()
     {
         const string id = "11111111-1111-4111-8111-111111111111";
-        var result = new NativeOverview { ActiveId = id, Enabled = true, QuotaAvailable = true, QuotaHasSnapshot = true, FetchedAt = DateTime.UtcNow.ToString("o"),
+        var result = new NativeOverview { ActiveId = id, Enabled = true, QuotaAvailable = true, QuotaHasSnapshot = true, FetchedAt = DateTime.UtcNow.ToString("o"), ProviderUpdatedAt = DateTime.UtcNow.AddMinutes(-1).ToString("o"),
             Primary = new NativeBucket { Key = "premium_interactions", Label = "高级请求", Unit = "ai-credits", UnitLabel = "AI Credits", Remaining = "1938000", Used = "62000", Limit = "2000000", Percentage = 3.1, UsedPercentageText = "3.1", RemainingPercentage = 96.9, RemainingPercentageText = "96.9" },
             Local = new NativeLocalUsage { AccountId = id, Scope = "当前账号 · 仅包含通过 PilotMeter 启动的本机会话", Period = "2026-09", Credits = "1234.56789", UnitVerified = true, SessionCount = 123, UnknownCalls = 12, PendingCalls = 3 },
             Models = new NativeModels { AccountId = id, State = "available", FetchedAt = DateTime.UtcNow.ToString("o") }

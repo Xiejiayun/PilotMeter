@@ -6,7 +6,7 @@ export function designDemo(): { desktop: DesktopResponse; records: DesktopRecord
   const now = new Date().toISOString();
   const accountId = 'design-preview';
   const presentation = projectPersonalQuota({ accountId, scope: 'signed-in-user', state: 'available', fetchedAt: now, stale: false, error: null,
-    buckets: [{ key: 'premium_interactions', label: '高级请求', unit: 'unspecified', used: '66000', limit: '2000000', remainingPercentage: '96.7', usedPercentage: '3.3', unlimited: false, resetAt: null }] }, Date.now());
+    buckets: [{ key: 'premium_interactions', label: '高级请求', unit: 'unspecified', used: '66000', limit: '2000000', remainingPercentage: '96.7', usedPercentage: '3.3', unlimited: false, resetAt: null, providerUpdatedAt: now }] }, Date.now());
   const desktop: DesktopResponse = { app: 'pilotmeter', version: 'design', instanceId: 'design', enabled: false, refreshing: false, activeAccountId: accountId, login: null,
     accounts: [{ id: accountId, login: 'octocat', host: 'https://github.com', status: 'connected', createdAt: now, checkedAt: now }],
     quota: { accountId, state: 'available', fetchedAt: now, stale: false, error: null }, presentation,

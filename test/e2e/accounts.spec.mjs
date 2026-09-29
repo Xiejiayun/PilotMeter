@@ -4,7 +4,7 @@ const period = new Date().toISOString().slice(0, 7);
 const time = `${period}-01T00:00:00.000Z`;
 const alice = { id: 'account-a', login: 'alice-work', host: 'https://github.com', status: 'connected', createdAt: time, checkedAt: time };
 const bob = { ...alice, id: 'account-b', login: 'bob-personal' };
-const quota = accountId => ({ accountId, state: 'available', scope: 'signed-in-user', fetchedAt: time, stale: false, buckets: [{ key: 'premium_interactions', label: 'Premium interactions', unit: 'unspecified', used: '75', limit: '200', remainingPercentage: '62.5', usedPercentage: '37.5', unlimited: false, resetAt: time }], error: null });
+const quota = accountId => ({ accountId, state: 'available', scope: 'signed-in-user', fetchedAt: time, stale: false, buckets: [{ key: 'premium_interactions', label: 'Premium interactions', unit: 'unspecified', used: '75', limit: '200', remainingPercentage: '62.5', usedPercentage: '37.5', unlimited: false, resetAt: time, providerUpdatedAt: time }], error: null });
 function state(accounts = [alice, bob], activeAccountId = 'account-a') {
   return {
     overview: { accounts, activeAccountId, quota: activeAccountId ? quota(activeAccountId) : null, login: null, refreshing: false, enabled: true, runCommand: activeAccountId ? 'pilotmeter run -- --no-auto-update' : 'pilotmeter run --' },
@@ -247,6 +247,22 @@ test('only a future reset is presented as the next reset and quota from a differ
   await expect(page.locator('#quota-buckets')).toBeEmpty();
   await expect(page.locator('#quota-status')).toContainText('尚未取得');
 });
+
+for (const freshness of ['fresh', 'old', 'unknown']) {
+  test(`account quota distinguishes ${freshness} provider data from its read time`, async ({ page }) => {
+    const data = state();
+    data.overview.quota.fetchedAt = new Date().toISOString();
+    data.overview.quota.buckets[0].providerUpdatedAt = freshness === 'unknown' ? null
+      : new Date(Date.now() - (freshness === 'old' ? 40 : 1) * 60_000).toISOString();
+    await mock(page, data);
+    await page.goto('/');
+    const status = page.locator('#quota-status');
+    await expect(status).toContainText(freshness === 'fresh' ? '数据已读取' : freshness === 'old' ? '数据较旧' : '来源时间未知');
+    await expect(status).toContainText('读取于');
+    if (freshness !== 'unknown') await expect(status).toContainText('数据时间');
+    await expect(status).not.toContainText('已同步');
+  });
+}
 
 test('manual quota sync is pinned to its account and stays disabled until the refreshed values arrive', async ({ page }) => {
   const data = state();

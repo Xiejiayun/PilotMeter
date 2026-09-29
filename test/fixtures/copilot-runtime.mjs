@@ -1,5 +1,5 @@
 // Synthetic CLI process for account protocol and device-flow tests. Never contacts GitHub.
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const mode = process.env.MOCK_COPILOT_MODE ?? 'normal';
@@ -50,7 +50,25 @@ if (isLogin) {
   // Authentication itself may initialize quota before the first quota RPC.
   let cachedQuota;
   let quotaMetadataFixture;
+  const sessions = new Set();
+  const metadataFixture = () => JSON.parse(readFileSync(join(process.env.COPILOT_HOME, 'mock-quota-metadata.json'), 'utf8'));
   const copilotUser = id => ({ sensitive: secret, ...(quotaMetadataFixture?.accounts?.[id] ?? {}) });
+  const identity = (overrides = {}) => ({ type: 'user', host: mode === 'bare-hosts' ? 'GITHUB.COM' : 'https://github.com', login: 'test-user', ...overrides });
+  const refreshedUser = () => {
+    if (mode === 'quota-metadata') return copilotUserFrom(metadataFixture());
+    const latest = mode === 'cached-quota' ? JSON.parse(readFileSync(join(process.env.COPILOT_HOME, 'mock-quota.json'), 'utf8')) : null;
+    const quota = {
+      unlimited: false, entitlement: 100, quota_remaining: 42.5, percent_remaining: 'exact-percentage',
+      overage_count: 0, overage_permitted: false, has_quota: true, timestamp_utc: '2026-09-29T07:13:44.957Z', quota_reset_at: 0,
+      ...(mode === 'quota-unit' ? { unit: 'ai-credits', billingMode: 'ai-credits' } : {}),
+      ...(mode === 'quota-invalid' ? { entitlement: -1 } : {}),
+      ...(mode === 'quota-percentage-nearly-full' ? { quota_remaining: 'raw-number:99.999999999999999999' } : {}),
+      ...(latest ? { entitlement: latest.usedRequests === '-1' ? -1 : (latest.entitlementRequests ?? 100),
+        quota_remaining: 100 - Number(latest.usedRequests ?? 0), percent_remaining: latest.remainingPercentage ?? 100 } : {}),
+    };
+    return { quota_reset_date_utc: '2026-10-01T00:00:00Z', quota_snapshots: { premium_interactions: quota }, sensitive: secret };
+  };
+  const copilotUserFrom = fixture => ({ sensitive: secret, ...(fixture.accounts?.['account-one'] ?? {}) });
   const selection = id => mode === 'cached-quota' ? `${id}-${process.pid}` : id;
   const send = (id, value, error = false) => {
     let body = JSON.stringify({ jsonrpc: '2.0', id, [error ? 'error' : 'result']: value });
@@ -63,8 +81,8 @@ if (isLogin) {
       process.stdout.write(frame.subarray(0, 8));
       setTimeout(() => process.stdout.write(frame.subarray(8, 51)), 5);
       setTimeout(() => process.stdout.write(frame.subarray(51)), 10);
-    } else if (mode === 'slow-quota' && value?.quotaSnapshots) setTimeout(() => process.stdout.write(frame), 250);
-    else if (mode === 'cached-quota' && value?.models || mode === 'held-quota' && value?.quotaSnapshots) {
+    } else if (mode === 'slow-quota' && value?.copilotUser) setTimeout(() => process.stdout.write(frame), 250);
+    else if (mode === 'cached-quota' && value?.models || mode === 'held-quota' && value?.copilotUser) {
       const timer = setInterval(() => {
         if (!existsSync(join(process.env.COPILOT_HOME, value?.models ? 'mock-release-models' : 'mock-release-quota'))) return;
         clearInterval(timer); process.stdout.write(frame);
@@ -87,7 +105,7 @@ if (isLogin) {
       if (request.method === 'connect') send(request.id, { ok: true, protocolVersion: 3, version: mode === 'wrong-version' ? '9.0.0' : '1.0.88' });
       else if (request.method === 'auth.getStatus') {
         if (mode === 'cached-quota') cachedQuota ??= JSON.parse(readFileSync(join(process.env.COPILOT_HOME, 'mock-quota.json'), 'utf8'));
-        if (mode === 'quota-metadata') quotaMetadataFixture ??= JSON.parse(readFileSync(join(process.env.COPILOT_HOME, 'mock-quota-metadata.json'), 'utf8'));
+        if (mode === 'quota-metadata') quotaMetadataFixture ??= metadataFixture();
         send(request.id, { isAuthenticated: true, host: mode === 'bare-hosts' ? 'GITHUB.COM' : 'https://github.com', login: 'test-user', token: secret });
       }
       else if (request.method === 'account.getAllUsers') {
@@ -98,6 +116,20 @@ if (isLogin) {
           { authInfo: { type: 'user', login: 'missing-selection', host: 'https://github.com' } },
           { selectionId: 'wrong-host', authInfo: { type: 'user', login: 'bad-user', host: 'https://github.com.attacker.invalid' } },
         ]); if (mode === 'exit-after-list') setTimeout(() => process.exit(0), 30); }
+      } else if (request.method === 'session.create') {
+        sessions.add(request.params.sessionId);
+        mkdirSync(join(request.params.configDir, 'session-state', request.params.sessionId), { recursive: true });
+        writeFileSync(join(request.params.configDir, 'session-state', request.params.sessionId, 'synthetic-session'), 'synthetic-only');
+        send(request.id, { sessionId: mode === 'session-wrong-id' ? 'unrelated-user-session' : request.params.sessionId });
+      } else if (request.method === 'session.gitHubAuth.getCurrentAuthInfo') {
+        send(request.id, identity(mode === 'session-wrong-account' ? { login: 'unrelated-user' } : {}));
+      } else if (request.method === 'session.gitHubAuth.refreshCopilotUser') {
+        if (mode === 'refresh-error' || mode === 'refresh-unsupported') send(request.id,
+          { code: mode === 'refresh-unsupported' ? -32601 : -32603, message: secret, data: { token: secret } }, true);
+        else if (mode !== 'refresh-stall') send(request.id, { ...identity(mode === 'refresh-wrong-account' ? { login: 'unrelated-user' }
+          : mode === 'refresh-wrong-host' ? { host: 'https://company.ghe.com' } : mode === 'refresh-wrong-type' ? { type: 'token' } : {}), copilotUser: refreshedUser() });
+      } else if (request.method === 'session.detach') {
+        send(request.id, { success: sessions.delete(request.params.sessionId) && mode !== 'session-detach-error' });
       } else if (request.method === 'account.getQuota') {
         send(request.id, { quotaSnapshots: { premium_interactions: {
         isUnlimitedEntitlement: false, entitlementRequests: 100, usedRequests: 'exact-large', remainingPercentage: 'exact-percentage',

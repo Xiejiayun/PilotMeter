@@ -1,12 +1,13 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { homedir } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { StringDecoder } from 'node:string_decoder';
 import { compareDecimals, nonNegativeDecimal, normalizeDecimal, subtractDecimals } from '../domain/decimal.js';
+import { timestamp } from '../domain/period.js';
 import type { AccountModel } from '../shared/models.js';
 
 /** Account RPCs are experimental. These wire shapes were checked against SDK 1.0.14 / CLI 1.0.88. */
@@ -30,12 +31,14 @@ export interface CopilotQuotaSnapshot {
   type: string;
   isUnlimitedEntitlement: boolean;
   entitlementRequests: string;
-  usedRequests: string;
+  usedRequests: string | null;
   usageSource: 'remaining' | 'quota-rpc';
   remainingPercentage: string;
-  overage: string;
-  usageAllowedWithExhaustedQuota: boolean;
-  overageAllowedWithExhaustedQuota: boolean;
+  overage: string | null;
+  usageAllowedWithExhaustedQuota: boolean | null;
+  overageAllowedWithExhaustedQuota: boolean | null;
+  /** Time captured by GitHub, separate from the local completion time and quota reset. */
+  providerUpdatedAt: string | null;
   resetDate: string | null;
   /** The experimental SDK quota schema does not declare a unit. No unit is inferred from its key. */
   unit: string | null;
@@ -85,33 +88,71 @@ function safeText(value: unknown, max: number): value is string {
 }
 function fail(code: string, message: string): CopilotClientError { return new CopilotClientError(code, message); }
 
-interface RemainingQuota { entitlement: string; remaining: string; remainingPercentage: string }
+function upstreamDate(value: unknown, allowDateOnly = false): string | null {
+  const source = allowDateOnly && typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00Z` : value;
+  if (typeof source !== 'string') return null;
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.exec(source);
+  if (!match) return null;
+  const local = `${match[1]}${match[2] ? `.${match[2].slice(0, 3)}` : ''}`;
+  // Validate the unshifted calendar date before applying an explicit upstream UTC offset.
+  if (timestamp(`${local}Z`) === null) return null;
+  const parsed = Date.parse(`${local}${match[3]}`);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
 
-/** Retain only exact quota quantities; credential-bearing account objects never leave this parser. */
-function remainingQuotas(value: unknown): Map<string, RemainingQuota> {
-  const snapshots = object(object(value)?.quota_snapshots);
-  const quotas = new Map<string, RemainingQuota>();
-  if (!snapshots || Object.keys(snapshots).length > 64) return quotas;
-  for (const [type, raw] of Object.entries(snapshots)) {
+/** Normalize only fresh account metadata. Rounded percentages never manufacture exact usage. */
+function refreshedQuotas(value: unknown): CopilotQuotaSnapshot[] {
+  const user = object(value);
+  const rawSnapshots = object(user?.quota_snapshots);
+  if (!rawSnapshots || Object.keys(rawSnapshots).length > 64) throw fail('QUOTA_INVALID', 'Copilot 额度响应格式无法识别');
+  const snapshots: CopilotQuotaSnapshot[] = [];
+  for (const [type, raw] of Object.entries(rawSnapshots)) {
+    if (raw === undefined || raw === null) continue;
     const snapshot = object(raw);
-    if (!/^[a-z][a-z\d_\-]{0,63}$/i.test(type) || !snapshot || snapshot.unlimited !== false
-      || snapshot.has_quota !== undefined && snapshot.has_quota !== true) continue;
+    if (!snapshot || !/^[a-z][a-z\d_\-]{0,63}$/i.test(type) || typeof snapshot.unlimited !== 'boolean') {
+      throw fail('QUOTA_INVALID', 'Copilot 额度字段无法识别');
+    }
+    let entitlement: string; let remainingPercentage: string;
     try {
-      const entitlement = nonNegativeDecimal(snapshot.entitlement);
-      const remainingPercentage = nonNegativeDecimal(snapshot.percent_remaining);
-      if (entitlement === '0' || compareDecimals(remainingPercentage, '100') > 0) continue;
-      // quota_remaining can retain fractional digits that remaining has already rounded.
+      if (typeof snapshot.entitlement !== 'string') throw new Error();
+      entitlement = normalizeDecimal(snapshot.entitlement);
+      if (entitlement !== '-1' || !snapshot.unlimited) entitlement = nonNegativeDecimal(nonNegativeDecimal(entitlement));
+      remainingPercentage = nonNegativeDecimal(nonNegativeDecimal(snapshot.percent_remaining));
+      if (compareDecimals(remainingPercentage, '100') > 0) throw new Error();
+    } catch { throw fail('QUOTA_INVALID', 'Copilot 额度数值无法识别'); }
+    let overage: string | null = null;
+    try { overage = nonNegativeDecimal(nonNegativeDecimal(snapshot.overage_count)); } catch { /* Unspecified overage is unknown. */ }
+    let used: string | null = null;
+    if (!snapshot.unlimited) {
+      // Prefer the fractional quota_remaining field; older responses may only contain remaining.
       for (const value of [snapshot.quota_remaining, snapshot.remaining]) {
         try {
-          const remaining = nonNegativeDecimal(value);
+          if (typeof value !== 'string') continue;
+          const remaining = normalizeDecimal(value);
           if (compareDecimals(remaining, entitlement) > 0) continue;
-          quotas.set(type, { entitlement, remaining, remainingPercentage });
+          // A clamped balance plus separately billed overage does not state exact total usage.
+          if (overage !== null && overage !== '0' && compareDecimals(remaining, '0') >= 0) continue;
+          // A negative upstream remaining balance represents usage beyond the fixed entitlement.
+          used = nonNegativeDecimal(nonNegativeDecimal(subtractDecimals(entitlement, remaining)));
           break;
-        } catch { /* Try the older remaining field before retaining the quota RPC result. */ }
+        } catch { /* Unusable optional quantities stay unknown instead of using a rounded percentage. */ }
       }
-    } catch { /* Optional metadata must never invalidate an otherwise usable quota RPC. */ }
+    }
+    let resetDate: string | null = null;
+    if (typeof snapshot.quota_reset_at === 'number' && Number.isSafeInteger(snapshot.quota_reset_at)
+      && snapshot.quota_reset_at > 0 && snapshot.quota_reset_at <= 253402300799) {
+      resetDate = new Date(snapshot.quota_reset_at * 1000).toISOString();
+    }
+    resetDate ??= upstreamDate(user?.quota_reset_date_utc, true);
+    const unit = ['ai-credits', 'premium-requests'].includes(String(snapshot.unit)) ? snapshot.unit as string : null;
+    const billingMode = unit !== null && snapshot.billingMode === unit ? unit as 'ai-credits' | 'premium-requests' : 'unknown';
+    snapshots.push({ type, isUnlimitedEntitlement: snapshot.unlimited, entitlementRequests: entitlement,
+      usedRequests: used, usageSource: used === null ? 'quota-rpc' : 'remaining', remainingPercentage, overage,
+      usageAllowedWithExhaustedQuota: null,
+      overageAllowedWithExhaustedQuota: typeof snapshot.overage_permitted === 'boolean' ? snapshot.overage_permitted : null,
+      providerUpdatedAt: upstreamDate(snapshot.timestamp_utc), resetDate, unit, billingMode });
   }
-  return quotas;
+  return snapshots;
 }
 
 /** Only public GitHub and Enterprise Cloud data-residency hosts are supported by this login UI. */
@@ -260,13 +301,13 @@ class Runtime {
       let response: Record<string, unknown> | null;
       try {
         response = object(JSON.parse(bytes.toString('utf8'), (key: string, value: unknown, context?: { source?: string }) => {
-          if (!['entitlementRequests', 'usedRequests', 'remainingPercentage', 'overage', 'multiplier', 'entitlement', 'quota_remaining', 'remaining', 'percent_remaining'].includes(key) || typeof value !== 'number') return value;
+          if (!['entitlementRequests', 'usedRequests', 'remainingPercentage', 'overage', 'multiplier', 'entitlement', 'quota_remaining', 'remaining', 'percent_remaining', 'overage_count'].includes(key) || typeof value !== 'number') return value;
           if (!context?.source) throw fail('EXACT_JSON_UNAVAILABLE', '当前运行时无法保留额度小数精度');
           return context.source;
         }));
       } catch { response = null; }
       if (!response || response.jsonrpc !== '2.0') { this.#abort(fail('CLI_PROTOCOL', 'GitHub Copilot CLI 响应格式无效')); return; }
-      // This client opens no sessions and grants no tools. Decline any unexpected server request.
+      // Quota sessions send no prompts and grant no tools. Decline any unexpected server request.
       if (typeof response.method === 'string') {
         if (typeof response.id === 'number' || typeof response.id === 'string') {
           this.#write({ jsonrpc: '2.0', id: response.id, error: { code: -32601, message: 'Method not supported' } });
@@ -332,12 +373,11 @@ export class CopilotClient {
   #runtime: Promise<Runtime> | null = null;
   #closingRuntime: Promise<void> | null = null;
   #resettingRuntime: Promise<void> | null = null;
-  #queriesDrained: (() => void) | null = null;
+  readonly #queriesDrained = new Set<() => void>();
   #login: LoginOperation | null = null;
   #startingLogin: Promise<void> | null = null;
   #closed = false;
-  #accounts = new Set<string>();
-  #quotaMetadata = new Map<string, Map<string, RemainingQuota>>();
+  #accounts = new Map<string, CopilotAccount>();
   #accountRuntime: Runtime | null = null;
   #retireRuntime: Runtime | null = null;
   #activeQueries = 0;
@@ -377,7 +417,7 @@ export class CopilotClient {
     try { return await action(await this.#openRuntime()); }
     finally {
       this.#activeQueries--;
-      if (this.#activeQueries === 0) { this.#queriesDrained?.(); this.#queriesDrained = null; }
+      if (this.#activeQueries === 0) { for (const resolveDrain of this.#queriesDrained) resolveDrain(); this.#queriesDrained.clear(); }
       if (this.#activeQueries === 0 && this.#runtime && !this.#resettingRuntime && !this.#closed && !this.#loginActive()) {
         // Quota snapshots can stay cached for the lifetime of the official runtime.
         // Let parallel account/model reads finish, then make the next sync reconnect.
@@ -398,7 +438,7 @@ export class CopilotClient {
     this.#assertQueryAvailable();
     if (this.#resettingRuntime) return this.#resettingRuntime;
     const resetting = (async () => {
-      if (this.#activeQueries > 0) await new Promise<void>(resolveDrain => { this.#queriesDrained = resolveDrain; });
+      if (this.#activeQueries > 0) await new Promise<void>(resolveDrain => { this.#queriesDrained.add(resolveDrain); });
       this.#assertQueryAvailable();
       await this.#closeRuntime();
       this.#assertQueryAvailable();
@@ -422,7 +462,7 @@ export class CopilotClient {
       if (!current.closed) return current;
       this.#runtime = null;
     }
-    this.#accounts.clear(); this.#quotaMetadata.clear(); this.#accountRuntime = null; this.#retireRuntime = null;
+    this.#accounts.clear(); this.#accountRuntime = null; this.#retireRuntime = null;
     const opening = (async () => {
       await this.#prepareHome();
       this.#assertQueryAvailable();
@@ -445,7 +485,7 @@ export class CopilotClient {
 
   async #closeRuntime(): Promise<void> {
     this.#clearIdle();
-    const runtime = this.#runtime; this.#runtime = null; this.#accounts.clear(); this.#quotaMetadata.clear(); this.#accountRuntime = null; this.#retireRuntime = null;
+    const runtime = this.#runtime; this.#runtime = null; this.#accounts.clear(); this.#accountRuntime = null; this.#retireRuntime = null;
     if (!runtime) {
       if (this.#closingRuntime) await this.#closingRuntime;
       return;
@@ -472,7 +512,6 @@ export class CopilotClient {
     const result = await runtime.request('account.getAllUsers', {});
     if (!Array.isArray(result) || result.length > 100) throw fail('ACCOUNTS_INVALID', 'Copilot 账号列表格式无法识别');
     const accounts: CopilotAccount[] = [];
-    const quotaMetadata = new Map<string, Map<string, RemainingQuota>>();
     const seen = new Set<string>();
     for (const raw of result) {
       const entry = object(raw); const info = object(entry?.authInfo);
@@ -483,13 +522,12 @@ export class CopilotClient {
       if (host === null) continue;
       if (seen.has(entry.selectionId)) throw fail('ACCOUNTS_INVALID', 'Copilot 账号标识重复');
       seen.add(entry.selectionId);
-      quotaMetadata.set(entry.selectionId, remainingQuotas(info.copilotUser));
       accounts.push({ selectionId: entry.selectionId, host, login: info.login, authType: String(info.type),
         isCurrent: auth?.isAuthenticated === true && typeof auth.login === 'string' && auth.login.toLowerCase() === info.login.toLowerCase()
           && currentHost === host });
     }
     if (runtime.closed) throw fail('CLI_CLOSED', 'GitHub Copilot CLI 连接已关闭');
-    this.#accounts = new Set(accounts.map(account => account.selectionId)); this.#quotaMetadata = quotaMetadata; this.#accountRuntime = runtime;
+    this.#accounts = new Map(accounts.map(account => [account.selectionId, { ...account }])); this.#accountRuntime = runtime;
     return accounts;
     });
   }
@@ -497,53 +535,59 @@ export class CopilotClient {
   async getQuota(selectionId: string): Promise<CopilotQuota> {
     if (!safeText(selectionId, 4096)) throw fail('ACCOUNT_INVALID', 'Copilot 账号标识无效');
     return this.#query(async runtime => {
-    if (this.#accountRuntime !== runtime || !this.#accounts.has(selectionId)) throw fail('ACCOUNT_NOT_FOUND', '请重新获取账号列表后选择账号');
-    const quotaMetadata = this.#quotaMetadata.get(selectionId);
-    this.#retireRuntime = runtime;
-    const result = object(await runtime.request('account.getQuota', { selectionId }));
-    const rawSnapshots = object(result?.quotaSnapshots);
-    if (!rawSnapshots || Object.keys(rawSnapshots).length > 64) throw fail('QUOTA_INVALID', 'Copilot 额度响应格式无法识别');
-    const snapshots: CopilotQuotaSnapshot[] = [];
-    for (const [type, raw] of Object.entries(rawSnapshots)) {
-      if (raw === undefined || raw === null) continue;
-      const snapshot = object(raw);
-      if (!snapshot || !/^[a-z][a-z\d_\-]{0,63}$/i.test(type)
-        || ['isUnlimitedEntitlement', 'usageAllowedWithExhaustedQuota', 'overageAllowedWithExhaustedQuota'].some(key => typeof snapshot[key] !== 'boolean')
-        || typeof snapshot.remainingPercentage !== 'string'
-        || snapshot.resetDate !== undefined && (!safeText(snapshot.resetDate, 64) || !Number.isFinite(Date.parse(snapshot.resetDate)))) {
-        throw fail('QUOTA_INVALID', 'Copilot 额度字段无法识别');
-      }
-      let entitlement: string; let used: string; let overage: string; let remainingPercentage: string;
+      const account = this.#accounts.get(selectionId);
+      if (this.#accountRuntime !== runtime || !account) throw fail('ACCOUNT_NOT_FOUND', '请重新获取账号列表后选择账号');
+      this.#retireRuntime = runtime;
+      const sameIdentity = (value: unknown): Record<string, unknown> => {
+        const identity = object(value);
+        if (!identity || identity.type !== account.authType || accountHost(identity.host) !== account.host
+          || typeof identity.login !== 'string' || identity.login.toLowerCase() !== account.login.toLowerCase()) {
+          throw fail('ACCOUNT_IDENTITY_MISMATCH', '额度刷新账号与所选账号不一致，请重新登录该账号');
+        }
+        return identity;
+      };
+      const tempRoot = resolve(tmpdir());
+      let directory: string;
+      try { directory = await mkdtemp(join(tempRoot, 'pilotmeter-quota-')); }
+      catch { throw fail('QUOTA_REFRESH_FAILED', '无法创建临时额度刷新目录'); }
+      const sessionId = randomUUID();
+      let attempted = false; let failed = false;
       try {
-        if (typeof snapshot.entitlementRequests !== 'string') throw new Error();
-        entitlement = normalizeDecimal(snapshot.entitlementRequests);
-        if (entitlement !== '-1' || !snapshot.isUnlimitedEntitlement) entitlement = nonNegativeDecimal(entitlement);
-        used = nonNegativeDecimal(snapshot.usedRequests); overage = nonNegativeDecimal(snapshot.overage);
-        remainingPercentage = nonNegativeDecimal(nonNegativeDecimal(snapshot.remainingPercentage));
-        if (compareDecimals(remainingPercentage, '100') > 0) throw new Error();
-      } catch { throw fail('QUOTA_INVALID', 'Copilot 额度数值无法识别'); }
-      let usageSource: CopilotQuotaSnapshot['usageSource'] = 'quota-rpc';
-      const metadata = quotaMetadata?.get(type);
-      if (!snapshot.isUnlimitedEntitlement && overage === '0' && metadata
-        && metadata.entitlement === entitlement && metadata.remainingPercentage === remainingPercentage) {
+        attempted = true;
+        const session = object(await runtime.request('session.create', {
+          sessionId, clientName: 'PilotMeter-quota', availableTools: [], workingDirectory: directory, configDir: directory,
+          enableConfigDiscovery: false, enableFileHooks: false, enableHostGitOperations: false,
+          enableSessionStore: false, enableSkills: false, skipEmbeddingRetrieval: true,
+          embeddingCacheStorage: 'in-memory', memory: { enabled: false }, infiniteSessions: { enabled: false },
+          remoteSession: 'off', mcpServers: {}, pluginDirectories: [], instructionDirectories: [], skillDirectories: [],
+        }));
+        if (session?.sessionId !== sessionId) throw fail('CLI_PROTOCOL', 'Copilot 临时额度会话无法确认');
+        sameIdentity(await runtime.request('session.gitHubAuth.getCurrentAuthInfo', { sessionId }));
+        // CLI 1.0.88 persists account metadata across processes. Only this refresh response is fresh;
+        // account.getAllUsers and account.getQuota can still return the old snapshot afterwards.
+        const refreshed = sameIdentity(await runtime.request('session.gitHubAuth.refreshCopilotUser', { sessionId }));
+        const snapshots = refreshedQuotas(refreshed.copilotUser);
+        return { selectionId, fetchedAt: new Date().toISOString(), scope: 'user', snapshots };
+      } catch (error) { failed = true; throw error; }
+      finally {
+        let cleanupFailed = false;
+        if (attempted && !runtime.closed) {
+          try {
+            const detached = object(await runtime.request('session.detach', { sessionId }));
+            if (detached?.success !== true) cleanupFailed = true;
+          } catch { cleanupFailed = true; }
+        }
+        // A failed detach or dead transport must release every file handle before directory removal.
+        if (runtime.closed || cleanupFailed) {
+          try { await runtime.close(); } catch { cleanupFailed = true; }
+        }
+        // Only remove the fresh directory generated above, never a CLI-supplied path.
         try {
-          if (compareDecimals(used, entitlement) <= 0) {
-            const preciseUsed = nonNegativeDecimal(subtractDecimals(entitlement, metadata.remaining));
-            used = preciseUsed;
-            usageSource = 'remaining';
-          }
-        } catch { /* Optional arithmetic beyond supported precision keeps the usable RPC value. */ }
+          if (dirname(resolve(directory)) !== tempRoot || !basename(directory).startsWith('pilotmeter-quota-')) throw new Error();
+          await rm(directory, { recursive: true, force: true, maxRetries: 2 });
+        } catch { cleanupFailed = true; }
+        if (cleanupFailed && !failed) throw fail('QUOTA_CLEANUP_FAILED', '临时额度刷新未能完整结束，请重试');
       }
-      const unit = ['ai-credits', 'premium-requests'].includes(String(snapshot.unit)) ? snapshot.unit as string : null;
-      const billingMode = unit !== null && snapshot.billingMode === unit ? unit as 'ai-credits' | 'premium-requests' : 'unknown';
-      snapshots.push({ type, isUnlimitedEntitlement: snapshot.isUnlimitedEntitlement as boolean,
-        entitlementRequests: entitlement, usedRequests: used, usageSource,
-        remainingPercentage, overage,
-        usageAllowedWithExhaustedQuota: snapshot.usageAllowedWithExhaustedQuota as boolean,
-        overageAllowedWithExhaustedQuota: snapshot.overageAllowedWithExhaustedQuota as boolean,
-        resetDate: snapshot.resetDate === undefined ? null : snapshot.resetDate as string, unit, billingMode });
-    }
-    return { selectionId, fetchedAt: new Date().toISOString(), scope: 'user', snapshots };
     });
   }
 
@@ -660,7 +704,7 @@ export class CopilotClient {
     operation.codeTimer = null; operation.stdoutText = ''; operation.stderrText = '';
     operation.state = { ...operation.state, status, error, userCode: null, verificationUri: null };
     operation.child.kill();
-    this.#accounts.clear(); this.#quotaMetadata.clear(); this.#accountRuntime = null;
+    this.#accounts.clear(); this.#accountRuntime = null;
   }
 
   getLogin(id: string): CopilotLogin | null { return this.#login?.state.id === id ? { ...this.#login.state } : null; }
@@ -673,6 +717,7 @@ export class CopilotClient {
     this.#closed = true;
     if (this.#login) this.#finishLogin(this.#login, 'cancelled');
     await this.#closeRuntime();
+    if (this.#activeQueries > 0) await new Promise<void>(resolveDrain => { this.#queriesDrained.add(resolveDrain); });
     if (this.#resettingRuntime) await this.#resettingRuntime.catch(() => {});
     if (this.#startingLogin) await this.#startingLogin;
     if (this.#login) await waitForExit(this.#login.exited);

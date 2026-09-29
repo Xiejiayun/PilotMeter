@@ -10,7 +10,7 @@ export interface WidgetSnapshot {
   /** A known display ratio in [0, 100]. Unknown, unlimited, zero-limit and overage ratios are null. */
   percentage: number | null;
   accountLogin: string | null;
-  /** Time of the displayed quota snapshot, or local summary; empty only for invalid input. */
+  /** Provider time of the displayed quota, or local summary time; empty when unknown. */
   updatedAt: string;
 }
 
