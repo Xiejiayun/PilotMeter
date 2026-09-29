@@ -59,6 +59,7 @@ let csrfToken: string | null = null;
 let requestGeneration = 0;
 let refreshing = false;
 let budgetDirty = false;
+let budgetRevision = 0;
 let sessionSignature = '';
 let detail: SessionDetail | null = null;
 let detailRange: 'month' | 'lifetime' = 'month';
@@ -528,11 +529,12 @@ el<HTMLButtonElement>('refresh').addEventListener('click', async () => {
   button.disabled = false;
 });
 
-budgetInput.addEventListener('input', () => { budgetDirty = true; });
+budgetInput.addEventListener('input', () => { budgetDirty = true; budgetRevision++; });
 el<HTMLFormElement>('budget-form').addEventListener('submit', async event => {
   event.preventDefault();
   if (accountChanging) return;
   const accountId = dashboardAccountId;
+  const revision = budgetRevision;
   const input = budgetInput.value.trim();
   if (input && !/^\d{1,18}(?:\.\d{1,9})?$/.test(input)) {
     text('budget-feedback', '请输入非负数，整数最多 18 位，小数最多 9 位。');
@@ -547,9 +549,11 @@ el<HTMLFormElement>('budget-form').addEventListener('submit', async event => {
   try {
     await mutate(scoped('/api/settings', accountId), 'PATCH', { monthlyBudget: input || null });
     if (accountChanging || dashboardAccountId !== accountId) return;
-    budgetDirty = false;
-    text('budget-feedback', input ? (BigInt(input.split('.')[0] ?? '0') === 0n && !/[1-9]/.test(input) ? '已保存 · 预算为 0，不计算百分比。' : '预算已保存。') : '已清除自定义预算。');
+    if (revision === budgetRevision) budgetDirty = false;
     await loadDashboard();
+    if (accountChanging || dashboardAccountId !== accountId) return;
+    if (revision !== budgetRevision) text('budget-feedback', '上次提交已保存；当前输入尚未保存。');
+    else text('budget-feedback', input ? (BigInt(input.split('.')[0] ?? '0') === 0n && !/[1-9]/.test(input) ? '已保存 · 预算为 0，不计算百分比。' : '预算已保存。') : '已清除自定义预算。');
   } catch (error) {
     if (accountChanging || dashboardAccountId !== accountId) return;
     text('budget-feedback', `保存失败：${errorMessage(error)}`);
