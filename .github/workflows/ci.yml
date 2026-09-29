@@ -65,6 +65,12 @@ jobs:
         run: npm run build:windows
         timeout-minutes: 10
 
+      - name: Ensure WebView2 runtime for Windows desktop verification
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/windows/ensure-webview2.ps1 -CI
+        timeout-minutes: 10
+
       - name: Verify EXE without Node or npm on PATH
         if: runner.os == 'Windows'
         run: npm run test:windows

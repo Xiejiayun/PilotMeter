@@ -287,20 +287,23 @@ try {
   const desktopRoot = join(cacheDirectory, 'desktop');
   for (const name of ['PilotMeter.Desktop.exe', 'PilotMeter.Desktop.exe.config'])
     assert.ok((await stat(join(desktopRoot, name))).isFile(), `Missing standalone desktop component: ${name}`);
-  assert.equal((await readdir(desktopRoot)).some(name => /webview/i.test(name)), false, 'The native main window must not package a WebView.');
+  for (const name of ['Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.WinForms.dll', 'WebView2Loader.dll', 'WEBVIEW2-LICENSE.txt'])
+    assert.ok((await stat(join(desktopRoot, name))).isFile(), `Missing pinned WebView2 component: ${name}`);
+  assert.ok((await stat(join(cacheDirectory, 'app', 'public', 'desktop.html'))).isFile(), 'The shipping Tailwind desktop entry must be packaged.');
   for (const dependency of Object.keys(cachedManifest.dependencies ?? {})) await access(join(appRoot, 'node_modules', dependency, 'package.json'));
   for (const dependency of Object.keys(cachedManifest.devDependencies ?? {})) assert.equal(await exists(join(appRoot, 'node_modules', dependency)), false, `Development dependency in production payload: ${dependency}`);
   const runtime = JSON.parse((await run(bundledNode, ['-p', 'JSON.stringify({version:process.version,arch:process.arch})'])).stdout);
   assert.deepEqual(runtime, { version: 'v24.14.0', arch: 'x64' });
   record('Concurrent first launches share one complete cache with x64 Node and production dependencies');
 
-  const desktopContracts = await run(process.execPath, [join(workspace, 'scripts', 'test-windows-desktop.mjs')], { env: process.env, cwd: workspace, timeout: 360_000 });
+  const desktopContracts = await run(process.execPath, [join(workspace, 'scripts', 'test-windows-desktop.mjs')], { env: process.env, cwd: workspace, timeout: 420_000 });
   assert.match(desktopContracts.stdout, /Desktop contracts passed: \d+/);
   assert.match(desktopContracts.stdout, /Native layout: \d+ checks passed/);
   assert.match(desktopContracts.stdout, /Desktop login: \d+ checks passed/);
   assert.match(desktopContracts.stdout, /Desktop recovery checks passed: \d+/);
+  assert.match(desktopContracts.stdout, /Desktop WebView2: \d+ checks passed; shipping Tailwind page rendered/);
   console.log(desktopContracts.stdout.trim());
-  record('Windowless native checks verify transport boundaries, DPI layouts, login lifecycle, and service recovery');
+  record('Isolated checks verify native transport, DPI, login, recovery, and actual zero-opacity WebView2 rendering of the shipping Tailwind page');
 
   beginStart(dataDir);
   const started = (await cli(dataDir, ['start', '--background'], { env: { ...environment, PILOTMETER_DATA_DIR: decoyData } })).stdout;
@@ -317,7 +320,10 @@ try {
   assert.equal(desktop.presentation.primary, null);
   assert.deepEqual(desktop.presentation.buckets, []);
   assert.equal('runCommand' in desktop, false);
-  record('GUI launcher packages a native main window; widget and desktop APIs bind unknown login state to the verified daemon');
+  const desktopPage = await http(instance.url, '/desktop.html');
+  assert.equal(desktopPage.status, 200);
+  assert.match(await desktopPage.text(), /\/assets\/[^"']+\.js/);
+  record('GUI launcher packages the WebView2 Tailwind main window; widget and desktop APIs bind unknown login state to the verified daemon');
   assert.ok(started.includes(instance.url));
   assert.equal(await exists(decoyData), false);
   await cli(dataDir, ['start', '--background']);
@@ -651,7 +657,7 @@ for (const [kind, pid] of [['launcher', process.ppid], ['node', process.pid]]) {
 const report = { package: `${manifest.name}@${manifest.version}`, artifact: executable, artifactSha256: artifactHash,
   artifactBytes: artifact.length, platform: process.platform, bundledNode: 'v24.14.0 / x64', bundledCopilot: '1.0.88 / win32-x64', checks,
   cmdShimLimitation,
-  browserAcceptance: 'Only the bundled Copilot version command ran; no login, model session, browser, or desktop window was launched. Widget and native window interactions require separate interactive acceptance.',
+  browserAcceptance: 'The bundled Copilot version command and isolated zero-opacity native/WebView2 tests ran. The shipping HTML and compiled CSS loaded in the actual Evergreen renderer; no external browser, visible desktop window, real login, or model session was launched. Physical multi-monitor behavior and completed GitHub authorization require separate interactive acceptance.',
   ...(failure ? { retainedDirectory: ownedRoot, failure: String(failure.stack || failure), uncertainChildPids: [...uncertainChildren] } : { result: 'passed' }) };
 if (failure) {
   if (failure instanceof AggregateError) report.causes = failure.errors.map(error => String(error.stack || error));

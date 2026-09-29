@@ -257,7 +257,7 @@ internal sealed class DesktopContext : ApplicationContext
     private DesktopInstance instance;
     private DesktopInstance recoveryInstance;
     private bool recoveringService;
-    private DashboardWindow dashboard;
+    private DesktopWebWindow dashboard;
     private DesktopNativeApi pendingAction;
     private bool refreshing;
     private bool actionBusy, refreshQueued, queuedAllowStart, dashboardMutationObserved;
@@ -447,7 +447,9 @@ internal sealed class DesktopContext : ApplicationContext
 
     private async Task RefreshAsync(bool allowStart)
     {
-        if (exiting || DashboardChangingAccount || !snapshotGate.CanRead) return;
+        if (exiting) return;
+        if (DashboardChangingAccount) { await ProbeDuringAccountMutationAsync(); return; }
+        if (!snapshotGate.CanRead) return;
         if (refreshing || actionBusy) { refreshQueued = true; queuedAllowStart |= allowStart; return; }
         refreshing = true;
         long generation = snapshotGate.Capture();
@@ -507,7 +509,10 @@ internal sealed class DesktopContext : ApplicationContext
                 UnitLabel = DesktopJson.OptionalString(snapshot, "unitLabel", 40), UnitUnspecified = snapshot.TryGetValue("unitUnspecified", out raw) && raw is bool && (bool)raw
             });
             widget.SetAccounts(accounts.Accounts, accounts.ActiveId, accounts.Enabled);
-            if (dashboard != null && !dashboard.IsDisposed) { dashboard.SetService(candidate, null); dashboard.SetServiceRecovery(false, false); }
+            if (dashboard != null && !dashboard.IsDisposed) {
+                dashboard.RestoreQuotaSelection(selectedQuotaAccountId, selectedQuotaKey);
+                dashboard.SetService(candidate, null); dashboard.SetServiceRecovery(false, false);
+            }
         }
         catch (OperationCanceledException) { if (!exiting && snapshotGate.Accepts(generation)) Disconnect("offline", "本机服务响应超时。点击挂件重试。"); }
         catch (Exception error)
@@ -518,11 +523,40 @@ internal sealed class DesktopContext : ApplicationContext
         finally
         {
             refreshing = false;
-            if (refreshQueued && !actionBusy && !exiting)
-            {
-                bool start = queuedAllowStart; refreshQueued = queuedAllowStart = false;
-                try { widget.BeginInvoke(new Action(async delegate { await RefreshAsync(start); })); } catch (InvalidOperationException) { }
-            }
+            DispatchQueuedRefresh();
+        }
+    }
+
+    // Account mutations suspend quota reads, but must not hide a disconnected or
+    // replaced daemon. The probe is read-only and belongs to the exact page and
+    // operation that started it; an older reply cannot revoke a newer login.
+    private async Task ProbeDuringAccountMutationAsync()
+    {
+        if (refreshing || actionBusy || exiting) return;
+        var owner = dashboard; var expected = instance;
+        if (owner == null || owner.IsDisposed || expected == null) return;
+        var operation = owner.AccountMutationOperation; int epoch = owner.ServiceEpoch;
+        if (!owner.OwnsAccountMutation(operation, epoch)) return;
+        refreshing = true;
+        try
+        {
+            var candidate = await ProbeAsync();
+            if (exiting || dashboard != owner || !owner.OwnsAccountMutation(operation, epoch) || !expected.SameAs(instance)) return;
+            if (expected.SameAs(candidate)) return;
+            recoveryInstance = candidate != null && candidate.Version != version ? candidate : null;
+            Disconnect(recoveryInstance == null ? "offline" : "error", recoveryInstance == null
+                ? "登录期间本机服务已断开或更换。请重新连接后获取新的验证码。"
+                : "后台版本已变化。请结束采集中的会话，再点击“重启本机服务”恢复登录。");
+        }
+        finally { refreshing = false; DispatchQueuedRefresh(); }
+    }
+
+    private void DispatchQueuedRefresh()
+    {
+        if (refreshQueued && !actionBusy && !exiting)
+        {
+            bool start = queuedAllowStart; refreshQueued = queuedAllowStart = false;
+            try { widget.BeginInvoke(new Action(async delegate { await RefreshAsync(start); })); } catch (InvalidOperationException) { }
         }
     }
 
@@ -565,7 +599,7 @@ internal sealed class DesktopContext : ApplicationContext
         if (exiting) return;
         if (dashboard == null || dashboard.IsDisposed)
         {
-            dashboard = new DashboardWindow(directory, RefreshRequestedAsync);
+            dashboard = new DesktopWebWindow(directory, RefreshRequestedAsync);
             dashboard.SetPetPreferences(petPreferences);
             Icon dashboardIcon = DesktopBrand.CreateIcon();
             dashboard.Icon = dashboardIcon;
