@@ -1,6 +1,6 @@
 # Windows 单 EXE
 
-`PilotMeter-0.1.0-preview.12-win-x64.exe` 将 Node.js 24.14.0、PilotMeter、桌面 PET、HTML + Tailwind CSS 工作台和生产依赖放在一个文件中，适用于 Windows 10/11 x64。无需安装 Node.js 或 npm；桌面宿主需要 .NET Framework 4.8，主界面使用 Microsoft Edge WebView2 Evergreen Runtime。所有页面、样式和宠物资源随包提供，不使用在线 CSS 或字体。不修改 PATH。
+`PilotMeter-0.1.0-preview.13-win-x64.exe` 将 Node.js 24.14.0、PilotMeter、桌面 PET、HTML + Tailwind CSS 工作台和生产依赖放在一个文件中，适用于 Windows 10/11 x64。无需安装 Node.js 或 npm；桌面宿主需要 .NET Framework 4.8，主界面使用 Microsoft Edge WebView2 Evergreen Runtime。所有页面、样式和宠物资源随包提供，不使用在线 CSS 或字体。不修改 PATH。
 
 若设备未安装 WebView2 Runtime，PET 仍可启动，主窗口会显示 Microsoft 官方安装入口；安装后点击重试。WebView2 运行时由 Microsoft 维护和更新，应用包固定并校验 WebView2 SDK 与 x64 Loader 的版本和摘要。
 
@@ -11,7 +11,7 @@
 已发布版本的 EXE 和 `SHA256SUMS` 可从 [GitHub Releases](https://github.com/Xiejiayun/PilotMeter/releases) 下载；源码构建方式见下文。在 PowerShell 中计算文件摘要，与同一版本校验清单中对应文件的一行比较：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\PilotMeter-0.1.0-preview.12-win-x64.exe
+Get-FileHash -Algorithm SHA256 .\PilotMeter-0.1.0-preview.13-win-x64.exe
 Get-Content .\SHA256SUMS
 ```
 
@@ -31,25 +31,26 @@ Get-Content .\SHA256SUMS
 
 ```powershell
 # 查看运行环境；核对内置 Copilot 版本；不会自动登录
-.\PilotMeter-0.1.0-preview.12-win-x64.exe doctor
+.\PilotMeter-0.1.0-preview.13-win-x64.exe doctor
 
 # 显示桌面挂件（也可以直接双击 EXE）
-.\PilotMeter-0.1.0-preview.12-win-x64.exe desktop
+.\PilotMeter-0.1.0-preview.13-win-x64.exe desktop
 
 # 直接显示独立主窗口，适合快捷方式或键盘启动
-.\PilotMeter-0.1.0-preview.12-win-x64.exe desktop --open
+.\PilotMeter-0.1.0-preview.13-win-x64.exe desktop --open
 
-# 先在主窗口登录，然后用所选账号启动内置 Copilot，采集本次会话
-Start-Process .\PilotMeter-0.1.0-preview.12-win-x64.exe -ArgumentList 'run -- --no-auto-update' -NoNewWindow -Wait
+# 也可在主窗口登录后点击“启动 Copilot 会话”，选择项目文件夹
+# 以下保留终端方式：用所选账号启动内置 Copilot，采集本次会话
+Start-Process .\PilotMeter-0.1.0-preview.13-win-x64.exe -ArgumentList 'run -- --no-auto-update' -NoNewWindow -Wait
 
 # 另一个终端或分屏查看状态
-Start-Process .\PilotMeter-0.1.0-preview.12-win-x64.exe -ArgumentList 'watch' -NoNewWindow -Wait
-.\PilotMeter-0.1.0-preview.12-win-x64.exe status --json
-.\PilotMeter-0.1.0-preview.12-win-x64.exe open
-.\PilotMeter-0.1.0-preview.12-win-x64.exe stop
+Start-Process .\PilotMeter-0.1.0-preview.13-win-x64.exe -ArgumentList 'watch' -NoNewWindow -Wait
+.\PilotMeter-0.1.0-preview.13-win-x64.exe status --json
+.\PilotMeter-0.1.0-preview.13-win-x64.exe open
+.\PilotMeter-0.1.0-preview.13-win-x64.exe stop
 ```
 
-`watch` 中按 `o` 打开页面、`q` 退出观察。所有 CLI 命令保留，参数用法见 [README](../README.md#命令)；将文档中的 `pilotmeter` 替换为 EXE 路径即可。路径含空格时使用 PowerShell 的调用运算符，例如 `& 'C:\我的工具\PilotMeter-0.1.0-preview.12-win-x64.exe' status`。
+`watch` 中按 `o` 打开页面、`q` 退出观察。所有 CLI 命令保留，参数用法见 [README](../README.md#命令)；将文档中的 `pilotmeter` 替换为 EXE 路径即可。路径含空格时使用 PowerShell 的调用运算符，例如 `& 'C:\我的工具\PilotMeter-0.1.0-preview.13-win-x64.exe' status`。
 
 EXE 使用 Windows GUI 子系统以避免双击时弹出控制台。交互式 PowerShell 可能不会等待这种 EXE；`watch` 和 `run` 使用上方 `Start-Process -NoNewWindow -Wait`，让终端保持输入归属。重定向与脚本调用的 stdout、stderr 和退出码另有 EXE 回归覆盖。`Start-Process -ArgumentList` 接受命令行文本，自定义参数含空格时须在该文本中加双引号。
 
@@ -58,8 +59,8 @@ EXE 使用 Windows GUI 子系统以避免双击时弹出控制台。交互式 Po
 需要独立账本时，把 `--data-dir` 放在命令之前。相对路径按当前终端工作目录解析：
 
 ```powershell
-.\PilotMeter-0.1.0-preview.12-win-x64.exe --data-dir 'D:\PilotMeter 数据' desktop
-.\PilotMeter-0.1.0-preview.12-win-x64.exe --data-dir 'D:\PilotMeter 数据' stop
+.\PilotMeter-0.1.0-preview.13-win-x64.exe --data-dir 'D:\PilotMeter 数据' desktop
+.\PilotMeter-0.1.0-preview.13-win-x64.exe --data-dir 'D:\PilotMeter 数据' stop
 ```
 
 ## 缓存、数据与升级
@@ -104,9 +105,9 @@ npm run release:check
 构建输出：
 
 ```text
-build/windows/PilotMeter-0.1.0-preview.12-win-x64.exe
-build/windows/PilotMeter-0.1.0-preview.12-win-x64.exe.json
-build/windows/PilotMeter-0.1.0-preview.12-win-x64.zip
+build/windows/PilotMeter-0.1.0-preview.13-win-x64.exe
+build/windows/PilotMeter-0.1.0-preview.13-win-x64.exe.json
+build/windows/PilotMeter-0.1.0-preview.13-win-x64.zip
 build/windows/SHA256SUMS
 ```
 
@@ -138,7 +139,9 @@ build/windows/SHA256SUMS
 
 `preview.8` 实际 EXE 的原生主窗口启动成功，已读取无账号状态的控件树。四页、880/1280 宽度、十宠物、未知单位和超长数字共 12 张原生控件离屏渲染图完成检查，使用合成数据。当时实际截图返回 `IGraphicsCaptureItemInterop.CreateForMonitor (0x80070057)`；重新选择窗口后，交互仍返回 `GetCursorPos: Access is denied (0x80070005)`。这些离屏图不替代实际点击、拖动、托盘恢复和跨屏 DPI 验收。`preview.7` 的 `watch` TTY 退出检查保留为历史基线。
 
-`preview.12` HTML 工作台的完整本地发布流程与实际窗口检查见[兼容性记录](compatibility.md)。本轮用户在独立数据目录的可见 EXE 中亲自完成一次设备授权，窗口随后显示真实账号的额度和模型目录。私有截图与账号资料不进入源码库；真实多账号切换和官方账单核对仍待验证。
+`preview.13` 在总览和用量记录页增加“启动 Copilot 会话”：先选择已连接账号，再选择项目文件夹，在打开的终端中使用 Copilot。按钮只启动内置 CLI，采集绑定启动时的账号；取消文件夹选择不会启动进程。新会话记录会随页面定时刷新和“同步”更新。本月最近会话独立于记录页的月份与排序。
+
+GitHub 登录只读取当前账号额度与模型，不会下载历史聊天记录。仅从 PilotMeter 启动、且已经产生遥测的会话会出现在本机记录中；未知费用不会按零计。`preview.12` 的实际登录和窗口验证证据见[兼容性记录](compatibility.md)，真实多账号采集与官方账单核对仍待验证。私有账号资料和截图不进入源码库。
 
 未完成的系统/终端验收：干净 Windows 10/11 设备兼容性、真实 Copilot TUI 交互、原生 statusline 渲染以及终端链接点击。PATH 隔离测试不等同于干净系统验收。EXE 未签名。
 

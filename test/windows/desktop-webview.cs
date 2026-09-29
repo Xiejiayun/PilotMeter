@@ -165,6 +165,13 @@ internal static class DesktopWebViewTests
         await core.ExecuteScriptAsync("window.__hostMessages=[];window.chrome.webview.addEventListener('message',e=>window.__hostMessages.push(e.data));window.chrome.webview.postMessage({type:'ready'});");
         await Until(async delegate { return await core.ExecuteScriptAsync("window.__hostMessages.some(m=>m.type==='service-state') && window.__hostMessages.some(m=>m.type==='pet-state')") == "true"; }, "Host safe state handshake");
         int epoch = (int)Field(window, "navigationGeneration");
+        Check(await core.ExecuteScriptAsync("window.__hostMessages.find(m=>m.type==='service-state').sessionLaunchAvailable === false") == "true", "Windows without bundled runtime never offer session launch");
+        await Post(core, new { type = "start-session", requestId = "unavailable-session", accountId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", epoch = epoch });
+        await Until(async delegate { return await core.ExecuteScriptAsync("window.__hostMessages.some(m=>m.type==='session-start-result'&&m.requestId==='unavailable-session'&&m.status==='error')") == "true"; }, "Unavailable runtime returns correlated launch feedback");
+        await Post(core, new { type = "start-session", requestId = "extra-command", accountId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", command = "calc.exe", epoch = epoch });
+        await Until(async delegate { return await core.ExecuteScriptAsync("window.__hostMessages.some(m=>m.type==='session-start-result'&&m.requestId==='extra-command'&&m.status==='error')") == "true"; }, "Page cannot submit arbitrary command fields");
+        await Post(core, new { type = "start-session", requestId = "old-epoch-session", accountId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", epoch = epoch - 1 });
+        await Task.Delay(100); Check(await core.ExecuteScriptAsync("!window.__hostMessages.some(m=>m.requestId==='old-epoch-session')") == "true", "Stale page cannot launch a session or receive current launch feedback");
         Check(await core.ExecuteScriptAsync("window.__hostMessages.find(m=>m.type==='pet-state').pets.length === 10") == "true", "Ten pets available");
         string state = await core.ExecuteScriptAsync("JSON.stringify(window.__hostMessages)");
         Check(!state.Contains("csrfToken") && !state.Contains("collectorToken") && !state.Contains("managementToken") && !state.Contains("webview2"), "Bridge state contains no tokens or profile paths");

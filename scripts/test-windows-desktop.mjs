@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { access, copyFile, lstat, mkdir, mkdtemp, realpath, rm, stat, symlink } from 'node:fs/promises';
+import { access, copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -92,6 +92,7 @@ try {
     }),
     join(workspace, 'scripts', 'windows', 'DesktopApp.cs'),
     join(workspace, 'scripts', 'windows', 'DesktopWebWindow.cs'),
+    join(workspace, 'scripts', 'windows', 'DesktopSessionLaunch.cs'),
     join(workspace, 'scripts', 'windows', 'DesktopWidget.cs'),
     join(workspace, 'scripts', 'windows', 'DesktopBrand.cs'),
     join(workspace, 'scripts', 'windows', 'DesktopMainWindow.cs'),
@@ -102,11 +103,25 @@ try {
     join(workspace, 'test', 'windows', 'native-view.cs'),
     join(workspace, 'test', 'windows', 'desktop-contracts.cs'),
     join(workspace, 'test', 'windows', 'desktop-pets.cs'),
+    join(workspace, 'test', 'windows', 'desktop-session.cs'),
   ];
   const nativeArguments = contractArguments.filter(argument => !/^\/(?:main|out):/u.test(argument));
   if (!webViewOnly) {
   await run(compiler, contractArguments);
   console.log(await run(executable, [physical, alias, fixtureOrigin]));
+  const sessionRuntime = join(temporary, "session runtime & %PATH% ! ' 项目");
+  await mkdir(join(sessionRuntime, 'runtime'), { recursive: true });
+  await mkdir(join(sessionRuntime, 'app', 'bin'), { recursive: true });
+  await writeFile(join(sessionRuntime, 'app', 'bin', 'pilotmeter.js'), '// Isolated process fixture; never executed.');
+  const sessionFixture = join(workspace, 'test', 'windows', 'desktop-session-process.cs');
+  await run(compiler, ['/nologo', '/target:exe', '/platform:x64', '/langversion:5', '/define:SESSION_CONSOLE_PROBE', '/main:DesktopSessionConsoleProbe',
+    '/reference:System.Web.Extensions.dll', '/out:' + join(sessionRuntime, 'runtime', 'node.exe'), sessionFixture]);
+  const sessionExecutable = join(temporary, 'DesktopSessionProcessTests.exe');
+  await run(compiler, ['/target:winexe', '/main:DesktopSessionProcessTests', '/out:' + sessionExecutable,
+    ...nativeArguments.filter(argument => !argument.startsWith('/target:')), sessionFixture]);
+  try { await run(sessionExecutable, [sessionRuntime, physical, physical]); }
+  catch (error) { throw new Error(`${error.message}\n${await readFile(join(physical, 'session-process-result.txt'), 'utf8').catch(() => '')}`); }
+  console.log(await readFile(join(physical, 'session-process-result.txt'), 'utf8'));
   const layoutExecutable = join(temporary, 'DesktopLayoutTests.exe');
   await copyFile(join(workspace, 'scripts', 'windows', 'DesktopApp.config'), layoutExecutable + '.config');
   await run(compiler, ['/main:DesktopLayoutTests', '/out:' + layoutExecutable, ...nativeArguments,

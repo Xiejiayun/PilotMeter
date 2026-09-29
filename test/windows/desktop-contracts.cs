@@ -146,6 +146,7 @@ internal static class DesktopContractTests
             assertions += DesktopApiTests.Run(args[2]).GetAwaiter().GetResult();
             assertions += NativeViewTests.Run();
             assertions += DesktopPetTests.Run(args[0]);
+            assertions += DesktopSessionTests.Run(args[0]).GetAwaiter().GetResult();
             Console.WriteLine("Desktop contracts passed: " + assertions);
             return 0;
         }

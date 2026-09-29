@@ -69,6 +69,8 @@ internal static class DesktopWebPolicy
 internal sealed class DesktopWebWindow : Form
 {
     private readonly string directory;
+    private readonly string runtimeRoot;
+    private readonly DesktopSessionStarter sessionStarter = new DesktopSessionStarter();
     private readonly Func<Task> reconnect;
     private readonly Panel fallback;
     private readonly Label status;
@@ -87,9 +89,9 @@ internal sealed class DesktopWebWindow : Form
     { return !disposed && AccountMutationPending && operation != null && mutationOperation == operation && navigationGeneration == epoch; }
     internal event EventHandler<NativeQuotaSelectionEventArgs> QuotaSelectionChanged;
 
-    internal DesktopWebWindow(string directory, Func<Task> reconnect)
+    internal DesktopWebWindow(string directory, Func<Task> reconnect, string runtimeRoot = null)
     {
-        this.directory = directory; this.reconnect = reconnect;
+        this.directory = directory; this.reconnect = reconnect; this.runtimeRoot = runtimeRoot;
         Text = "PilotMeter"; StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi; ClientSize = new Size(1260, 850); MinimumSize = new Size(760, 580);
         BackColor = Color.FromArgb(247, 248, 250); Font = new Font("Microsoft YaHei UI", 10F);
@@ -240,6 +242,7 @@ internal sealed class DesktopWebWindow : Form
     {
         Send(new Dictionary<string, object> { { "type", "service-state" }, { "connected", service != null },
             { "epoch", navigationGeneration },
+            { "sessionLaunchAvailable", DesktopSessionLaunch.Available(runtimeRoot) },
             { "instanceId", service == null ? null : service.InstanceId }, { "version", service == null ? null : service.Version },
             { "recoverable", recoveryAvailable }, { "recovering", recovering }, { "message", message },
             { "accountId", selectedAccount }, { "quotaKey", selectedQuota } });
@@ -276,6 +279,17 @@ internal sealed class DesktopWebWindow : Form
             if (!pageReady) return;
             object epoch;
             if (!content.TryGetValue("epoch", out epoch) || !(epoch is int) || (int)epoch != navigationGeneration) return;
+            if (type == "start-session")
+            {
+                var requestId = DesktopJson.String(content, "requestId", 80);
+                var accountId = DesktopJson.String(content, "accountId", 36);
+                // No arbitrary executable, path, argument or command can cross
+                // this bridge, even as an ignored extra property.
+                if (!DesktopSessionLaunch.RequestId(requestId)) return;
+                if (content.Count != 4 || !DesktopWebPolicy.Account(accountId))
+                { SendSessionResult(requestId, (int)epoch, new DesktopSessionResult("error", "启动参数无效，请刷新后重试。")); return; }
+                await StartSessionAsync(requestId, accountId, (int)epoch); return;
+            }
             if (type == "open-external")
             {
                 var loginId = DesktopJson.OptionalString(content, "loginId", 36);
@@ -316,6 +330,54 @@ internal sealed class DesktopWebWindow : Form
         }
         catch (Exception error)
         { if (error is OutOfMemoryException || error is StackOverflowException) throw; SendError("操作未完成，请重试。" + NativeData.Error(error)); }
+    }
+    private bool SessionCurrent(DesktopInstance expected, int epoch)
+    {
+        return !disposed && pageReady && initialized && epoch == navigationGeneration && !AccountMutationPending && !recovering
+            && expected != null && expected.SameAs(service) && expected.SameAs(documentService);
+    }
+    private async Task StartSessionAsync(string requestId, string accountId, int epoch)
+    {
+        if (!DesktopSessionLaunch.Available(runtimeRoot))
+        { SendSessionResult(requestId, epoch, new DesktopSessionResult("error", "当前窗口不支持启动会话，请使用完整的 Windows EXE。")); return; }
+        var expected = documentService;
+        using (var api = new DesktopNativeApi(expected))
+        {
+            var result = await sessionStarter.StartAsync(accountId, delegate { return SessionCurrent(expected, epoch); },
+                delegate { return api.RequestAsync("/api/auth/accounts"); },
+                delegate {
+                    using (var picker = new FolderBrowserDialog { Description = "选择 Copilot 会话的项目目录。接下来会打开当前 GitHub 账号的 Copilot 终端，并采集实际请求的用量。", ShowNewFolderButton = false })
+                        return picker.ShowDialog(this) == DialogResult.OK ? picker.SelectedPath : null;
+                },
+                delegate(string pinnedAccount, string project) { LaunchSessionProcess(pinnedAccount, project, expected, epoch); });
+            // A replaced document must never receive the old operation's result.
+            if (!disposed && epoch == navigationGeneration && expected != null && expected.SameAs(documentService))
+                SendSessionResult(requestId, epoch, result);
+        }
+    }
+    private void LaunchSessionProcess(string accountId, string project, DesktopInstance expected, int epoch)
+    {
+        var child = new Process { StartInfo = DesktopSessionLaunch.StartInfo(runtimeRoot, directory, accountId, project), EnableRaisingEvents = true };
+        child.Exited += delegate {
+            int exitCode;
+            try { exitCode = child.ExitCode; } catch (InvalidOperationException) { exitCode = -1; }
+            child.Dispose();
+            // Console processes can fail before users have time to read them.
+            // Surface a safe actionable message in the workbench as well.
+            if (DesktopSessionLaunch.ExpectedExit(exitCode) || disposed || !IsHandleCreated) return;
+            try { BeginInvoke((Action)delegate {
+                if (!disposed && epoch == navigationGeneration && expected.SameAs(documentService))
+                    Send(DesktopSessionLaunch.ExitMessage(accountId, epoch, exitCode));
+            }); }
+            catch (InvalidOperationException) { }
+        };
+        try { if (!child.Start()) throw new IOException("Copilot 终端未能打开，请重试。"); }
+        catch { child.Dispose(); throw; }
+    }
+    private void SendSessionResult(string requestId, int epoch, DesktopSessionResult result)
+    {
+        Send(new Dictionary<string, object> { { "type", "session-start-result" }, { "requestId", requestId },
+            { "epoch", epoch }, { "status", result.Status }, { "message", result.Message } });
     }
     private async Task OpenLoginAsync(string id)
     {

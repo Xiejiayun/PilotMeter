@@ -164,6 +164,12 @@
   .record-number { white-space: nowrap; font-variant-numeric: tabular-nums; }
   .record-note { display: block; color: #a1a8ad; font-size: 8px; margin-top: 3px; }
   .filter-bar { @apply flex items-center; flex-wrap: wrap; gap: 12px; margin-bottom: 17px; }
+  .session-heading { flex-wrap: wrap; }
+  .session-actions { @apply flex items-center; flex-wrap: wrap; gap: 14px; }
+  .records-start { margin-left: auto; }
+  .session-help { margin-bottom: 12px; }
+  .session-command { background: #f3f5f3; border: 1px solid #e2e7e2; border-radius: 8px; padding: 13px; margin: 16px 0 12px; }
+  .session-command code { display: block; max-width: 100%; overflow-wrap: anywhere; user-select: text; font-size: 12px; line-height: 1.7; }
   .search-field { @apply flex items-center; gap: 10px; background: #fff; border: 1px solid #e0e6ea; padding: 0 12px; border-radius: 8px; flex: 1; min-width: 210px; max-width: 390px; color: #a1aab0; }
   .search-field input { background: none; border: 0; padding: 11px 0; width: 100%; outline: none; font-size: 11px; color: #47545d; }
   .search-field:focus-within { border-color: #74a48b; box-shadow: 0 0 0 3px #eaf3ed; }

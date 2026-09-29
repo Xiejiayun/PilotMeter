@@ -599,7 +599,7 @@ internal sealed class DesktopContext : ApplicationContext
         if (exiting) return;
         if (dashboard == null || dashboard.IsDisposed)
         {
-            dashboard = new DesktopWebWindow(directory, RefreshRequestedAsync);
+            dashboard = new DesktopWebWindow(directory, RefreshRequestedAsync, runtimeRoot);
             dashboard.SetPetPreferences(petPreferences);
             Icon dashboardIcon = DesktopBrand.CreateIcon();
             dashboard.Icon = dashboardIcon;
