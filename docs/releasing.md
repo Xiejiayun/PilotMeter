@@ -27,16 +27,16 @@ npm run release:windows
 
 ## GitHub Release
 
-1. 更新版本：`npm version 0.1.0-preview.17 --no-git-tag-version`，同步修改 `src/shared/runtime.ts` 的 `VERSION`，一起提交 package、lockfile 和运行时版本。安装包验收会拒绝版本不一致的产物。
-2. 添加对应版本的 `docs/releases/0.1.0-preview.17.md`，记录实际功能、升级方法与已知边界。
+1. 更新版本：`npm version 0.1.0-preview.18 --no-git-tag-version`，同步修改 `src/shared/runtime.ts` 的 `VERSION`，一起提交 package、lockfile 和运行时版本。安装包验收会拒绝版本不一致的产物。
+2. 添加对应版本的 `docs/releases/0.1.0-preview.18.md`，记录实际功能、升级方法与已知边界。
 3. 提交 PR，等待三平台 CI 通过后合并 main。
 4. 在最新 main 创建并推送版本标签：
 
 ```powershell
 git switch main
 git pull --ff-only
-git tag v0.1.0-preview.17
-git push origin v0.1.0-preview.17
+git tag v0.1.0-preview.18
+git push origin v0.1.0-preview.18
 ```
 
 `Windows Release` 工作流会验证标签与 package 版本一致、提交已进入 main、发布说明存在；在 Windows 上重新测试、打包、校验，然后上传 EXE、ZIP、版本清单与 SHA256SUMS。上传先进入草稿，全部成功后才公开；带 `-preview` 等后缀的版本自动标为 Pre-release。
