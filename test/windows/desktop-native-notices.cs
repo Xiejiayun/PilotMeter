@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -7,6 +8,7 @@ using System.Reflection;
 using System.Runtime.Serialization;
 using System.Text;
 using System.Threading.Tasks;
+using System.Windows.Forms;
 
 // Focused, windowless tests against the shipping context. A held loopback
 // failure exercises the actual async native action without starting a daemon.
@@ -17,7 +19,66 @@ internal static class DesktopNativeNoticeTests
     private static void Check(bool condition, string message) { if (!condition) throw new Exception(message); checks++; }
     private static void Set(object target, string field, object value) { target.GetType().GetField(field, BindingFlags.Instance | BindingFlags.NonPublic).SetValue(target, value); }
     private static object Get(object target, string field) { return target.GetType().GetField(field, BindingFlags.Instance | BindingFlags.NonPublic).GetValue(target); }
+    private static bool Flag(object target, string property) { return (bool)target.GetType().GetProperty(property, BindingFlags.Instance | BindingFlags.NonPublic).GetValue(target, null); }
     private static object Call(object target, string method, params object[] args) { return target.GetType().GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic).Invoke(target, args); }
+
+    private static void PetMotionPreference()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "pilotmeter-pet-motion-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var widget = (DesktopWidget)FormatterServices.GetUninitializedObject(typeof(DesktopWidget));
+        var clock = Stopwatch.StartNew();
+        var synchronizationContext = System.Threading.SynchronizationContext.Current;
+        using (var menu = new ContextMenuStrip())
+        try
+        {
+            // Supply the managed handle owner that Control normally creates;
+            // it starts with IntPtr.Zero and never calls CreateHandle here.
+            Type windowType = typeof(Control).GetNestedType("ControlNativeWindow", BindingFlags.NonPublic);
+            object window = Activator.CreateInstance(windowType, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new object[] { widget }, null);
+            foreach (var field in typeof(Control).GetFields(BindingFlags.Instance | BindingFlags.NonPublic))
+                if (field.FieldType == windowType) field.SetValue(widget, window);
+            var preferences = new DesktopPetPreferences(directory);
+            var reaction = new WidgetUpdateMotion();
+            Set(widget, "preferences", preferences); Set(widget, "clock", clock);
+            Set(widget, "updateMotion", reaction); Set(widget, "menu", menu);
+            // Set the managed visibility bit without invoking Form.Show or
+            // creating a native window. Notify runs its real dispatch and
+            // motion gates; RenderFrame exits at its uninitialized guard.
+            var visible = typeof(Control).GetMethod("SetState", BindingFlags.Instance | BindingFlags.NonPublic);
+            visible.Invoke(widget, new object[] { 0x00000002, true });
+            Check(widget.Visible && !widget.IsHandleCreated, "The motion fixture must be visible only in managed state, without any desktop window.");
+            Check(Flag(widget, "MotionAllowed") && Flag(widget, "CanAnimate"), "The explicit PET animation preference must work even when Windows menu or client-area animations are disabled.");
+            widget.Notify(DesktopPetReactionKind.Message, "motion-enabled", "同步已完成");
+            Check(reaction.Kind(clock.ElapsedMilliseconds) == DesktopPetReactionKind.Message && reaction.Caption(clock.ElapsedMilliseconds) == "同步已完成", "An enabled PET must accept a real notification through the shipping widget gate.");
+
+            preferences.SetMotion(false);
+            Check(!Flag(widget, "MotionAllowed") && !Flag(widget, "CanAnimate"), "Turning off PET animation must disable idle and reaction rendering.");
+            widget.Notify(DesktopPetReactionKind.Attention, "motion-disabled", "不应接收");
+            Check(reaction.Kind(clock.ElapsedMilliseconds) == DesktopPetReactionKind.Message, "A disabled PET must reject new notifications instead of promoting a queued reaction.");
+
+            // The queue tests cover clearing an active reaction; reset the
+            // isolated queue here before exercising the visibility gate.
+            reaction.Clear(); preferences.SetMotion(true);
+            visible.Invoke(widget, new object[] { 0x00000002, false });
+            Check(!Flag(widget, "CanAnimate"), "A hidden PET must pause its animation timer work.");
+            widget.Notify(DesktopPetReactionKind.Message, "motion-hidden", "隐藏时不应接收");
+            Check(reaction.Kind(clock.ElapsedMilliseconds) == DesktopPetReactionKind.None, "A hidden PET must not queue a notice to replay after it is shown.");
+            visible.Invoke(widget, new object[] { 0x00000002, true });
+            widget.Notify(DesktopPetReactionKind.Attention, "motion-restored", "有一件事需要留意");
+            Check(Flag(widget, "CanAnimate") && reaction.Kind(clock.ElapsedMilliseconds) == DesktopPetReactionKind.Attention, "Showing the PET with its animation preference enabled must restore notification motion.");
+            Set(widget, "dragging", true);
+            Check(!Flag(widget, "CanAnimate"), "Dragging must pause PET animation even when its preference is enabled.");
+            Check(!widget.IsHandleCreated, "Notification checks must never create a visible or hidden native widget window.");
+        }
+        finally
+        {
+            Set(widget, "disposing", true); clock.Stop(); Directory.Delete(directory, true);
+            // ContextMenuStrip may install a Forms context, but these tests
+            // have no message loop and subsequent async checks must stay free.
+            System.Threading.SynchronizationContext.SetSynchronizationContext(synchronizationContext);
+        }
+    }
 
     private static WidgetAccountSet Accounts(string status = "connected", string id = Account)
     {
@@ -105,7 +166,7 @@ internal static class DesktopNativeNoticeTests
     }
     public static int Main()
     {
-        try { Outcomes(); Actions().GetAwaiter().GetResult(); Console.WriteLine("Native notification checks passed: " + checks); return 0; }
+        try { Outcomes(); PetMotionPreference(); Actions().GetAwaiter().GetResult(); Console.WriteLine("Native notification checks passed: " + checks); return 0; }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }
     }
 }

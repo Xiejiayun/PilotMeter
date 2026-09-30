@@ -18,7 +18,7 @@ internal sealed class WidgetSnapshot
 // Event-driven reactions. Repeated polls are quiet and bursts keep at most one pending notice.
 internal sealed class WidgetUpdateMotion
 {
-    internal const int Duration = 1800;
+    internal const int Duration = 3000;
     private WidgetSnapshot previousReady, previousActivity;
     private string failureState;
     private int sequence;
@@ -206,7 +206,7 @@ internal sealed class DesktopWidget : Form
             var item = new ToolStripMenuItem(pixels + " px", null, delegate { preferences.SetSize(pixels); }); item.Tag = pixels; sizeMenu.DropDownItems.Add(item);
         }
         menu.Items.Add(sizeMenu);
-        motionItem = new ToolStripMenuItem("轻动效", null, delegate { preferences.SetMotion(!preferences.MotionEnabled); }); menu.Items.Add(motionItem);
+        motionItem = new ToolStripMenuItem("宠物动画", null, delegate { preferences.SetMotion(!preferences.MotionEnabled); }); menu.Items.Add(motionItem);
         var preview = new ToolStripMenuItem("预览提醒动作");
         preview.DropDownItems.Add(new ToolStripMenuItem("数据更新", null, delegate { PreviewReaction(DesktopPetReactionKind.Update, "收到新的用量记录"); }));
         preview.DropDownItems.Add(new ToolStripMenuItem("收到消息", null, delegate { PreviewReaction(DesktopPetReactionKind.Message, "收到一条新通知"); }));
@@ -229,7 +229,10 @@ internal sealed class DesktopWidget : Form
         Location = preferences.Location ?? new Point(area.Right - Width - 16, area.Bottom - Height - 16);
         TopMost = preferences.AlwaysOnTop; EnsureVisible(); initialized = true; UpdateDescriptions(); tray.Visible = true;
     }
-    private bool MotionAllowed { get { return preferences.MotionEnabled && !SystemInformation.HighContrast && SystemInformation.IsMenuAnimationEnabled; } }
+    // This explicit PET preference also enables animation on Windows setups
+    // with menu/client-area effects disabled. Those settings must not silently
+    // override the switch or discard every incoming PET notification.
+    private bool MotionAllowed { get { return preferences.MotionEnabled; } }
     private bool CanAnimate { get { return MotionAllowed && Visible && !dragging && !menu.Visible; } }
     protected override CreateParams CreateParams { get { var value = base.CreateParams; value.ExStyle |= 0x00080000 | 0x80; return value; } }
     internal void ApplySnapshot(WidgetSnapshot value)
@@ -266,7 +269,7 @@ internal sealed class DesktopWidget : Form
     }
     private void PreviewReaction(DesktopPetReactionKind kind, string caption)
     {
-        if (!preferences.MotionEnabled) { ShowNotice("请先打开“轻动效”，再预览宠物动作。"); return; }
+        if (!preferences.MotionEnabled) { ShowNotice("请先打开“宠物动画”，再预览宠物动作。"); return; }
         // The menu dismisses before the first reaction frame is drawn.
         BeginInvoke(new Action(delegate { Notify(kind, "preview:" + Guid.NewGuid().ToString("N"), caption); }));
     }

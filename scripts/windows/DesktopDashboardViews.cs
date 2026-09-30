@@ -892,7 +892,7 @@ internal sealed class DashboardWindow : NativeForm
         }
         petLayout.Controls.Add(choices, 0, 2);
         var settings = Columns(110, -1, 115, 115); petSizeLabel = Caption("宠物大小 96 px"); petSize = new TrackBar { Name = "PetSize", AccessibleName = "宠物大小，逻辑像素", Dock = DockStyle.Fill, Minimum = 64, Maximum = 160, TickFrequency = 24, SmallChange = 8, LargeChange = 16, Value = 96, Margin = new Padding(0, 6, 10, 0) };
-        petMotion = new CheckBox { Name = "PetMotion", Text = "轻微动效", Dock = DockStyle.Fill, ForeColor = Ink }; petTop = new CheckBox { Name = "PetAlwaysOnTop", Text = "保持置顶", Dock = DockStyle.Fill, ForeColor = Ink };
+        petMotion = new CheckBox { Name = "PetMotion", Text = "宠物动画", Dock = DockStyle.Fill, ForeColor = Ink }; petTop = new CheckBox { Name = "PetAlwaysOnTop", Text = "保持置顶", Dock = DockStyle.Fill, ForeColor = Ink };
         settings.Controls.Add(petSizeLabel, 0, 0); settings.Controls.Add(petSize, 1, 0); settings.Controls.Add(petMotion, 2, 0); settings.Controls.Add(petTop, 3, 0); petLayout.Controls.Add(settings, 0, 3);
         petLayout.Controls.Add(Caption("拖动宠物可调整位置，点击宠物打开主窗口。关闭此窗口后，宠物和服务继续运行。"), 0, 4); pets.Controls.Add(petLayout);
         FitTextRow(petLayout, petHint, 1, pets);

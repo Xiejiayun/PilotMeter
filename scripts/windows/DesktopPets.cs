@@ -152,30 +152,30 @@ internal sealed class DesktopPetAnimation : IDisposable
                     float angle = 0, scaleX = 1, scaleY = 1, offsetX = 0, offsetY = 0;
                     switch (item.key)
                     {
-                        case "pilot-hand": angle = (-10 * gesture + 24 * wave) * strength; break;
-                        case "scarf": angle = 15 * wave * strength; break;
-                        case "cat-tail": angle = 19 * wave * strength; break;
-                        case "cat-paw": angle = (21 * wave + 11 * gesture) * strength; break;
-                        case "shiba-tail": angle = (float)Math.Sin(progress * Math.PI * (message ? 18 : 14)) * envelope * 27; break;
-                        case "penguin-left": angle = -(message ? 31 : 17) * gesture; break;
-                        case "penguin-right": angle = (22 * wave + 9 * gesture) * strength; break;
-                        case "slime-left": angle = 25 * wave; break;
-                        case "slime-right": angle = -25 * wave; break;
-                        case "antenna": angle = 24 * wave * strength; break;
-                        case "robot-left": angle = (message ? 48 : 22) * gesture; break;
-                        case "robot-right": angle = -85 * gesture + 12 * wave; break;
-                        case "star": angle = 32 * wave * strength; break;
-                        case "sparkle": angle = 48 * wave; offsetX = -7 * gesture; offsetY = -4 * envelope; scaleX = scaleY = 1 + .2f * gesture; break;
-                        case "leaf-left": angle = (15 * wave - 8 * gesture) * strength; break;
-                        case "leaf-right": angle = (-15 * wave + 8 * gesture) * strength; break;
-                        case "wing": scaleX = 1 - .65f * gesture; angle = -10 * wave; break;
-                        case "dragon-hand": offsetY = -4 * gesture; break;
+                        case "pilot-hand": angle = (-14 * gesture + 32 * wave) * strength; break;
+                        case "scarf": angle = 22 * wave * strength; break;
+                        case "cat-tail": angle = 29 * wave * strength; break;
+                        case "cat-paw": angle = (29 * wave + 16 * gesture) * strength; break;
+                        case "shiba-tail": angle = (float)Math.Sin(progress * Math.PI * (message ? 18 : 14)) * envelope * 37; break;
+                        case "penguin-left": angle = -(message ? 42 : 25) * gesture; break;
+                        case "penguin-right": angle = (26 * wave + 11 * gesture) * strength; break;
+                        case "slime-left": angle = 35 * wave; break;
+                        case "slime-right": angle = -35 * wave; break;
+                        case "antenna": angle = 32 * wave * strength; break;
+                        case "robot-left": angle = (message ? 62 : 32) * gesture; break;
+                        case "robot-right": angle = -95 * gesture + 17 * wave; break;
+                        case "star": angle = 46 * wave * strength; break;
+                        case "sparkle": angle = 65 * wave; offsetX = -9 * gesture; offsetY = -3 * envelope; scaleX = scaleY = 1 + .3f * gesture; break;
+                        case "leaf-left": angle = (14 * wave - 10 * gesture) * strength; break;
+                        case "leaf-right": angle = (-14 * wave + 10 * gesture) * strength; break;
+                        case "wing": scaleX = 1 - .75f * gesture; angle = -16 * wave; break;
+                        case "dragon-hand": offsetY = -7 * gesture; break;
                         default:
                             if (item.key.StartsWith("tentacle-", StringComparison.Ordinal))
                             {
                                 int index = item.key[item.key.Length - 1] - '0';
                                 float ripple = (float)Math.Sin(progress * Math.PI * 2 * cycles - index * .65) * envelope;
-                                angle = 14 * ripple * strength; scaleY = 1 - .13f * gesture;
+                                angle = 21 * ripple * strength; scaleY = 1 - .18f * gesture;
                             }
                             break;
                     }
@@ -192,37 +192,37 @@ internal sealed class DesktopPetAnimation : IDisposable
     }
     private static void ApplyIdleLayerMotion(string key, double phase, ref float angle, ref float scaleX, ref float scaleY, ref float offsetX, ref float offsetY)
     {
-        // Idle joint motion stays roughly one quarter of the event gestures.
-        // Different periods keep the pets' movement gentle and characteristic.
+        // Make moving joints readable even at 64 px; event gestures remain
+        // larger and faster. Different periods keep each pet characteristic.
         switch (key)
         {
-            case "pilot-hand": angle += 2.5f * (float)Math.Sin(phase * .8 + .4); break;
-            case "scarf": angle += 7 * (float)Math.Sin(phase * 1.15); break;
-            case "cat-tail": angle += 7 * (float)Math.Sin(phase * 1.25); break;
-            case "cat-paw": angle += 2.5f * (float)Math.Sin(phase * .9 + .6); break;
-            case "shiba-tail": angle += 9 * (float)Math.Sin(phase * 1.9); break;
-            case "penguin-left": angle += 3 * (float)Math.Sin(phase * .95 + .3); break;
-            case "penguin-right": angle += 5.5f * (float)Math.Sin(phase * .95); break;
-            case "slime-left": angle += 5 * (float)Math.Sin(phase * 1.15); break;
-            case "slime-right": angle -= 5 * (float)Math.Sin(phase * 1.15); break;
-            case "antenna": angle += 6 * (float)Math.Sin(phase * 1.3); break;
-            case "robot-left": angle += 2 * (float)Math.Sin(phase * .85); break;
-            case "robot-right": angle -= 3 * (float)Math.Sin(phase * .85 + .4); break;
-            case "star": angle += 7 * (float)Math.Sin(phase * 1.05); break;
+            case "pilot-hand": angle += 6f * (float)Math.Sin(phase * .8 + .4); break;
+            case "scarf": angle += 13 * (float)Math.Sin(phase * 1.15); break;
+            case "cat-tail": angle += 15 * (float)Math.Sin(phase * 1.25); break;
+            case "cat-paw": angle += 6f * (float)Math.Sin(phase * .9 + .6); break;
+            case "shiba-tail": angle += 18 * (float)Math.Sin(phase * 1.9); break;
+            case "penguin-left": angle += 7 * (float)Math.Sin(phase * .95 + .3); break;
+            case "penguin-right": angle += 10f * (float)Math.Sin(phase * .95); break;
+            case "slime-left": angle += 11 * (float)Math.Sin(phase * 1.15); break;
+            case "slime-right": angle -= 11 * (float)Math.Sin(phase * 1.15); break;
+            case "antenna": angle += 12 * (float)Math.Sin(phase * 1.3); break;
+            case "robot-left": angle += 6 * (float)Math.Sin(phase * .85); break;
+            case "robot-right": angle -= 8 * (float)Math.Sin(phase * .85 + .4); break;
+            case "star": angle += 16 * (float)Math.Sin(phase * 1.05); break;
             case "sparkle":
-                angle += 9 * (float)Math.Sin(phase * .8); offsetX += 1.5f * (float)Math.Sin(phase * .65);
-                offsetY += (float)Math.Sin(phase * .85); scaleX *= 1 + .05f * (float)Math.Sin(phase * 1.1); scaleY *= 1 + .05f * (float)Math.Sin(phase * 1.1);
+                angle += 20 * (float)Math.Sin(phase * .8); offsetX += 3f * (float)Math.Sin(phase * .65);
+                offsetY += 2 * (float)Math.Sin(phase * .85); scaleX *= 1 + .1f * (float)Math.Sin(phase * 1.1); scaleY *= 1 + .1f * (float)Math.Sin(phase * 1.1);
                 break;
-            case "leaf-left": angle += 6 * (float)Math.Sin(phase * .95); break;
-            case "leaf-right": angle -= 6 * (float)Math.Sin(phase * .95 + .35); break;
-            case "wing": scaleX *= 1 - .09f * (float)(.5 - .5 * Math.Cos(phase * 1.2)); angle -= 2 * (float)Math.Sin(phase * 1.2); break;
-            case "dragon-hand": offsetY -= .7f * (float)(.5 - .5 * Math.Cos(phase * .9)); break;
+            case "leaf-left": angle += 8 * (float)Math.Sin(phase * .95); break;
+            case "leaf-right": angle -= 8 * (float)Math.Sin(phase * .95 + .35); break;
+            case "wing": scaleX *= 1 - .25f * (float)(.5 - .5 * Math.Cos(phase * 1.2)); angle -= 5 * (float)Math.Sin(phase * 1.2); break;
+            case "dragon-hand": offsetY -= 2f * (float)(.5 - .5 * Math.Cos(phase * .9)); break;
             default:
                 if (key.StartsWith("tentacle-", StringComparison.Ordinal))
                 {
                     int index = key[key.Length - 1] - '0';
                     float ripple = (float)Math.Sin(phase * 1.1 - index * .65);
-                    angle += 4.5f * ripple; scaleY *= 1 + .025f * ripple;
+                    angle += 10f * ripple; scaleY *= 1 + .05f * ripple;
                 }
                 break;
         }
@@ -232,35 +232,35 @@ internal sealed class DesktopPetAnimation : IDisposable
         float angle = 0, scaleX = 1, scaleY = 1, lift = 0;
         switch (id)
         {
-            case "01": lift = 1.5f * gesture; break;
-            case "02": angle = 2 * wave; break;
-            case "03": lift = 2.5f * gesture; break;
-            case "04": angle = 3.5f * wave; break;
-            case "05": scaleX = 1 + .1f * wave; scaleY = 1 - .13f * wave; lift = 3 * gesture; break;
-            case "06": lift = 1.5f * gesture; break;
-            case "07": lift = 5 * envelope; angle = 2 * wave; break;
-            case "08": lift = 2 * gesture; break;
-            case "09": lift = 4 * envelope; scaleX = 1 + .025f * wave; break;
-            case "10": lift = 4 * gesture; break;
+            case "01": lift = 5f * gesture; angle = 2 * wave; break;
+            case "02": angle = 5 * wave; lift = 2 * gesture; break;
+            case "03": lift = 6f * gesture; break;
+            case "04": angle = 5.5f * wave; break;
+            case "05": scaleX = 1 + .13f * wave; scaleY = 1 - .135f * wave; lift = 5 * gesture; break;
+            case "06": lift = 3.8f * gesture; break;
+            case "07": lift = 7 * envelope; angle = 4 * wave; break;
+            case "08": lift = 4 * gesture; break;
+            case "09": lift = 7 * envelope; scaleX = 1 + .05f * wave; break;
+            case "10": lift = 7 * gesture; break;
         }
         lift *= strength;
         if (idleMotion)
         {
             switch (id)
             {
-                case "01": angle += .45f * (float)Math.Sin(phase * .73); break;
-                case "02": angle += .6f * (float)Math.Sin(phase * .85); break;
-                case "03": lift += .35f * (float)(1 - Math.Cos(phase * 1.4)); break;
-                case "04": angle += .9f * (float)Math.Sin(phase * .95); break;
+                case "01": angle += 2.3f * (float)Math.Sin(phase * .73); break;
+                case "02": angle += 2.5f * (float)Math.Sin(phase * .85); break;
+                case "03": lift += 1.8f * (float)(1 - Math.Cos(phase * 1.4)); break;
+                case "04": angle += 3f * (float)Math.Sin(phase * .95); break;
                 case "05":
                     float wobble = (float)Math.Sin(phase * 1.15);
-                    scaleX *= 1 + .025f * wobble; scaleY *= 1 - .035f * wobble;
+                    scaleX *= 1 + .045f * wobble; scaleY *= 1 - .055f * wobble;
                     break;
-                case "06": lift += .35f * (float)(1 - Math.Cos(phase * 1.25)); break;
-                case "07": lift += 1.6f * (float)(1 + Math.Sin(phase * .8)); break;
-                case "08": angle += .55f * (float)Math.Sin(phase * .85); break;
-                case "09": lift += 1.3f * (float)(1 + Math.Sin(phase * .85)); scaleX *= 1 + .012f * (float)Math.Sin(phase * 1.1); break;
-                case "10": lift += .4f * (float)(1 - Math.Cos(phase * .8)); break;
+                case "06": lift += 1.5f * (float)(1 - Math.Cos(phase * 1.25)); break;
+                case "07": lift += 3f * (float)(1 + Math.Sin(phase * .8)); angle += 1.5f * (float)Math.Sin(phase * .65); break;
+                case "08": angle += 2f * (float)Math.Sin(phase * .85); break;
+                case "09": lift += 3f * (float)(1 + Math.Sin(phase * .85)); scaleX *= 1 + .025f * (float)Math.Sin(phase * 1.1); break;
+                case "10": lift += 1.8f * (float)(1 - Math.Cos(phase * .8)); break;
             }
         }
         graphics.TranslateTransform(64, 109 - lift); graphics.RotateTransform(angle);
