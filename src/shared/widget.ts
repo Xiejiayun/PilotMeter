@@ -21,6 +21,12 @@ export interface WidgetResponse extends WidgetSnapshot {
   instanceId: string;
   /** Local profile identity for rejecting mixed-account responses; never an SDK selection ID. */
   accountId: string | null;
+  /**
+   * Stable account-scoped local activity fingerprint: v1: plus 64 lowercase SHA-256 hex digits.
+   * Covers the UTC period, session/call counts and nano AIU total, without timestamps,
+   * session identities, paths or source contexts. Compare only within accountId and instanceId.
+   */
+  activityKey: string;
 }
 
 export const WIDGET_TEXT_LIMITS = { title: 48, value: 48, detail: 220, accountLogin: 128 } as const;

@@ -33,7 +33,7 @@ Start-Process .\PilotMeter-0.1.0-preview.17-win-x64.exe -ArgumentList 'watch' -N
 
 界面可通过[离线交互设计稿](docs/design/desktop-v3.html)和 [HTML 设计报告](docs/design/desktop-v3-report.html)预览；其中所有数据明确标为示例。开发者运行 `npm run design:export` 可从同一套页面代码重新生成离线设计稿。
 
-账户页和宠物右键菜单可更换 10 个宠物，调整大小、动效与置顶。宠物素材嵌入 EXE，选择保存在本机；启动不依赖设计 HTML 或联网下载图片。发布资产另提供便携 ZIP。开发者可以使用 `npm run release:windows` 完整测试和打包，推送合并到 main 的版本标签即可触发 GitHub Release，见[打包与发布方案](docs/releasing.md)。
+账户页和宠物右键菜单可更换 10 个宠物，调整大小、动效与置顶。没有更新时，每个宠物也会持续轻轻摇尾、摆动围巾、翅膀或触须。用量更新、同步结果、登录状态变化和从主窗口启动的会话结束时，会做幅度更明显的提醒动作，并短暂显示提示，随后平滑回到待机动作；右键“预览提醒动作”可查看三类动作。重复读取相同数据不会反复提醒，关闭轻动效或系统减少动画时保持静止。主窗口同步时显示动效，同一账号的数字与进度条平滑变化。宠物与动画图层嵌入 EXE，选择保存在本机；启动不依赖设计 HTML 或联网下载图片。发布资产另提供便携 ZIP。开发者可以使用 `npm run release:windows` 完整测试和打包，推送合并到 main 的版本标签即可触发 GitHub Release，见[打包与发布方案](docs/releasing.md)。
 
 首次运行会将内嵌 Node、Copilot CLI 和应用解压到 `%LOCALAPPDATA%\PilotMeter\runtime\<版本>-<载荷哈希前16位>`，账本仍保存在 `%LOCALAPPDATA%\PilotMeter`。升级前先在旧挂件菜单中退出，再用旧版执行 `stop`；已配置的 statusline 引用此稳定缓存，不能随意删除。下载校验、缓存与源码构建说明见 [Windows EXE 指南](https://github.com/Xiejiayun/PilotMeter/blob/main/docs/windows-exe.md)。
 

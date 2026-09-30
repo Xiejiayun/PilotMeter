@@ -58,7 +58,8 @@
   .status-dot { width: 5px; height: 5px; border-radius: 50%; background: #b5b9bb; display: inline-block; flex: none; }
   .status-dot.online { background: #5b9b7b; }
   .workspace { min-width: 0; }
-  .topbar { @apply flex items-center justify-between; min-height: 77px; gap: 16px; border-bottom: 1px solid #e9ebee; padding: 12px 38px; background: #fcfdfdcc; }
+  .topbar { @apply flex items-center justify-between; position: relative; overflow: hidden; min-height: 77px; gap: 16px; border-bottom: 1px solid #e9ebee; padding: 12px 38px; background: #fcfdfdcc; }
+  .is-syncing .topbar::after { content: ''; position: absolute; bottom: 0; left: 0; width: 35%; height: 2px; border-radius: 2px; background: linear-gradient(90deg,transparent,#75ae94,#398566,transparent); animation: sync-sweep 1.6s ease-in-out infinite; pointer-events: none; }
   .breadcrumb { @apply flex items-center; gap: 13px; font-size: 11px; white-space: nowrap; color: #4c555d; }
   .breadcrumb-root { color: #989ea4; }
   .breadcrumb-divider { color: #ccd0d3; font-size: 13px; }
@@ -78,6 +79,8 @@
   .page { min-width: 0; animation: appear .2s ease; }
   .card { @apply bg-white; border: 1px solid #e4e8eb; border-radius: 14px; box-shadow: 0 3px 5px -5px #243b532e; min-width: 0; }
   .quota-card { overflow: hidden; padding: 25px 28px 0; position: relative; background: radial-gradient(ellipse at 96% -30%,#eef6f06b,transparent 65%), #fff; }
+  .quota-area[aria-busy="true"] .quota-card { border-color: #bad4c5; }
+  .quota-area[aria-busy="true"] .source-badge { animation: sync-breathe 1.6s ease-in-out infinite; }
   .quota-card-heading { @apply flex items-start justify-between; gap: 20px; }
   .quota-card-title { @apply flex items-center; gap: 8px; flex-wrap: wrap; }
   h2 { font-size: 14px; font-weight: 610; color: #30383d; letter-spacing: -.15px; }
@@ -94,6 +97,7 @@
   .metric-value { display: block; font-size: clamp(23px, 3vw, 43px); font-weight: 500; letter-spacing: -1.6px; line-height: 1.2; font-variant-numeric: tabular-nums; overflow-x: auto; overflow-y: hidden; white-space: nowrap; padding: 2px 0 6px; scrollbar-width: thin; scrollbar-color: #d9e1dc transparent; }
   .metric-value.used { color: #222e2a; font-weight: 620; }
   .metric-value.remaining { color: #318466; }
+  .is-value-updating { animation: value-update .64s ease-out; }
   .metric-note { color: #a0a7ac; font-size: 9px; margin-top: 5px; }
   .quota-progress { height: 5px; display: block; width: 100%; border-radius: 100px; overflow: hidden; background: #edf1ef; appearance: none; border: 0; }
   .quota-progress::-webkit-progress-bar { background: #edf1ef; border-radius: 100px; }
@@ -237,6 +241,7 @@
   .button-danger { background: #a3493d; color: #fff; border-color: #a3493d; }
   .button-sync { font-size: 10px; padding: 7px 11px; min-height: 31px; }
   .button-sync.is-refreshing svg { animation: rotate 1.3s linear infinite; }
+  .button-sync.is-refreshing { opacity: 1; color: #397c60; background: #edf5f0; border-color: #c9dfd2; }
   .text-button { @apply inline-flex items-center; gap: 5px; font-size: 10px; color: #75857c; background: none; border: 0; padding: 3px 0; }
   .text-button:hover { color: #2c7053; }
   .text-button svg { width: 12px; height: 12px; }
@@ -314,6 +319,9 @@
 @keyframes appear { from { opacity: .6; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes rotate { to { transform: rotate(360deg); } }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@keyframes sync-sweep { from { transform: translateX(-105%); } to { transform: translateX(390%); } }
+@keyframes sync-breathe { 50% { opacity: .5; } }
+@keyframes value-update { from { filter: drop-shadow(0 0 6px #69ac8580); } to { filter: drop-shadow(0 0 0 transparent); } }
 
 /* Keep page scrolling available without a permanent rail in the desktop UI. */
 @media (forced-colors: none) {

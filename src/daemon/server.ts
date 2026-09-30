@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFile, rm } from 'node:fs/promises';
@@ -223,8 +223,13 @@ export async function serve(dir: string, demo = false, options: { accounts?: Pic
         json(res, 200, records); return;
       }
       if (req.method === 'GET' && route === '/api/widget') {
+        const snapshot = summary();
+        const local = snapshot.local;
+        // A read-time summary timestamp advances on every poll; only stable ledger data signals activity.
+        const activityKey = `v1:${createHash('sha256').update(JSON.stringify([snapshot.period, local.sessionCount,
+          local.knownCalls, local.unknownCalls, local.pendingCalls, local.nanoAiu])).digest('hex')}`;
         const widget: WidgetResponse = { app: APP, version: VERSION, instanceId: instance.instanceId, accountId: accounts.active()?.id ?? null,
-          ...buildWidget(summary(), accounts.overview(!settings.demo), url.searchParams.get('quotaKey')) };
+          activityKey, ...buildWidget(snapshot, accounts.overview(!settings.demo), url.searchParams.get('quotaKey')) };
         json(res, 200, widget); return;
       }
       if (req.method === 'GET' && route === '/api/sessions') { json(res, 200, { ...repo.sessions(month(url.searchParams.get('period') || undefined), { cursor: url.searchParams.get('cursor') || undefined, sort: url.searchParams.get('sort') || 'usage', limit: 50, scope: scope() }), accountId: accounts.active()?.id ?? null }); return; }

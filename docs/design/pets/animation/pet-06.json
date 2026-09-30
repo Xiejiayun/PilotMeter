@@ -1,0 +1,56 @@
+[
+  {
+    "key": "shadow",
+    "pivotX": 64,
+    "pivotY": 112,
+    "x": 32,
+    "y": 106,
+    "width": 64,
+    "height": 14
+  },
+  {
+    "key": "antenna",
+    "pivotX": 65,
+    "pivotY": 29,
+    "x": 60.25,
+    "y": 10.75,
+    "width": 11.5,
+    "height": 20.25
+  },
+  {
+    "key": "still",
+    "pivotX": 64,
+    "pivotY": 64,
+    "x": 41.75,
+    "y": 94.5,
+    "width": 46.75,
+    "height": 20.25
+  },
+  {
+    "key": "robot-left",
+    "pivotX": 42,
+    "pivotY": 81,
+    "x": 21.25,
+    "y": 76,
+    "width": 26.75,
+    "height": 25.5
+  },
+  {
+    "key": "robot-right",
+    "pivotX": 87,
+    "pivotY": 81,
+    "x": 80.75,
+    "y": 76,
+    "width": 27,
+    "height": 24.75
+  },
+  {
+    "key": "still",
+    "pivotX": 64,
+    "pivotY": 64,
+    "x": 22.75,
+    "y": 26.5,
+    "width": 83.5,
+    "height": 78
+  }
+]

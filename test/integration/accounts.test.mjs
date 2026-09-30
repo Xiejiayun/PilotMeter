@@ -316,6 +316,8 @@ test('two authenticated HTTP profiles isolate live collectors, sessions, persona
   assert.notEqual(aContext.data.home, bContext.data.home);
   assert.notEqual(aContext.data.collectorToken, bContext.data.collectorToken);
   await collect(instance, bContext.data.collectorToken, 2, '20');
+  const bActivityKey = (await api(instance, `/api/widget?accountId=${b.id}&quotaKey=chat`)).data.activityKey;
+  assert.match(bActivityKey, /^v1:[a-f0-9]{64}$/);
   await collect(instance, aContext.data.collectorToken, 3, '7');
   await collect(instance, instance.collectorToken, 4, '900');
   const bSummary = (await api(instance, `/api/summary?accountId=${b.id}`)).data;
@@ -336,6 +338,7 @@ test('two authenticated HTTP profiles isolate live collectors, sessions, persona
   assert.doesNotMatch(JSON.stringify(bRecords), /inputTokens|outputTokens/);
   const bWidget = (await api(instance, `/api/widget?accountId=${b.id}&quotaKey=chat`)).data;
   assert.equal(bWidget.accountId, b.id); assert.equal(bWidget.accountLogin, 'SyntheticBob'); assert.equal(bWidget.value, '剩余 50%');
+  assert.equal(bWidget.activityKey, bActivityKey, 'another profile and unverified collection cannot animate the selected profile');
   for (const route of ['/api/desktop', '/api/desktop/records', '/api/widget'])
     assert.equal((await api(instance, `${route}?accountId=${a.id}&quotaKey=chat`)).status, 409);
   assert.equal((await api(instance, `/api/auth/refresh?accountId=${a.id}`, { method: 'POST', headers: browser })).status, 409);

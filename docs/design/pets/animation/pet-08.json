@@ -1,0 +1,38 @@
+[
+  {
+    "key": "still",
+    "pivotX": 64,
+    "pivotY": 64,
+    "x": 18.75,
+    "y": 22,
+    "width": 88.25,
+    "height": 92
+  },
+  {
+    "key": "leaf-left",
+    "pivotX": 63,
+    "pivotY": 33,
+    "x": 22.25,
+    "y": 13.25,
+    "width": 41.5,
+    "height": 23
+  },
+  {
+    "key": "leaf-right",
+    "pivotX": 65,
+    "pivotY": 33,
+    "x": 63,
+    "y": 12.5,
+    "width": 38.75,
+    "height": 24.25
+  },
+  {
+    "key": "still",
+    "pivotX": 64,
+    "pivotY": 64,
+    "x": 36.5,
+    "y": 63.25,
+    "width": 52,
+    "height": 45.5
+  }
+]

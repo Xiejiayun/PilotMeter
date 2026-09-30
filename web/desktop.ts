@@ -7,13 +7,15 @@ import { amount, element, emptyState, errorMessage, escape, hostName, hydrateIco
 import { initializeDesktopLogin } from './desktop-login';
 import { designDemo } from './desktop-demo';
 import { pets } from './desktop-pets';
+import { renderAnimatedContent } from './desktop-motion';
 
 type Page = 'overview' | 'models' | 'records' | 'accounts';
 type ServiceState = { type: 'service-state'; connected: boolean; recoverable: boolean; recovering: boolean; epoch: number; instanceId?: string; version?: string; message?: string; accountId?: string | null; quotaKey?: string | null; sessionLaunchAvailable?: boolean };
 type PetState = { type: 'pet-state'; petId: string; sizePixels: number; motionEnabled: boolean; alwaysOnTop: boolean; persistenceWarning?: string };
 type MutationAck = { type: 'account-mutation-state'; pending: boolean; operationId: string; epoch: number };
 type SessionStartResult = { type: 'session-start-result'; requestId: string; epoch: number; status: 'started' | 'cancelled' | 'error'; message?: string };
-type SessionExit = { type: 'session-exit'; accountId: string; epoch: number; exitCode: number; message?: string };
+type SessionExit = { type: 'session-exit'; accountId: string; epoch: number; exitCode: number; normal?: boolean; message?: string };
+type PetNoticeReason = 'sync-complete' | 'sync-failed' | 'login-complete' | 'login-failed' | 'login-expired' | 'account-changed';
 type HostBridge = { postMessage: (message: object) => void; addEventListener: (type: 'message', listener: (event: { data: ServiceState | PetState | MutationAck | SessionStartResult | SessionExit | { type: 'error' | 'host-error'; message?: string } }) => void) => void };
 const bridge = (window as unknown as { chrome?: { webview?: HostBridge } }).chrome?.webview;
 const demo = new URLSearchParams(location.search).get('demo') === '1' || document.documentElement.dataset.designPreview === 'true';
@@ -47,7 +49,9 @@ let mutationOwner: string | null = null;
 let mutationQueue: Promise<void> = Promise.resolve();
 let mutationAck: { id: string; epoch: number; resolve: () => void; reject: (error: Error) => void; timer: number } | null = null;
 let refreshTimer: number | undefined;
-let refreshRequested: string | null = null;
+let refreshRequested: { accountId: string | null; eventId: string; epoch: number } | null = null;
+let refreshPending: object | null = null;
+let syncReadFailed = false;
 let removeProfile: GitHubProfile | null = null;
 let sessionLaunch: { requestId: string; accountId: string; epoch: number } | null = null;
 
@@ -56,6 +60,7 @@ const epoch = () => service?.epoch ?? 0;
 const instanceId = () => service?.instanceId ?? browserIdentity?.instanceId ?? null;
 const isEnabled = () => !demo && desktop?.enabled !== false;
 const busy = () => mutationOwner !== null;
+const syncing = () => (!bridge || service?.connected === true) && !syncReadFailed && (refreshPending !== null || !!desktop?.refreshing);
 const month = () => element<HTMLInputElement>('record-period').value;
 
 function feedback(text: string, error = false): void {
@@ -97,6 +102,13 @@ async function mutate<T>(path: string, method: string, body?: object): Promise<T
 }
 
 function send(message: Record<string, unknown>): void { bridge?.postMessage({ ...message, epoch: epoch() }); }
+
+// Only terminal outcomes of an operation notify the pet. Polls and progress
+// feedback do not create events, and old service replies cannot notify a new one.
+function notifyPet(reason: PetNoticeReason, eventId: string, operationEpoch: number): void {
+  if (demo || !bridge || !service?.connected || operationEpoch !== epoch()) return;
+  send({ type: 'pet-notify', reason, eventId });
+}
 
 /** Serialize account mutations and let the desktop owner pause native polling first. */
 async function acquire(): Promise<() => void> {
@@ -143,9 +155,14 @@ function controls(): void {
   const selected = element<HTMLSelectElement>('account-select');
   selected.disabled = busy() || disconnected || !desktop?.accounts.length || !isEnabled();
   const refresh = element<HTMLButtonElement>('refresh-button');
-  refresh.disabled = busy() || disconnected || !!desktop?.refreshing || !isEnabled();
-  refresh.classList.toggle('is-refreshing', !!desktop?.refreshing);
-  refresh.querySelector('span:last-child')!.textContent = desktop?.refreshing ? '同步中' : '同步';
+  const active = syncing();
+  refresh.disabled = busy() || disconnected || active || !isEnabled();
+  refresh.classList.toggle('is-refreshing', active);
+  refresh.setAttribute('aria-busy', String(active));
+  refresh.querySelector('span:last-child')!.textContent = active ? '同步中' : '同步';
+  element('quota-area').setAttribute('aria-busy', String(active));
+  document.documentElement.classList.toggle('is-syncing', active);
+  document.querySelectorAll<HTMLButtonElement>('[data-action="refresh"]').forEach(node => { node.disabled = refresh.disabled; });
   document.querySelectorAll<HTMLButtonElement>('[data-action="select-account"],[data-action="remove"],[data-action="reauth"]').forEach(node => { node.disabled = busy() || disconnected || !isEnabled(); });
   document.querySelectorAll<HTMLButtonElement>('[data-action="login"]').forEach(node => { node.disabled = busy() || !isEnabled(); });
   const category = document.getElementById('quota-category') as HTMLSelectElement | null;
@@ -186,7 +203,7 @@ function renderHeader(): void {
 function loginButton(label = '连接 GitHub'): string { return `<button type="button" class="button button-primary" data-action="login">${icon('github')}${escape(label)}</button>`; }
 
 function metric(label: string, value: string, note: string, className = ''): string {
-  return `<div class="quota-metric"><div class="metric-label">${escape(label)}</div><strong class="metric-value ${className}" tabindex="0" title="${escape(value)}">${escape(value)}</strong><div class="metric-note">${escape(note)}</div></div>`;
+  return `<div class="quota-metric"><div class="metric-label">${escape(label)}</div><strong class="metric-value ${className}" data-motion-key="${escape(label)}" tabindex="0" title="${escape(value)}">${escape(value)}</strong><div class="metric-note">${escape(note)}</div></div>`;
 }
 
 function quotaCard(bucket: PersonalQuotaBucketView, details: string): string {
@@ -217,7 +234,8 @@ function renderQuota(): void {
   const detailsOpen = container.querySelector<HTMLDetailsElement>('#quota-explanation')?.open ?? false;
   const details = `<details class="quota-details${view.primary ? ' quota-details-inline' : ''}" id="quota-explanation"${detailsOpen ? ' open' : ''}><summary><span>${view.stale && view.providerUpdatedAt ? '数据较旧 · ' : ''}${escape(quotaTimes(view))}</span><span>额度说明${view.buckets.length > 1 ? '与其他类别' : ''} ${icon('chevron')}</span></summary><div class="quota-details-body"><p>${view.primary?.unit === 'unspecified' ? 'GitHub 未声明数量单位，因此已用和总额不换算成请求次数或 AI Credits。优先按总额减剩余量计算已用，缺少精确数量时显示未知，不从百分比反推已用量。' : '当前额度来自已登录 GitHub 账号的 Copilot 快照。剩余额度仅在数量单位确认后按总额减已用计算。'}</p><p>逗号是千位分隔符（66,000 表示六万六千）；显示完整数值，不额外舍入。百分比由 GitHub 返回，可能已舍入，不能用于反算精确已用量。各类别独立计量，本机采集记录不会加进账号额度。</p>${desktop.quota?.error ? `<p class="error-text">同步提示：${escape(desktop.quota.error.message)}</p>` : ''}<div class="other-quotas">${view.buckets.filter(bucket => bucket.key !== view.primary?.key).map(otherQuota).join('')}</div></div></details>`;
   const primary = view.primary ? quotaCard(view.primary, details) : `<div class="card">${emptyState(view.selection === 'required' ? '选择你要查看的额度' : view.buckets.length ? '各类别均无固定上限' : desktop.refreshing ? '正在同步 Copilot 额度' : '还没有取得额度快照', view.selection === 'required' ? '不同类别独立计量，请从上方选择；不会将它们相加。' : view.buckets.length ? '展开下方说明，查看各类别的具体信息。' : desktop.quota?.error?.message ?? '点击同步重新获取。未知额度不代表没有消耗。', !view.buckets.length && !desktop.refreshing ? `<button type="button" class="button button-secondary" data-action="refresh">${icon('refresh')}同步额度</button>` : '', false, 'activity')}</div>`;
-  container.innerHTML = `${choice}${primary}${view.primary ? '' : details}`;
+  const scope = JSON.stringify([instanceId(), epoch(), profile.id, view.primary?.key, view.primary?.unit]);
+  renderAnimatedContent(container, `${choice}${primary}${view.primary ? '' : details}`, scope);
 }
 
 function family(model: AccountModel): string { const name = `${model.id} ${model.name}`.toLowerCase(); return name.includes('claude') ? 'claude' : name.includes('gpt') || name.includes('o3') || name.includes('o4') ? 'gpt' : name.includes('gemini') ? 'gemini' : 'other'; }
@@ -244,7 +262,8 @@ function renderLocal(): void {
   if (!desktop) return;
   const local = desktop.local;
   const calls = local.knownCalls + local.unknownCalls + local.pendingCalls;
-  element('local-summary').innerHTML = `<div class="local-stat-grid"><div><div class="local-stat-value">${escape(amount(String(local.sessionCount)))}</div><div class="local-stat-label">会话</div></div><div><div class="local-stat-value">${escape(amount(String(calls)))}</div><div class="local-stat-label">采集调用</div></div><div><div class="local-stat-value">${escape(amount(String(local.unknownCalls + local.pendingCalls)))}</div><div class="local-stat-label">用量待确认</div></div></div><div class="local-scope"><p>${local.unitVerified && local.credits !== null ? `已确认用量 <strong>${escape(amount(local.credits))} AI Credits</strong>` : local.nanoAiu !== null ? `采集原始量 <strong>${escape(amount(local.nanoAiu))}</strong> · 单位待确认` : '本机尚未取得可确认的用量数值'}</p><p>${escape(local.scope)}。${local.retained ? '仅包含留存范围内的记录。' : ''}这些记录不代表账号的全部消耗。</p></div>`;
+  const markup = `<div class="local-stat-grid"><div><div class="local-stat-value" data-motion-key="sessions">${escape(amount(String(local.sessionCount)))}</div><div class="local-stat-label">会话</div></div><div><div class="local-stat-value" data-motion-key="calls">${escape(amount(String(calls)))}</div><div class="local-stat-label">采集调用</div></div><div><div class="local-stat-value" data-motion-key="unknown">${escape(amount(String(local.unknownCalls + local.pendingCalls)))}</div><div class="local-stat-label">用量待确认</div></div></div><div class="local-scope"><p>${local.unitVerified && local.credits !== null ? `已确认用量 <strong><span data-motion-key="credits">${escape(amount(local.credits))}</span> AI Credits</strong>` : local.nanoAiu !== null ? `采集原始量 <strong data-motion-key="raw">${escape(amount(local.nanoAiu))}</strong> · 单位待确认` : '本机尚未取得可确认的用量数值'}</p><p>${escape(local.scope)}。${local.retained ? '仅包含留存范围内的记录。' : ''}这些记录不代表账号的全部消耗。</p></div>`;
+  renderAnimatedContent(element('local-summary'), markup, JSON.stringify([instanceId(), epoch(), local.accountId, local.period, local.unitVerified, local.retained]));
 }
 
 function recordTable(items: DesktopRecord[], recent = false, failure = ''): string {
@@ -409,23 +428,29 @@ async function loadDesktop(): Promise<void> {
     const scopeChanged = value.activeAccountId !== desktop?.activeAccountId;
     if (scopeChanged) resetRecords();
     desktop = value;
+    syncReadFailed = false;
     render();
     void loadRecent();
     if (!recordsLoading) void loadRecords(false, true);
-    if (refreshRequested && refreshRequested !== value.activeAccountId) {
+    if (refreshRequested && refreshRequested.accountId !== value.activeAccountId) {
       refreshRequested = null;
       feedback('当前账号已切换，请在当前账号重新同步。', true);
     } else if (refreshRequested && !value.refreshing) {
+      const completed = refreshRequested;
       refreshRequested = null;
       const failure = value.quota?.error ?? value.models?.error;
-      feedback(failure ? `同步未完成：${failure.message}` : !value.presentation.fetchedAt ? '尚未取得额度。可以稍后重试，或在账户页重新登录。'
+      feedback(completed.accountId === null ? '已读取本机用量记录。' : failure ? `同步未完成：${failure.message}` : !value.presentation.fetchedAt ? '尚未取得额度。可以稍后重试，或在账户页重新登录。'
         : !value.presentation.providerUpdatedAt ? '已完成读取，但额度来源时间未知，无法确认数据是否最新。'
           : value.presentation.stale ? `已完成读取，但 GitHub 数据较旧。${quotaTimes(value.presentation)}。`
             : '已读取 GitHub 返回的额度和模型快照。GitHub 用量可能延迟更新。', !!failure);
+      notifyPet(failure || completed.accountId !== null && !value.presentation.fetchedAt ? 'sync-failed' : 'sync-complete', completed.eventId, completed.epoch);
     }
     if (!demo && value.refreshing) refreshTimer = window.setTimeout(() => { if (!busy()) void loadDesktop(); }, 1500);
   } catch (error) {
     if (operation !== viewGeneration || currentEpoch !== epoch()) return;
+    syncReadFailed = true;
+    if (refreshRequested && refreshRequested.accountId === desktop?.activeAccountId) notifyPet('sync-failed', refreshRequested.eventId, refreshRequested.epoch);
+    refreshRequested = null;
     feedback(`读取未完成：${errorMessage(error)}`, true);
     if (!desktop) {
       element('quota-area').innerHTML = `<div class="card">${emptyState('暂时没有连接到本机服务', '可以重试连接，或先打开登录窗口查看具体提示。', `<button type="button" class="button button-secondary" data-action="reload">${icon('refresh')}重新连接</button> ${loginButton('登录 GitHub')}`, false, 'activity')}</div>`;
@@ -446,27 +471,44 @@ async function changeAccount(accountId: string | null): Promise<void> {
     await mutate('/api/auth/select', 'POST', { accountId });
     if (currentEpoch !== epoch()) return;
     send({ type: 'quota-selection', accountId, key: null });
+    notifyPet('account-changed', crypto.randomUUID(), currentEpoch);
   } catch (error) { if (currentEpoch === epoch()) feedback(`账号切换未完成：${errorMessage(error)}`, true); }
   finally { release?.(); if (currentEpoch === epoch()) await loadDesktop(); }
 }
 
 async function refresh(): Promise<void> {
-  if (busy() || desktop?.refreshing || !isEnabled()) return;
+  if (busy() || syncing() || !isEnabled()) return;
   const currentEpoch = epoch();
   const account = desktop?.activeAccountId ?? null;
+  const notice = { accountId: account, eventId: crypto.randomUUID(), epoch: currentEpoch };
+  const pending = {};
+  refreshPending = pending;
+  syncReadFailed = false;
+  controls();
+  feedback(account ? '正在同步账号额度与模型…' : '正在读取本机记录…');
   let release: (() => void) | undefined;
+  let failed = false;
   try {
     release = await acquire();
-    if (!account) { await loadDesktop(); return; }
-    feedback('正在同步账号额度与模型…');
+    if (!account) { refreshRequested = notice; await loadDesktop(); return; }
     await mutate(`/api/auth/refresh?accountId=${encodeURIComponent(account)}`, 'POST');
     if (currentEpoch !== epoch()) return;
-    refreshRequested = account;
-  } catch (error) { if (currentEpoch === epoch()) feedback(`同步未完成：${errorMessage(error)}`, true); }
-  finally { release?.(); if (currentEpoch === epoch()) await loadDesktop(); }
+    refreshRequested = notice;
+  } catch (error) {
+    if (currentEpoch === epoch()) {
+      feedback(`同步未完成：${errorMessage(error)}`, true);
+      failed = true;
+    }
+  }
+  finally {
+    release?.();
+    if (currentEpoch === epoch()) await loadDesktop();
+    if (failed && account === desktop?.activeAccountId) notifyPet('sync-failed', notice.eventId, currentEpoch);
+    if (refreshPending === pending) { refreshPending = null; controls(); }
+  }
 }
 
-const login = initializeDesktopLogin({ api, mutate, permitted: isEnabled, existing: () => desktop?.login ?? null, changed: async () => { viewGeneration++; resetRecords(); quotaKey = null; await loadDesktop(); }, feedback, acquire, epoch,
+const login = initializeDesktopLogin({ api, mutate, permitted: isEnabled, existing: () => desktop?.login ?? null, changed: async () => { viewGeneration++; resetRecords(); quotaKey = null; await loadDesktop(); }, feedback, notify: notifyPet, acquire, epoch,
   external: (url, loginId) => {
     if (bridge) send({ type: 'open-external', url, loginId });
     else window.open(url, '_blank', 'noopener,noreferrer');
@@ -566,7 +608,7 @@ bridge?.addEventListener('message', event => {
   }
   if (value.type === 'session-exit') {
     if (value.accountId !== desktop?.activeAccountId || value.epoch !== epoch()) return;
-    feedback(value.message ?? 'Copilot 会话意外结束，请检查账号登录后重试。', true);
+    feedback(value.message ?? (value.normal ? 'Copilot 终端已结束。本机用量记录已保留。' : 'Copilot 会话意外结束，请检查账号登录后重试。'), value.normal !== true);
     void loadDesktop();
     return;
   }
@@ -579,7 +621,7 @@ bridge?.addEventListener('message', event => {
   service = value;
   if (selectionChanged) quotaKey = value.quotaKey ?? null;
   if (changed) {
-    viewGeneration++; resetRecords(); desktop = null; loading = false; refreshRequested = null; quotaKey = value.quotaKey ?? null;
+    viewGeneration++; resetRecords(); desktop = null; loading = false; refreshRequested = null; refreshPending = null; syncReadFailed = false; quotaKey = value.quotaKey ?? null;
     login.invalidate();
     if (mutationAck) { window.clearTimeout(mutationAck.timer); mutationAck.reject(new Error('本机服务已变化，请重试。')); mutationAck = null; }
     element('quota-area').innerHTML = `<div class="card">${emptyState('正在重新连接本机服务', '连接完成后自动读取当前账号。', '', false, 'activity')}</div>`;

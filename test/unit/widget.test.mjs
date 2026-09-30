@@ -9,6 +9,8 @@ import { buildWidget } from '../../dist/domain/widget.js';
 import { WIDGET_TEXT_LIMITS } from '../../dist/shared/widget.js';
 import { serve } from '../../dist/daemon/server.js';
 import { instanceAt, request } from '../../dist/daemon/client.js';
+import { month } from '../../dist/shared/runtime.js';
+import { envelope, nanos, span } from '../fixtures/synthetic-otlp.mjs';
 
 // All identities, dates and quantities in this file are artificial fixtures.
 const now = '2026-09-20T10:00:00.000Z';
@@ -238,11 +240,28 @@ test('widget HTTP endpoint uses daemon identity, existing origin checks and a to
   const response = await fetch(`${instance.url}/api/widget`);
   assert.equal(response.status, 200); assert.equal(response.headers.get('cache-control'), 'no-store');
   const value = await response.json();
-  assert.deepEqual(Object.keys(value).sort(), [...keys, 'app', 'version', 'instanceId', 'accountId'].sort());
+  assert.deepEqual(Object.keys(value).sort(), [...keys, 'app', 'version', 'instanceId', 'accountId', 'activityKey'].sort());
   assert.equal(value.accountId, null);
   assert.equal(value.app, instance.app); assert.equal(value.version, instance.version); assert.equal(value.instanceId, instance.instanceId);
   assert.equal(value.state, 'needs-login'); assert.equal(value.percentage, null);
+  assert.match(value.activityKey, /^v1:[a-f0-9]{64}$/);
   for (const privateValue of [instance.managementToken, instance.collectorToken, directory]) assert.equal(JSON.stringify(value).includes(privateValue), false);
+  await delay(5);
+  const unchanged = await (await fetch(`${instance.url}/api/widget`)).json();
+  assert.notEqual(unchanged.updatedAt, value.updatedAt);
+  assert.equal(unchanged.activityKey, value.activityKey, 'poll timestamps must not look like new activity');
+  const telemetry = envelope([span(1, { cost: '123', session: 'synthetic-private-session',
+    startTimeUnixNano: nanos(`${month()}-01T00:00:00.000Z`), endTimeUnixNano: nanos(`${month()}-01T00:00:01.000Z`) })]);
+  const collect = () => fetch(`${instance.url}/v1/traces`, { method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-pilotmeter-token': instance.collectorToken }, body: JSON.stringify(telemetry) });
+  assert.equal((await collect()).status, 200);
+  const collected = await (await fetch(`${instance.url}/api/widget`)).json();
+  assert.notEqual(collected.activityKey, unchanged.activityKey, 'new local usage signals activity even without a display change');
+  assert.equal(collected.value, unchanged.value);
+  assert.doesNotMatch(JSON.stringify(collected), /synthetic-private-session|sourceContext/);
+  assert.equal((await collect()).status, 200);
+  const duplicate = await (await fetch(`${instance.url}/api/widget`)).json();
+  assert.equal(duplicate.activityKey, collected.activityKey, 'duplicate telemetry must not replay activity');
   for (const headers of [{ origin: 'https://attacker.example' }, { 'sec-fetch-site': 'cross-site' }]) {
     assert.equal((await fetch(`${instance.url}/api/widget`, { headers })).status, 403);
   }

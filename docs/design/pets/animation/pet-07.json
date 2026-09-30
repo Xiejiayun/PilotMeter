@@ -1,0 +1,38 @@
+[
+  {
+    "key": "still",
+    "pivotX": 64,
+    "pivotY": 64,
+    "x": 12.25,
+    "y": 21,
+    "width": 105.5,
+    "height": 90
+  },
+  {
+    "key": "star",
+    "pivotX": 62,
+    "pivotY": 87,
+    "x": 59.5,
+    "y": 85.5,
+    "width": 21,
+    "height": 23
+  },
+  {
+    "key": "still",
+    "pivotX": 64,
+    "pivotY": 64,
+    "x": 36.5,
+    "y": 59,
+    "width": 54,
+    "height": 19.5
+  },
+  {
+    "key": "sparkle",
+    "pivotX": 103,
+    "pivotY": 27,
+    "x": 96.5,
+    "y": 20.5,
+    "width": 14,
+    "height": 13
+  }
+]

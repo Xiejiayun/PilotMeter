@@ -1,0 +1,56 @@
+[
+  {
+    "key": "tentacle-0",
+    "pivotX": 35,
+    "pivotY": 69,
+    "x": 27.25,
+    "y": 61.75,
+    "width": 17,
+    "height": 51.5
+  },
+  {
+    "key": "tentacle-1",
+    "pivotX": 49,
+    "pivotY": 69,
+    "x": 42.5,
+    "y": 64.75,
+    "width": 14,
+    "height": 43.5
+  },
+  {
+    "key": "tentacle-2",
+    "pivotX": 64,
+    "pivotY": 69,
+    "x": 57.5,
+    "y": 64.75,
+    "width": 17.5,
+    "height": 51.5
+  },
+  {
+    "key": "tentacle-3",
+    "pivotX": 79,
+    "pivotY": 69,
+    "x": 72,
+    "y": 64.75,
+    "width": 18.75,
+    "height": 45.5
+  },
+  {
+    "key": "tentacle-4",
+    "pivotX": 93,
+    "pivotY": 69,
+    "x": 87.75,
+    "y": 60.75,
+    "width": 16.5,
+    "height": 42.5
+  },
+  {
+    "key": "still",
+    "pivotX": 64,
+    "pivotY": 64,
+    "x": 18.75,
+    "y": 18,
+    "width": 90,
+    "height": 62.75
+  }
+]

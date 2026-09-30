@@ -82,6 +82,17 @@ try {
   const alias = join(temporary, 'data-junction');
   await mkdir(physical);
   await symlink(physical, alias, 'junction');
+  const animationResources = (await Promise.all(Array.from({ length: 10 }, async (_, index) => {
+    const id = String(index + 1).padStart(2, '0');
+    const directory = join(workspace, 'docs', 'design', 'pets', 'animation');
+    const manifest = join(directory, `pet-${id}.json`);
+    const layers = JSON.parse(await readFile(manifest, 'utf8'));
+    assert.ok(layers.length >= 3 && layers.length <= 10, 'Keep selected-pet layer allocations bounded.');
+    return ['/resource:' + manifest + ',PilotMeter.Pets.Animation.' + id + '.json', ...layers.map((_, layer) => {
+      const layerId = String(layer).padStart(2, '0');
+      return '/resource:' + join(directory, `pet-${id}-layer-${layerId}.png`) + ',PilotMeter.Pets.Animation.' + id + '.' + layerId;
+    })];
+  }))).flat();
   const contractArguments = [
     '/nologo', '/target:exe', '/platform:x64', '/langversion:5', '/main:DesktopContractTests', '/out:' + executable,
     '/reference:System.Windows.Forms.dll', '/reference:System.Drawing.dll', '/reference:System.Net.Http.dll', '/reference:System.Web.Extensions.dll',
@@ -90,6 +101,7 @@ try {
       const id = String(index + 1).padStart(2, '0');
       return '/resource:' + join(workspace, 'docs', 'design', 'pets', `pet-${id}-${name}.png`) + ',PilotMeter.Pets.' + id;
     }),
+    ...animationResources,
     join(workspace, 'scripts', 'windows', 'DesktopApp.cs'),
     join(workspace, 'scripts', 'windows', 'DesktopWebWindow.cs'),
     join(workspace, 'scripts', 'windows', 'DesktopSessionLaunch.cs'),
@@ -109,6 +121,11 @@ try {
   if (!webViewOnly) {
   await run(compiler, contractArguments);
   console.log(await run(executable, [physical, alias, fixtureOrigin]));
+  const noticeExecutable = join(temporary, 'DesktopNativeNoticeTests.exe');
+  await copyFile(join(workspace, 'scripts', 'windows', 'DesktopApp.config'), noticeExecutable + '.config');
+  await run(compiler, ['/main:DesktopNativeNoticeTests', '/out:' + noticeExecutable, ...nativeArguments,
+    join(workspace, 'test', 'windows', 'desktop-native-notices.cs')]);
+  console.log(await run(noticeExecutable, []));
   const sessionRuntime = join(temporary, "session runtime & %PATH% ! ' 项目");
   await mkdir(join(sessionRuntime, 'runtime'), { recursive: true });
   await mkdir(join(sessionRuntime, 'app', 'bin'), { recursive: true });

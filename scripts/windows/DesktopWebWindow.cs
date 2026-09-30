@@ -82,12 +82,16 @@ internal sealed class DesktopWebWindow : Form
     private int navigationGeneration;
     private string mutationOperation;
     private string message = "正在连接本机服务…", selectedAccount, selectedQuota;
+    private readonly HashSet<string> petNoticeIds = new HashSet<string>();
+    private readonly Queue<string> petNoticeOrder = new Queue<string>();
+    private int petNoticeEpoch = -1;
     internal bool AccountMutationPending { get; private set; }
     internal string AccountMutationOperation { get { return mutationOperation; } }
     internal int ServiceEpoch { get { return navigationGeneration; } }
     internal bool OwnsAccountMutation(string operation, int epoch)
     { return !disposed && AccountMutationPending && operation != null && mutationOperation == operation && navigationGeneration == epoch; }
     internal event EventHandler<NativeQuotaSelectionEventArgs> QuotaSelectionChanged;
+    internal event Action<DesktopPetReactionKind, string, string> PetNotice;
 
     internal DesktopWebWindow(string directory, Func<Task> reconnect, string runtimeRoot = null)
     {
@@ -268,6 +272,38 @@ internal sealed class DesktopWebWindow : Form
         var handler = QuotaSelectionChanged;
         if (handler != null) handler(this, new NativeQuotaSelectionEventArgs(selectedAccount, selectedQuota));
     }
+    private void RaisePetNotice(DesktopPetReactionKind kind, string eventKey, string caption)
+    {
+        if (disposed) return;
+        var handler = PetNotice;
+        if (handler != null) handler(kind, eventKey, caption);
+    }
+    private void ReceivePetNotice(Dictionary<string, object> content)
+    {
+        // Captions are native strings. The page can only name a known outcome,
+        // never display arbitrary notification text or replay an old event.
+        if (content.Count != 4) return;
+        var eventId = DesktopJson.String(content, "eventId", 36);
+        var reason = DesktopJson.String(content, "reason", 40);
+        if (!Regex.IsMatch(eventId, @"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")) return;
+        DesktopPetReactionKind kind;
+        string caption;
+        switch (reason)
+        {
+            case "sync-complete": kind = DesktopPetReactionKind.Message; caption = "同步已完成"; break;
+            case "sync-failed": kind = DesktopPetReactionKind.Attention; caption = "同步未完成 · 点击查看"; break;
+            case "login-complete": kind = DesktopPetReactionKind.Message; caption = "账号已连接"; break;
+            case "login-failed": kind = DesktopPetReactionKind.Attention; caption = "登录未完成 · 点击查看"; break;
+            case "login-expired": kind = DesktopPetReactionKind.Attention; caption = "登录验证码已过期"; break;
+            case "account-changed": kind = DesktopPetReactionKind.Message; caption = "账号已切换"; break;
+            default: return;
+        }
+        if (petNoticeEpoch != navigationGeneration) { petNoticeEpoch = navigationGeneration; petNoticeIds.Clear(); petNoticeOrder.Clear(); }
+        if (!petNoticeIds.Add(eventId)) return;
+        petNoticeOrder.Enqueue(eventId);
+        while (petNoticeOrder.Count > 128) petNoticeIds.Remove(petNoticeOrder.Dequeue());
+        RaisePetNotice(kind, "browser:" + navigationGeneration + ":" + eventId, caption);
+    }
     private async void MessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs args)
     {
         if (disposed || !DesktopWebPolicy.Document(documentService, args.Source)) return;
@@ -279,6 +315,7 @@ internal sealed class DesktopWebWindow : Form
             if (!pageReady) return;
             object epoch;
             if (!content.TryGetValue("epoch", out epoch) || !(epoch is int) || (int)epoch != navigationGeneration) return;
+            if (type == "pet-notify") { ReceivePetNotice(content); return; }
             if (type == "start-session")
             {
                 var requestId = DesktopJson.String(content, "requestId", 80);
@@ -358,16 +395,25 @@ internal sealed class DesktopWebWindow : Form
     private void LaunchSessionProcess(string accountId, string project, DesktopInstance expected, int epoch)
     {
         var child = new Process { StartInfo = DesktopSessionLaunch.StartInfo(runtimeRoot, directory, accountId, project), EnableRaisingEvents = true };
+        var notify = PetNotice;
+        var exitEvent = "session-exit:" + Guid.NewGuid().ToString("D");
         child.Exited += delegate {
             int exitCode;
             try { exitCode = child.ExitCode; } catch (InvalidOperationException) { exitCode = -1; }
             child.Dispose();
+            bool normal = DesktopSessionLaunch.ExpectedExit(exitCode);
+            // The terminal can outlive its workbench window. The desktop owner
+            // dispatches this callback to the PET and ignores it after app exit.
+            if (notify != null) notify(normal ? DesktopPetReactionKind.Message : DesktopPetReactionKind.Attention,
+                exitEvent, normal ? "Copilot 会话已结束" : "Copilot 会话异常退出");
             // Console processes can fail before users have time to read them.
             // Surface a safe actionable message in the workbench as well.
-            if (DesktopSessionLaunch.ExpectedExit(exitCode) || disposed || !IsHandleCreated) return;
+            if (disposed || !IsHandleCreated) return;
             try { BeginInvoke((Action)delegate {
                 if (!disposed && epoch == navigationGeneration && expected.SameAs(documentService))
-                    Send(DesktopSessionLaunch.ExitMessage(accountId, epoch, exitCode));
+                    Send(normal ? new Dictionary<string, object> { { "type", "session-exit" }, { "accountId", accountId },
+                        { "epoch", epoch }, { "exitCode", exitCode }, { "normal", true },
+                        { "message", "Copilot 终端已结束。本机用量记录已保留。" } } : DesktopSessionLaunch.ExitMessage(accountId, epoch, exitCode));
             }); }
             catch (InvalidOperationException) { }
         };
@@ -376,8 +422,12 @@ internal sealed class DesktopWebWindow : Form
     }
     private void SendSessionResult(string requestId, int epoch, DesktopSessionResult result)
     {
+        if (disposed || epoch != navigationGeneration) return;
         Send(new Dictionary<string, object> { { "type", "session-start-result" }, { "requestId", requestId },
             { "epoch", epoch }, { "status", result.Status }, { "message", result.Message } });
+        if (result.Status == "started" || result.Status == "error")
+            RaisePetNotice(result.Status == "started" ? DesktopPetReactionKind.Message : DesktopPetReactionKind.Attention,
+                "session-start:" + epoch + ":" + requestId, result.Status == "started" ? "Copilot 终端已打开" : "会话启动未完成 · 点击查看");
     }
     private async Task OpenLoginAsync(string id)
     {

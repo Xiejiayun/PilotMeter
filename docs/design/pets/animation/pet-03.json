@@ -1,0 +1,47 @@
+[
+  {
+    "key": "shadow",
+    "pivotX": 64,
+    "pivotY": 112,
+    "x": 25,
+    "y": 108,
+    "width": 78,
+    "height": 10
+  },
+  {
+    "key": "shiba-tail",
+    "pivotX": 35,
+    "pivotY": 99,
+    "x": 16.25,
+    "y": 69.25,
+    "width": 24.75,
+    "height": 36.25
+  },
+  {
+    "key": "still",
+    "pivotX": 64,
+    "pivotY": 64,
+    "x": 24.25,
+    "y": 15.5,
+    "width": 78.5,
+    "height": 99
+  },
+  {
+    "key": "scarf",
+    "pivotX": 80,
+    "pivotY": 84,
+    "x": 76.75,
+    "y": 80.75,
+    "width": 16.5,
+    "height": 11.5
+  },
+  {
+    "key": "still",
+    "pivotX": 64,
+    "pivotY": 64,
+    "x": 61.5,
+    "y": 80.25,
+    "width": 21.25,
+    "height": 12.25
+  }
+]

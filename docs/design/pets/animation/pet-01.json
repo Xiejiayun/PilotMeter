@@ -1,0 +1,47 @@
+[
+  {
+    "key": "shadow",
+    "pivotX": 64,
+    "pivotY": 112,
+    "x": 28.75,
+    "y": 106.5,
+    "width": 70.5,
+    "height": 11
+  },
+  {
+    "key": "scarf",
+    "pivotX": 80,
+    "pivotY": 80,
+    "x": 76.75,
+    "y": 71.75,
+    "width": 32.75,
+    "height": 18.5
+  },
+  {
+    "key": "still",
+    "pivotX": 64,
+    "pivotY": 64,
+    "x": 23,
+    "y": 73.5,
+    "width": 66.5,
+    "height": 40.5
+  },
+  {
+    "key": "pilot-hand",
+    "pivotX": 85,
+    "pivotY": 84,
+    "x": 82.5,
+    "y": 61.5,
+    "width": 28.75,
+    "height": 30
+  },
+  {
+    "key": "still",
+    "pivotX": 64,
+    "pivotY": 64,
+    "x": 25.5,
+    "y": 17.5,
+    "width": 76,
+    "height": 82.75
+  }
+]

@@ -1,0 +1,38 @@
+[
+  {
+    "key": "still",
+    "pivotX": 64,
+    "pivotY": 64,
+    "x": 11.5,
+    "y": 15.5,
+    "width": 101,
+    "height": 93
+  },
+  {
+    "key": "wing",
+    "pivotX": 50,
+    "pivotY": 65,
+    "x": 23.5,
+    "y": 43.5,
+    "width": 29,
+    "height": 33
+  },
+  {
+    "key": "dragon-hand",
+    "pivotX": 82,
+    "pivotY": 77,
+    "x": 79.5,
+    "y": 71.5,
+    "width": 17,
+    "height": 17
+  },
+  {
+    "key": "still",
+    "pivotX": 64,
+    "pivotY": 64,
+    "x": 43.5,
+    "y": 39.5,
+    "width": 61,
+    "height": 65
+  }
+]

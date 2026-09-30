@@ -263,6 +263,7 @@ internal sealed class DesktopContext : ApplicationContext
     private bool actionBusy, refreshQueued, queuedAllowStart, dashboardMutationObserved;
     private readonly WidgetSnapshotGate snapshotGate = new WidgetSnapshotGate();
     private string selectedQuotaAccountId, selectedQuotaKey;
+    private string nativeSyncEvent, nativeSyncAccount, nativeSyncInstance;
     private bool exiting;
     private string unavailable = "正在连接本机服务…";
     private bool DashboardChangingAccount { get { return dashboard != null && !dashboard.IsDisposed && dashboard.AccountMutationPending; } }
@@ -384,6 +385,7 @@ internal sealed class DesktopContext : ApplicationContext
 
     private void Disconnect(string state, string message)
     {
+        CancelNativeSync();
         instance = null;
         widget.SetAccounts(null, null, false);
         unavailable = message;
@@ -393,6 +395,25 @@ internal sealed class DesktopContext : ApplicationContext
             dashboard.SetService(null, message);
             dashboard.SetServiceRecovery(recoveryInstance != null, recoveringService);
         }
+    }
+
+    private void CancelNativeSync() { nativeSyncEvent = nativeSyncAccount = nativeSyncInstance = null; }
+
+    internal static bool NativeSyncFailed(WidgetAccountSet accounts, Dictionary<string, object> source, string state)
+    {
+        // With no selected account the operation only rereads local records.
+        if (accounts.ActiveId == null) return false;
+        var profile = accounts.Accounts.Find(account => account.Id == accounts.ActiveId);
+        if (profile == null || profile.Status != "connected" || state == "error" || state == "reauth" || state == "needs-login") return true;
+        foreach (string field in new[] { "quota", "models" })
+        {
+            object raw, error;
+            var result = source.TryGetValue(field, out raw) ? raw as Dictionary<string, object> : null;
+            if (result != null && result.TryGetValue("error", out error) && error != null) return true;
+            if (field == "quota" && (result == null || DesktopJson.OptionalString(result, "accountId", 36) != accounts.ActiveId
+                || !NativeData.Date(DesktopJson.OptionalString(result, "fetchedAt", 80)).HasValue)) return true;
+        }
+        return false;
     }
 
     // Only the explicit recovery button may replace a running service. Timer
@@ -479,7 +500,8 @@ internal sealed class DesktopContext : ApplicationContext
             }
             // The health probe and the identity-bearing widget response bracket this small read.
             // Keep it on the same three-second, cancellation-bound transport as the widget.
-            var accounts = WidgetAccountSet.Read(await GetJsonAsync(new Uri(candidate.Origin, "api/auth/accounts")));
+            var accountSource = await GetJsonAsync(new Uri(candidate.Origin, "api/auth/accounts"));
+            var accounts = WidgetAccountSet.Read(accountSource);
             if (exiting || !snapshotGate.Accepts(generation) || DashboardChangingAccount) return;
             if (accounts.ActiveId != selectedQuotaAccountId) { selectedQuotaAccountId = accounts.ActiveId; selectedQuotaKey = null; }
             string widgetPath = "api/widget";
@@ -506,9 +528,22 @@ internal sealed class DesktopContext : ApplicationContext
                 Value = DesktopJson.String(snapshot, "value", 200), Detail = DesktopJson.String(snapshot, "detail", 1000),
                 AccountLogin = DesktopJson.OptionalString(snapshot, "accountLogin", 200),
                 UpdatedAt = DesktopJson.OptionalString(snapshot, "updatedAt", 80), Percentage = percentage,
-                UnitLabel = DesktopJson.OptionalString(snapshot, "unitLabel", 40), UnitUnspecified = snapshot.TryGetValue("unitUnspecified", out raw) && raw is bool && (bool)raw
+                ActivityKey = DesktopJson.OptionalString(snapshot, "activityKey", 80),
+                UnitLabel = DesktopJson.OptionalString(snapshot, "unitLabel", 40), UnitUnspecified = snapshot.TryGetValue("unitUnspecified", out raw) && raw is bool && (bool)raw,
+                AccountId = accounts.ActiveId, InstanceId = candidate.InstanceId, QuotaKey = selectedQuotaKey, Refreshing = accounts.Refreshing
             });
             widget.SetAccounts(accounts.Accounts, accounts.ActiveId, accounts.Enabled);
+            if (nativeSyncEvent != null)
+            {
+                if (nativeSyncInstance != candidate.InstanceId || nativeSyncAccount != accounts.ActiveId) CancelNativeSync();
+                else if (!accounts.Refreshing)
+                {
+                    bool failed = NativeSyncFailed(accounts, accountSource, state);
+                    widget.Notify(failed ? DesktopPetReactionKind.Attention : DesktopPetReactionKind.Message,
+                        nativeSyncEvent, failed ? "同步未完成 · 点击查看" : "同步已完成");
+                    CancelNativeSync();
+                }
+            }
             if (dashboard != null && !dashboard.IsDisposed) {
                 dashboard.RestoreQuotaSelection(selectedQuotaAccountId, selectedQuotaKey);
                 dashboard.SetService(candidate, null); dashboard.SetServiceRecovery(false, false);
@@ -564,11 +599,13 @@ internal sealed class DesktopContext : ApplicationContext
     private async Task ChangeAccountAsync(string accountId)
     {
         if (actionBusy || exiting || DashboardChangingAccount) return;
+        CancelNativeSync();
         if (instance == null) await RefreshAsync(true);
         if (actionBusy || exiting || DashboardChangingAccount) return;
         if (instance == null) { widget.ShowNotice("本机服务尚未连接，请打开主窗口后重试。"); return; }
         actionBusy = true; snapshotGate.BeginMutation(); widget.SetActionBusy(true);
         var expected = instance;
+        var expectedAccount = selectedQuotaAccountId;
         SetSnapshot("loading", "PilotMeter", accountId == null ? "正在同步…" : "正在切换账号…", "正在重新读取当前账号的用量。");
         if (accountId != null)
         {
@@ -578,12 +615,26 @@ internal sealed class DesktopContext : ApplicationContext
         var api = new DesktopNativeApi(expected); pendingAction = api;
         try
         {
-            if (accountId == null) await api.RequestAsync("/api/auth/refresh", "POST");
-            else await api.RequestAsync("/api/auth/select", "POST", new Dictionary<string, object> { { "accountId", accountId } });
+            if (accountId == null)
+            {
+                var requested = WidgetAccountSet.Read(await api.RequestAsync("/api/auth/refresh", "POST"));
+                if (!exiting && expected.SameAs(instance) && requested.ActiveId == expectedAccount)
+                {
+                    nativeSyncEvent = "native-sync:" + Guid.NewGuid().ToString("D");
+                    nativeSyncAccount = requested.ActiveId; nativeSyncInstance = expected.InstanceId;
+                }
+            }
+            else
+            {
+                await api.RequestAsync("/api/auth/select", "POST", new Dictionary<string, object> { { "accountId", accountId } });
+                if (!exiting && expected.SameAs(instance)) widget.Notify(DesktopPetReactionKind.Message,
+                    "native-account:" + Guid.NewGuid().ToString("D"), "账号已切换");
+            }
         }
         catch (Exception error)
         {
             if (error is OutOfMemoryException || error is StackOverflowException) throw;
+            CancelNativeSync();
             if (!exiting) widget.ShowNotice("操作未能确认，请查看当前状态后重试。" + Environment.NewLine + DesktopWidget.Clean(error.Message, 160));
         }
         finally
@@ -600,6 +651,9 @@ internal sealed class DesktopContext : ApplicationContext
         if (dashboard == null || dashboard.IsDisposed)
         {
             dashboard = new DesktopWebWindow(directory, RefreshRequestedAsync, runtimeRoot);
+            dashboard.PetNotice += delegate(DesktopPetReactionKind kind, string eventKey, string caption) {
+                if (!exiting) widget.Notify(kind, eventKey, caption);
+            };
             dashboard.SetPetPreferences(petPreferences);
             Icon dashboardIcon = DesktopBrand.CreateIcon();
             dashboard.Icon = dashboardIcon;
@@ -611,7 +665,7 @@ internal sealed class DesktopContext : ApplicationContext
             {
                 if (exiting) return;
                 bool pending = DashboardChangingAccount, wasPending = dashboardMutationObserved;
-                if (pending && !wasPending) snapshotGate.BeginMutation();
+                if (pending && !wasPending) { CancelNativeSync(); snapshotGate.BeginMutation(); }
                 if (!pending && wasPending) snapshotGate.EndMutation();
                 dashboardMutationObserved = pending; widget.SetActionBusy(actionBusy || pending);
                 if (!pending && !wasPending && selectedQuotaAccountId == choice.AccountId && selectedQuotaKey == choice.Key) return;

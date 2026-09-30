@@ -8,6 +8,7 @@ type LoginOptions = {
   existing: () => AccountLogin | null;
   changed: () => Promise<void>;
   feedback: (message: string, error?: boolean) => void;
+  notify: (reason: 'login-complete' | 'login-failed' | 'login-expired', eventId: string, epoch: number) => void;
   external: (url: string, loginId: string) => void;
   acquire: () => Promise<() => void>;
   epoch: () => number;
@@ -38,6 +39,12 @@ export function initializeDesktopLogin(options: LoginOptions): { open: (profile?
   let startSettled: Promise<void> | null = null;
   let cancelPending: Promise<unknown> | null = null;
   let heldRelease: (() => void) | null = null;
+  let notice: { eventId: string; epoch: number; sent: boolean } | null = null;
+  const notify = (reason: 'login-complete' | 'login-failed' | 'login-expired', event = notice) => {
+    if (!event || event.sent || event.epoch !== options.epoch()) return;
+    event.sent = true;
+    options.notify(reason, event.eventId, event.epoch);
+  };
   const active = (value: AccountLogin | null) => !!value && ['starting', 'pending', 'verifying'].includes(value.status);
   const current = (operation: number) => operation === generation && dialog.open;
   const setStatus = (text: string, state: string) => { status.textContent = text; status.dataset.state = state; };
@@ -79,6 +86,7 @@ export function initializeDesktopLogin(options: LoginOptions): { open: (profile?
       cancelled: '这次登录已取消，可以重新获取验证码。',
     };
     setStatus(usable && !verifiedUrl(value) ? '无法验证 GitHub 授权地址，请重新获取验证码。' : messages[value.status], usable && !verifiedUrl(value) ? 'failed' : value.status);
+    if (value.status === 'failed' || value.status === 'expired') notify(value.status === 'expired' ? 'login-expired' : 'login-failed');
     if (usable && !verifiedUrl(value)) retry.hidden = false;
     element('login-expiry').textContent = active(value) && value.expiresAt ? `有效至 ${timestamp(value.expiresAt, true)}` : '';
     if (active(value) && value.expiresAt && value.status !== 'verifying' && Number.isFinite(Date.parse(value.expiresAt))) {
@@ -95,6 +103,7 @@ export function initializeDesktopLogin(options: LoginOptions): { open: (profile?
 
   async function complete(operation: number): Promise<void> {
     if (!current(operation)) return;
+    notify('login-complete');
     clearTimers();
     generation++;
     dialog.close();
@@ -128,6 +137,7 @@ export function initializeDesktopLogin(options: LoginOptions): { open: (profile?
     const targetId = profileId;
     const operation = ++generation;
     const operationEpoch = options.epoch();
+    notice = { eventId: crypto.randomUUID(), epoch: operationEpoch, sent: false };
     clearTimers();
     const previous = login?.status !== 'complete' ? login : null;
     login = null;
@@ -187,6 +197,7 @@ export function initializeDesktopLogin(options: LoginOptions): { open: (profile?
     } catch (error) {
       if (!current(operation)) return;
       setStatus(`暂时无法开始登录：${errorMessage(error)}。请重试。`, 'failed');
+      notify('login-failed');
       retry.hidden = false;
       releaseOwner();
     } finally {
@@ -203,6 +214,7 @@ export function initializeDesktopLogin(options: LoginOptions): { open: (profile?
     starting = false;
     clearTimers();
     login = null;
+    notice = { eventId: crypto.randomUUID(), epoch: options.epoch(), sent: false };
     profileId = profile?.id;
     host.value = profile?.host ?? 'https://github.com';
     host.disabled = !!profile;
@@ -229,6 +241,7 @@ export function initializeDesktopLogin(options: LoginOptions): { open: (profile?
 
   function close(): void {
     const pending = active(login) ? login : null;
+    const pendingNotice = notice;
     const pendingStart = starting ? startSettled : null;
     const operation = ++generation;
     const operationEpoch = options.epoch();
@@ -246,7 +259,7 @@ export function initializeDesktopLogin(options: LoginOptions): { open: (profile?
           const result = await options.mutate<AccountLogin>(`/api/auth/login/${encodeURIComponent(pending.id)}/cancel`, 'POST');
           if (result.status === 'complete' && operationEpoch === options.epoch()) {
             cancelRelease();
-            if (operation === generation) options.feedback('GitHub 授权已完成，账号已连接。');
+            if (operation === generation) { options.feedback('GitHub 授权已完成，账号已连接。'); notify('login-complete', pendingNotice); }
             await options.changed();
           }
         } finally { cancelRelease(); }

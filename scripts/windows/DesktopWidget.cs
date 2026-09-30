@@ -10,9 +10,85 @@ using System.Windows.Forms;
 
 internal sealed class WidgetSnapshot
 {
-    public string State, Title, Value, Detail, AccountLogin, UpdatedAt, UnitLabel;
-    public bool UnitUnspecified;
+    public string State, Title, Value, Detail, AccountLogin, UpdatedAt, UnitLabel, AccountId, InstanceId, QuotaKey, ActivityKey;
+    public bool UnitUnspecified, Refreshing;
     public double? Percentage;
+}
+
+// Event-driven reactions. Repeated polls are quiet and bursts keep at most one pending notice.
+internal sealed class WidgetUpdateMotion
+{
+    internal const int Duration = 1800;
+    private WidgetSnapshot previousReady, previousActivity;
+    private string failureState;
+    private int sequence;
+    private sealed class Reaction
+    {
+        internal DesktopPetReactionKind Kind;
+        internal string Caption;
+        internal long Started;
+    }
+    private Reaction current, pending;
+    private readonly HashSet<string> seen = new HashSet<string>();
+    private readonly Queue<string> recent = new Queue<string>();
+    internal static bool IsSyncing(WidgetSnapshot value, bool busy)
+    {
+        return value.State == "loading" || (value.State == "ready" || value.State == "waiting") && (busy || value.Refreshing);
+    }
+    internal void Observe(WidgetSnapshot value, long now, bool syncing)
+    {
+        bool loginRequired = value.State == "reauth" || value.State == "needs-login" && !String.IsNullOrEmpty(value.AccountId);
+        if (value.State == "error" || value.State == "offline" || loginRequired)
+        {
+            if (failureState != value.State)
+                Notify(DesktopPetReactionKind.Attention, "state:" + (++sequence), loginRequired ? "账号需要重新登录" : value.State == "offline" ? "服务已断开，请查看" : "同步遇到问题，请查看", now);
+            failureState = value.State; previousReady = previousActivity = null; return;
+        }
+        if (syncing) { ClearUpdates(); return; }
+        failureState = null;
+        bool comparable = SameAccount(previousReady, value)
+            && previousReady.QuotaKey == value.QuotaKey && previousReady.Title == value.Title
+            && previousReady.UnitLabel == value.UnitLabel && previousReady.UnitUnspecified == value.UnitUnspecified;
+        bool quotaChanged = value.State == "ready" && comparable && (previousReady.Value != value.Value || previousReady.Percentage != value.Percentage);
+        bool activityChanged = SameAccount(previousActivity, value) && !String.IsNullOrEmpty(previousActivity.ActivityKey)
+            && !String.IsNullOrEmpty(value.ActivityKey) && previousActivity.ActivityKey != value.ActivityKey;
+        if (!comparable && (previousReady != null || !SameAccount(previousActivity, value))) ClearUpdates();
+        if (quotaChanged || activityChanged)
+            Notify(DesktopPetReactionKind.Update, "update:" + (++sequence), activityChanged ? "收到新的用量记录" : "额度已更新", now);
+        previousReady = value.State == "ready" ? value : null;
+        previousActivity = String.IsNullOrEmpty(value.InstanceId) ? null : value;
+    }
+    private static bool SameAccount(WidgetSnapshot before, WidgetSnapshot after)
+    {
+        return before != null && !String.IsNullOrEmpty(after.InstanceId) && before.InstanceId == after.InstanceId && before.AccountId == after.AccountId;
+    }
+    private void ClearUpdates()
+    {
+        if (current != null && current.Kind == DesktopPetReactionKind.Update) current = null;
+        if (pending != null && pending.Kind == DesktopPetReactionKind.Update) pending = null;
+    }
+    internal void Notify(DesktopPetReactionKind kind, string eventKey, string caption, long now)
+    {
+        if (kind == DesktopPetReactionKind.None || String.IsNullOrEmpty(eventKey) || !seen.Add(eventKey)) return;
+        recent.Enqueue(eventKey); if (recent.Count > 64) seen.Remove(recent.Dequeue());
+        Advance(now);
+        var next = new Reaction { Kind = kind, Caption = DesktopWidget.Clean(caption, 80), Started = now };
+        if (current == null || kind > current.Kind) { current = next; pending = null; }
+        else if (kind != DesktopPetReactionKind.Update && (pending == null || kind >= pending.Kind)) pending = next;
+    }
+    private void Advance(long now)
+    {
+        if (current != null && now - current.Started >= Duration)
+        {
+            long nextStart = current.Started + Duration;
+            current = pending; pending = null;
+            if (current != null) { current.Started = nextStart; if (now - nextStart >= Duration) current = null; }
+        }
+    }
+    internal void Clear() { current = pending = null; }
+    internal DesktopPetReactionKind Kind(long now) { Advance(now); return current == null ? DesktopPetReactionKind.None : current.Kind; }
+    internal string Caption(long now) { Advance(now); return current == null ? null : current.Caption; }
+    internal double Progress(long now) { Advance(now); return current == null || now < current.Started ? -1 : (now - current.Started) / (double)Duration; }
 }
 
 internal sealed class WidgetAccount
@@ -41,13 +117,18 @@ internal sealed class WidgetAccountSet
 {
     internal readonly List<WidgetAccount> Accounts = new List<WidgetAccount>();
     internal string ActiveId;
-    internal bool Enabled;
+    internal bool Enabled, Refreshing;
     internal static WidgetAccountSet Read(Dictionary<string, object> source)
     {
         object raw;
         var result = new WidgetAccountSet { ActiveId = DesktopJson.OptionalString(source, "activeAccountId", 36) };
         if (!source.TryGetValue("enabled", out raw) || !(raw is bool)) throw new InvalidDataException("账号状态无效。");
         result.Enabled = (bool)raw;
+        if (source.TryGetValue("refreshing", out raw))
+        {
+            if (!(raw is bool)) throw new InvalidDataException("同步状态无效。");
+            result.Refreshing = (bool)raw;
+        }
         if (!source.TryGetValue("accounts", out raw) || !(raw is object[]) || ((object[])raw).Length > 20) throw new InvalidDataException("账号列表无效。");
         var ids = new HashSet<string>();
         foreach (object entry in (object[])raw)
@@ -85,8 +166,11 @@ internal sealed class DesktopWidget : Form
     private readonly ToolStripMenuItem restoreItem, hideItem, pinItem, motionItem, accountMenu, refreshItem, petMenu, sizeMenu;
     private readonly Timer animation;
     private readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+    private readonly WidgetUpdateMotion updateMotion = new WidgetUpdateMotion();
     private WidgetSnapshot snapshot = CopySnapshot(null);
     private Bitmap pet;
+    private DesktopPetAnimation petAnimation;
+    private bool showingReaction;
     private string renderedPet;
     private IList<WidgetAccount> accounts = new List<WidgetAccount>();
     private string activeAccountId;
@@ -123,6 +207,11 @@ internal sealed class DesktopWidget : Form
         }
         menu.Items.Add(sizeMenu);
         motionItem = new ToolStripMenuItem("轻动效", null, delegate { preferences.SetMotion(!preferences.MotionEnabled); }); menu.Items.Add(motionItem);
+        var preview = new ToolStripMenuItem("预览提醒动作");
+        preview.DropDownItems.Add(new ToolStripMenuItem("数据更新", null, delegate { PreviewReaction(DesktopPetReactionKind.Update, "收到新的用量记录"); }));
+        preview.DropDownItems.Add(new ToolStripMenuItem("收到消息", null, delegate { PreviewReaction(DesktopPetReactionKind.Message, "收到一条新通知"); }));
+        preview.DropDownItems.Add(new ToolStripMenuItem("需要留意", null, delegate { PreviewReaction(DesktopPetReactionKind.Attention, "有一件事需要留意"); }));
+        menu.Items.Add(preview);
         pinItem = new ToolStripMenuItem("始终置顶", null, delegate { preferences.SetAlwaysOnTop(!preferences.AlwaysOnTop); }); menu.Items.Add(pinItem);
         hideItem = new ToolStripMenuItem("隐藏到托盘", null, delegate { HideToTray(); }); menu.Items.Add(hideItem);
         menu.Items.Add(new ToolStripSeparator()); menu.Items.Add(new ToolStripMenuItem("退出桌面宠物（后台继续运行）", null, delegate { RequestExit(); }));
@@ -131,20 +220,25 @@ internal sealed class DesktopWidget : Form
         trayIcon = DesktopBrand.CreateIcon(); tray = new NotifyIcon { Icon = trayIcon, Text = "PilotMeter", ContextMenuStrip = menu };
         tray.MouseClick += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) ShowWidget(); };
         tray.DoubleClick += delegate { OpenMain(); }; tray.BalloonTipClicked += delegate { ShowWidget(); };
-        animation = new Timer { Interval = 80 }; animation.Tick += delegate { if (CanAnimate) RenderFrame(); };
+        animation = new Timer { Interval = 80 }; animation.Tick += delegate { if (CanAnimate || showingReaction) RenderFrame(); };
         preferences.Changed += PreferencesChanged;
-        pet = DesktopPetCatalog.CreateBitmap(preferences.PetId); renderedPet = preferences.PetId;
+        pet = DesktopPetCatalog.CreateBitmap(preferences.PetId); petAnimation = DesktopPetCatalog.CreateAnimation(preferences.PetId); renderedPet = preferences.PetId;
         IntPtr unused = Handle;
         using (var graphics = CreateGraphics()) scale = Math.Max(.75f, Math.Min(4, graphics.DpiX / 96f));
         Rectangle area = Screen.PrimaryScreen.WorkingArea; ConfigureSize(area);
         Location = preferences.Location ?? new Point(area.Right - Width - 16, area.Bottom - Height - 16);
         TopMost = preferences.AlwaysOnTop; EnsureVisible(); initialized = true; UpdateDescriptions(); tray.Visible = true;
     }
-    private bool CanAnimate { get { return preferences.MotionEnabled && Visible && !dragging && !menu.Visible && !SystemInformation.HighContrast && SystemInformation.IsMenuAnimationEnabled; } }
+    private bool MotionAllowed { get { return preferences.MotionEnabled && !SystemInformation.HighContrast && SystemInformation.IsMenuAnimationEnabled; } }
+    private bool CanAnimate { get { return MotionAllowed && Visible && !dragging && !menu.Visible; } }
     protected override CreateParams CreateParams { get { var value = base.CreateParams; value.ExStyle |= 0x00080000 | 0x80; return value; } }
     internal void ApplySnapshot(WidgetSnapshot value)
     {
-        WidgetSnapshot copy = CopySnapshot(value); Dispatch(delegate { snapshot = copy; UpdateDescriptions(); RenderFrame(); });
+        WidgetSnapshot copy = CopySnapshot(value); Dispatch(delegate {
+            updateMotion.Observe(copy, clock.ElapsedMilliseconds, WidgetUpdateMotion.IsSyncing(copy, actionBusy));
+            if (!MotionAllowed || !Visible) updateMotion.Clear();
+            snapshot = copy; UpdateDescriptions(); RenderFrame();
+        });
     }
     internal void SetAccounts(IList<WidgetAccount> value, string active, bool enabled)
     {
@@ -156,11 +250,33 @@ internal sealed class DesktopWidget : Form
     {
         Dispatch(delegate {
             actionBusy = busy;
+            if (busy) updateMotion.Observe(snapshot, clock.ElapsedMilliseconds, true);
             // A click can still be dispatching from this menu. Do not dispose its sender mid-event.
             refreshItem.Enabled = !busy; accountMenu.Enabled = !busy; refreshItem.Text = busy ? "正在同步…" : "刷新用量";
+            RenderFrame();
         });
     }
-    internal void ShowNotice(string text) { Dispatch(delegate { tray.ShowBalloonTip(4500, "PilotMeter", Clean(text, 240), ToolTipIcon.Info); }); }
+    internal void Notify(DesktopPetReactionKind kind, string eventKey, string caption)
+    {
+        Dispatch(delegate {
+            if (!MotionAllowed || !Visible) return;
+            updateMotion.Notify(kind, eventKey, caption, clock.ElapsedMilliseconds);
+            RenderFrame();
+        });
+    }
+    private void PreviewReaction(DesktopPetReactionKind kind, string caption)
+    {
+        if (!preferences.MotionEnabled) { ShowNotice("请先打开“轻动效”，再预览宠物动作。"); return; }
+        // The menu dismisses before the first reaction frame is drawn.
+        BeginInvoke(new Action(delegate { Notify(kind, "preview:" + Guid.NewGuid().ToString("N"), caption); }));
+    }
+    internal void ShowNotice(string text)
+    {
+        Dispatch(delegate {
+            Notify(DesktopPetReactionKind.Attention, "notice:" + Clean(text, 240), "有一条提醒，请查看");
+            tray.ShowBalloonTip(4500, "PilotMeter", Clean(text, 240), ToolTipIcon.Info);
+        });
+    }
     internal void ShowWidget()
     {
         Dispatch(delegate { EnsureVisible(); if (!Visible) Show(); WindowState = FormWindowState.Normal; Activate(); Focus(); animation.Start(); RenderFrame(); });
@@ -175,8 +291,13 @@ internal sealed class DesktopWidget : Form
         Dispatch(delegate {
             if (renderedPet != preferences.PetId)
             {
-                Bitmap replacement = DesktopPetCatalog.CreateBitmap(preferences.PetId); pet.Dispose(); pet = replacement; renderedPet = preferences.PetId;
+                Bitmap replacement = DesktopPetCatalog.CreateBitmap(preferences.PetId);
+                DesktopPetAnimation nextAnimation;
+                try { nextAnimation = DesktopPetCatalog.CreateAnimation(preferences.PetId); } catch { replacement.Dispose(); throw; }
+                pet.Dispose(); petAnimation.Dispose(); pet = replacement; petAnimation = nextAnimation; renderedPet = preferences.PetId;
+                updateMotion.Clear();
             }
+            if (!MotionAllowed) updateMotion.Clear();
             ConfigureSize(Screen.FromRectangle(Bounds).WorkingArea); TopMost = preferences.AlwaysOnTop; EnsureVisible(); SavePosition(); UpdateDescriptions(); RenderFrame();
         });
     }
@@ -213,7 +334,9 @@ internal sealed class DesktopWidget : Form
         double? percentage = value.Percentage;
         if (state != "ready" || percentage.HasValue && (Double.IsNaN(percentage.Value) || Double.IsInfinity(percentage.Value) || percentage.Value < 0 || percentage.Value > 100)) percentage = null;
         string unit = value.UnitLabel == "AI Credits" || value.UnitLabel == "Premium Requests" ? value.UnitLabel : null;
-        return new WidgetSnapshot { State = state, Title = Clean(value.Title, 120), Value = Clean(value.Value, 180), Detail = Clean(value.Detail, 1100), AccountLogin = Clean(value.AccountLogin, 120), UpdatedAt = Clean(value.UpdatedAt, 100), Percentage = percentage, UnitLabel = unit, UnitUnspecified = value.UnitUnspecified };
+        return new WidgetSnapshot { State = state, Title = Clean(value.Title, 120), Value = Clean(value.Value, 180), Detail = Clean(value.Detail, 1100), AccountLogin = Clean(value.AccountLogin, 120), UpdatedAt = Clean(value.UpdatedAt, 100), Percentage = percentage, UnitLabel = unit, UnitUnspecified = value.UnitUnspecified,
+            AccountId = Clean(value.AccountId, 80), InstanceId = Clean(value.InstanceId, 80), QuotaKey = Clean(value.QuotaKey, 120), Refreshing = value.Refreshing,
+            ActivityKey = value.ActivityKey != null && Regex.IsMatch(value.ActivityKey, @"\Av1:[a-f0-9]{64}\z") ? value.ActivityKey : null };
     }
     internal static string Caption(WidgetSnapshot value)
     {
@@ -241,6 +364,7 @@ internal sealed class DesktopWidget : Form
     }
     private void HideToTray()
     {
+        updateMotion.Clear(); showingReaction = false;
         SavePosition(); animation.Stop(); tooltip.Hide(this); Hide();
         if (!hideExplained) { hideExplained = true; ShowNotice("桌面宠物已隐藏。单击托盘图标可恢复，后台服务继续运行。"); }
     }
@@ -320,7 +444,15 @@ internal sealed class DesktopWidget : Form
     private void RenderFrame()
     {
         if (!initialized || disposing || !IsHandleCreated || pet == null || !Visible) return;
-        using (var bitmap = DesktopPetRenderer.Render(pet, preferences.SizePixels, renderScale, CanAnimate ? clock.ElapsedMilliseconds / 850.0 : 0, Caption(snapshot), hovered || ContainsFocus, preferences.PetId == "10", CaptionUnit(snapshot)))
+        if (!MotionAllowed) updateMotion.Clear();
+        bool moving = CanAnimate, syncing = WidgetUpdateMotion.IsSyncing(snapshot, actionBusy);
+        long now = clock.ElapsedMilliseconds;
+        DesktopPetReactionKind kind = updateMotion.Kind(now);
+        showingReaction = kind != DesktopPetReactionKind.None;
+        double progress = moving ? updateMotion.Progress(now) : -1;
+        string caption = updateMotion.Caption(now);
+        animation.Interval = showingReaction ? 33 : 40;
+        using (var bitmap = DesktopPetRenderer.Render(pet, preferences.SizePixels, renderScale, moving ? now / 850.0 : 0, caption ?? Caption(snapshot), hovered || ContainsFocus, preferences.PetId == "10", caption == null ? CaptionUnit(snapshot) : null, syncing, -1, petAnimation, kind, progress, moving))
         {
             IntPtr screen = GetDC(IntPtr.Zero), memory = IntPtr.Zero, nativeBitmap = IntPtr.Zero, previous = IntPtr.Zero;
             try
@@ -354,7 +486,7 @@ internal sealed class DesktopWidget : Form
         if (disposeResources && !disposing)
         {
             SavePosition(); disposing = true; preferences.Changed -= PreferencesChanged;
-            animation.Stop(); animation.Dispose(); tray.Visible = false; tray.Dispose(); tooltip.Dispose(); menu.Dispose(); trayIcon.Dispose(); if (pet != null) pet.Dispose(); clock.Stop();
+            animation.Stop(); animation.Dispose(); tray.Visible = false; tray.Dispose(); tooltip.Dispose(); menu.Dispose(); trayIcon.Dispose(); if (pet != null) pet.Dispose(); if (petAnimation != null) petAnimation.Dispose(); clock.Stop();
         }
         base.Dispose(disposeResources);
     }

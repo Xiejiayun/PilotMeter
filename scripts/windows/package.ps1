@@ -75,6 +75,18 @@ switch ($Mode) {
             $petFile = [IO.Path]::GetFullPath((Join-Path $petDirectory ("pet-$petId-" + $petNames[$index] + '.png')))
             if (-not (Test-Path -LiteralPath $petFile -PathType Leaf)) { throw "Missing pet image: $petId" }
             "/resource:$petFile,PilotMeter.Pets.$petId"
+            $animationDirectory = Join-Path $petDirectory 'animation'
+            $animationManifest = [IO.Path]::GetFullPath((Join-Path $animationDirectory "pet-$petId.json"))
+            if (-not (Test-Path -LiteralPath $animationManifest -PathType Leaf)) { throw "Missing pet animation: $petId" }
+            "/resource:$animationManifest,PilotMeter.Pets.Animation.$petId.json"
+            $animationLayers = Get-Content -LiteralPath $animationManifest -Raw | ConvertFrom-Json
+            if ($animationLayers.Count -lt 3 -or $animationLayers.Count -gt 10) { throw "Invalid pet animation layer count: $petId" }
+            for ($layer = 0; $layer -lt $animationLayers.Count; $layer++) {
+                $layerId = '{0:D2}' -f $layer
+                $layerFile = [IO.Path]::GetFullPath((Join-Path $animationDirectory "pet-$petId-layer-$layerId.png"))
+                if (-not (Test-Path -LiteralPath $layerFile -PathType Leaf)) { throw "Missing pet animation layer: $petId/$layerId" }
+                "/resource:$layerFile,PilotMeter.Pets.Animation.$petId.$layerId"
+            }
         }
         if (-not $WebViewDirectory) { throw 'The pinned WebView2 SDK directory is required.' }
         & $compiler /nologo /target:winexe /platform:x64 /optimize+ "/out:$Destination" "/win32manifest:$ApplicationManifest" "/win32icon:$ApplicationIcon" "/resource:$ApplicationIcon,PilotMeter.Icon" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll "/reference:$WebViewDirectory\Microsoft.Web.WebView2.Core.dll" "/reference:$WebViewDirectory\Microsoft.Web.WebView2.WinForms.dll" @petResources $Source $widget $brand $nativeWindow $nativeApi $dashboardViews $pets $webWindow $sessionLaunch $Configuration
